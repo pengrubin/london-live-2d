@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"lineId":"woolwich-ferry","color":"#F7B58C"},"geometry":{"type":"LineString","coordinates":[[0.06209,51.49517],[0.06078,51.49776]]}},{"type":"Feature","properties":{"lineId":"woolwich-ferry","color":"#F7B58C"},"geometry":{"type":"LineString","coordinates":[[0.06078,51.49776],[0.06209,51.49517]]}}]}

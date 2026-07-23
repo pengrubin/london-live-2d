@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+
+# Large basemap binary — regenerate with:
+#   pmtiles extract https://build.protomaps.com/<build>.pmtiles data/london.pmtiles --bbox=-0.55,51.25,0.35,51.72
+data/london.pmtiles
+data/bus-traces/
+data/osm-cache/
+data/bus-routes/
+node_modules/

@@ -1,0 +1,143 @@
+{
+  "generatedAt": "2026-07-23T12:06:56.013Z",
+  "lines": [
+    {
+      "id": "bakerloo",
+      "name": "Bakerloo",
+      "mode": "tube",
+      "color": "#B36305"
+    },
+    {
+      "id": "central",
+      "name": "Central",
+      "mode": "tube",
+      "color": "#E32017"
+    },
+    {
+      "id": "circle",
+      "name": "Circle",
+      "mode": "tube",
+      "color": "#FFD300"
+    },
+    {
+      "id": "district",
+      "name": "District",
+      "mode": "tube",
+      "color": "#00782A"
+    },
+    {
+      "id": "hammersmith-city",
+      "name": "Hammersmith & City",
+      "mode": "tube",
+      "color": "#F3A9BB"
+    },
+    {
+      "id": "jubilee",
+      "name": "Jubilee",
+      "mode": "tube",
+      "color": "#A0A5A9"
+    },
+    {
+      "id": "metropolitan",
+      "name": "Metropolitan",
+      "mode": "tube",
+      "color": "#9B0056"
+    },
+    {
+      "id": "northern",
+      "name": "Northern",
+      "mode": "tube",
+      "color": "#000000"
+    },
+    {
+      "id": "piccadilly",
+      "name": "Piccadilly",
+      "mode": "tube",
+      "color": "#003688"
+    },
+    {
+      "id": "victoria",
+      "name": "Victoria",
+      "mode": "tube",
+      "color": "#0098D4"
+    },
+    {
+      "id": "waterloo-city",
+      "name": "Waterloo & City",
+      "mode": "tube",
+      "color": "#95CDBA"
+    },
+    {
+      "id": "dlr",
+      "name": "DLR",
+      "mode": "dlr",
+      "color": "#00A4A7"
+    },
+    {
+      "id": "elizabeth",
+      "name": "Elizabeth line",
+      "mode": "elizabeth-line",
+      "color": "#6950A1"
+    },
+    {
+      "id": "liberty",
+      "name": "Liberty",
+      "mode": "overground",
+      "color": "#5D6061"
+    },
+    {
+      "id": "lioness",
+      "name": "Lioness",
+      "mode": "overground",
+      "color": "#FAA61A"
+    },
+    {
+      "id": "mildmay",
+      "name": "Mildmay",
+      "mode": "overground",
+      "color": "#0077AD"
+    },
+    {
+      "id": "suffragette",
+      "name": "Suffragette",
+      "mode": "overground",
+      "color": "#5BBD72"
+    },
+    {
+      "id": "weaver",
+      "name": "Weaver",
+      "mode": "overground",
+      "color": "#823A62"
+    },
+    {
+      "id": "windrush",
+      "name": "Windrush",
+      "mode": "overground",
+      "color": "#ED7158"
+    },
+    {
+      "id": "rb1",
+      "name": "RB1",
+      "mode": "river-bus",
+      "color": "#2EB4E9"
+    },
+    {
+      "id": "rb4",
+      "name": "RB4",
+      "mode": "river-bus",
+      "color": "#61C29D"
+    },
+    {
+      "id": "rb6",
+      "name": "RB6",
+      "mode": "river-bus",
+      "color": "#EC7DA8"
+    },
+    {
+      "id": "woolwich-ferry",
+      "name": "Woolwich Ferry",
+      "mode": "river-bus",
+      "color": "#F7B58C"
+    }
+  ]
+}

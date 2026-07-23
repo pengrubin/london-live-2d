@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>London Live — 2D Real-Time Transport Map</title>
+    <style>
+      html, body { height: 100%; margin: 0; background: #0a0a0a; }
+      #app { position: fixed; inset: 0; }
+
+      /* ── dark popup theme (vehicle + station boards) ──
+         double selector outranks maplibre-gl.css, which is injected later */
+      .maplibregl-popup .maplibregl-popup-content {
+        background: rgba(16, 18, 22, 0.95);
+        color: #ddd;
+        border: 1px solid #333;
+        border-radius: 6px;
+        padding: 10px 12px;
+        font: 12px/1.5 system-ui, sans-serif;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+      }
+      .maplibregl-popup .maplibregl-popup-tip { border-top-color: #333 !important; border-bottom-color: #333 !important; }
+      .maplibregl-popup .maplibregl-popup-close-button { color: #888; font-size: 16px; right: 4px; top: 2px; }
+      .maplibregl-popup .maplibregl-popup-close-button:hover { color: #fff; background: none; }
+      .vp { min-width: 170px; }
+      .vp-line {
+        display: inline-block; padding: 1px 8px; border-radius: 3px;
+        color: #fff; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,.5);
+        margin-bottom: 4px;
+      }
+      .vp-dest { font-weight: 600; margin-bottom: 2px; }
+      .vp-dim { color: #888; }
+      .sp-title { font-weight: 700; margin-bottom: 6px; font-size: 13px; }
+      .sp-row { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+      .sp-chip { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+      .sp-dest { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sp-eta { color: #9c9; font-variant-numeric: tabular-nums; }
+      .sp-plat { color: #777; font-size: 10px; border: 1px solid #333; border-radius: 3px; padding: 0 3px; }
+      .vp-status { color: #da3; margin-top: 4px; }
+      .vp-section { color: #777; text-transform: uppercase; font-size: 10px; letter-spacing: .08em; margin-top: 6px; border-top: 1px solid #222; padding-top: 5px; }
+      .tip-dest { font-weight: 600; margin-left: 4px; }
+      .tip-chips .sp-chip { display: inline-block; margin-left: 3px; vertical-align: baseline; }
+      .hover-tip .maplibregl-popup-content { pointer-events: none; padding: 7px 10px; }
+
+      /* ── legend panel ── */
+      .legend {
+        position: absolute; right: 10px; top: 110px; z-index: 5;
+        background: rgba(16, 18, 22, 0.92); border: 1px solid #333; border-radius: 6px;
+        font: 11px/1.6 system-ui, sans-serif; color: #ccc; user-select: none;
+        max-height: calc(100vh - 180px); display: flex; flex-direction: column;
+        box-shadow: 0 4px 16px rgba(0,0,0,.5); width: 148px;
+      }
+      .legend-header {
+        padding: 6px 10px; cursor: pointer; font-weight: 700; letter-spacing: .12em;
+        font-size: 10px; color: #888; border-bottom: 1px solid #222;
+      }
+      .legend-header:hover { color: #fff; }
+      .legend-body { overflow-y: auto; padding: 4px 0 6px; }
+      .legend.collapsed .legend-body { display: none; }
+      .legend-group {
+        padding: 5px 10px 1px; color: #666; font-size: 9.5px; text-transform: uppercase;
+        letter-spacing: .1em;
+      }
+      .legend-row {
+        display: flex; align-items: center; gap: 7px; padding: 1.5px 10px; cursor: pointer;
+        white-space: nowrap;
+      }
+      .legend-row:hover { background: rgba(255,255,255,.06); }
+      .legend-row.off { opacity: 0.32; }
+      .legend-row.off .legend-swatch { background: #444 !important; }
+      .legend-swatch { width: 14px; height: 5px; border-radius: 2px; flex: none; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

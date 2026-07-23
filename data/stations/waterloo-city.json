@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":"940GZZLUWLO","name":"Waterloo","lineId":"waterloo-city"},"geometry":{"type":"Point","coordinates":[-0.11478,51.5033]}},{"type":"Feature","properties":{"id":"940GZZLUBNK","name":"Bank","lineId":"waterloo-city"},"geometry":{"type":"Point","coordinates":[-0.0889,51.51336]}}]}

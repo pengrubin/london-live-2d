@@ -1,0 +1,120 @@
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import cors from '@fastify/cors';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { AisClient } from './ais-client';
+import { BodsClient } from './bods-client';
+import { TtlCache } from './cache';
+import type { AppConfig } from './config';
+import { ARRIVALS_CACHE_TTL_MS, TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS } from './constants';
+import { LearnerScheduler } from './learner-scheduler';
+import { RateBudget } from './rate-budget';
+import { TraceWriter } from './trace-writer';
+import { registerArrivalsRoute } from './routes/arrivals';
+import { registerHealthRoute } from './routes/health';
+import {
+  registerBikePointsRoute,
+  registerCrowdingRoute,
+  registerLiftDisruptionsRoute,
+  registerLineStatusRoute,
+  registerStopArrivalsRoute,
+  registerStopDetailRoute,
+  registerVehicleArrivalsRoute,
+} from './routes/stop-arrivals';
+import {
+  registerAircraftRoute,
+  registerCallsignRoute,
+  registerJamCamsRoute,
+  registerNrBoardRoute,
+} from './routes/external';
+import { registerBusRoutesRoute } from './routes/bus-routes';
+
+/** Repo layout anchors — data/ and scripts/ sit beside backend/. */
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const DATA_DIR = join(REPO_ROOT, 'data');
+const SCRIPTS_DIR = join(REPO_ROOT, 'scripts');
+
+/** Builds the Fastify app with all plugins and routes; exported for tests (inject()). */
+export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
+  const app = Fastify({ logger: true });
+
+  await app.register(cors, { origin: config.corsOrigin });
+
+  // Live vessel names (optional feature — needs an aisstream.io key in .env)
+  if (config.aisApiKey) {
+    const ais = new AisClient(config.aisApiKey, (msg) => app.log.info(msg));
+    ais.start();
+    app.addHook('onClose', () => ais.stop());
+    app.get('/api/vessels', () => ais.list());
+  } else {
+    app.get('/api/vessels', () => []);
+  }
+
+  // All-London live buses (optional feature — needs a BODS key in .env)
+  if (config.bodsApiKey) {
+    // Trace log + self-scheduled route learner ride along with the poller.
+    const traces = new TraceWriter(join(DATA_DIR, 'bus-traces'), (msg) => app.log.info(msg));
+    traces.start();
+    const bods = new BodsClient(
+      config.bodsApiKey,
+      (msg) => app.log.info(msg),
+      (buses, now) => traces.record(buses, now),
+    );
+    bods.start();
+    const learner = new LearnerScheduler(SCRIPTS_DIR, DATA_DIR, (msg) => app.log.info(msg));
+    learner.start();
+    app.addHook('onClose', () => {
+      bods.stop();
+      traces.stop();
+      learner.stop();
+    });
+    app.get('/api/buses', () => bods.list());
+  } else {
+    app.get('/api/buses', () => []);
+  }
+  registerBusRoutesRoute(app, join(DATA_DIR, 'bus-routes', 'learned'));
+
+  const LINE_STATUS_TTL_MS = 60_000; // status changes slowly; poll gently
+  const STOP_DETAIL_TTL_MS = 600_000; // facilities/zones are near-static
+  const CROWDING_TTL_MS = 60_000; // live crowding updates every minute
+  const LIFT_DISRUPTIONS_TTL_MS = 300_000; // network-wide list; changes rarely
+  const BIKE_POINTS_TTL_MS = 60_000; // dock occupancy drifts by the minute
+
+  const arrivalsCache = new TtlCache<unknown>(ARRIVALS_CACHE_TTL_MS);
+  const stopArrivalsCache = new TtlCache<unknown>(ARRIVALS_CACHE_TTL_MS);
+  const vehicleArrivalsCache = new TtlCache<unknown>(ARRIVALS_CACHE_TTL_MS);
+  const lineStatusCache = new TtlCache<unknown>(LINE_STATUS_TTL_MS);
+  const stopDetailCache = new TtlCache<unknown>(STOP_DETAIL_TTL_MS);
+  const crowdingCache = new TtlCache<unknown>(CROWDING_TTL_MS);
+  const liftDisruptionsCache = new TtlCache<unknown>(LIFT_DISRUPTIONS_TTL_MS);
+  const bikePointsCache = new TtlCache<unknown>(BIKE_POINTS_TTL_MS);
+  const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
+
+  registerHealthRoute(app);
+  registerArrivalsRoute(app, { config, cache: arrivalsCache, budget: tflBudget });
+  registerStopArrivalsRoute(app, { config, cache: stopArrivalsCache, budget: tflBudget });
+  registerVehicleArrivalsRoute(app, { config, cache: vehicleArrivalsCache, budget: tflBudget });
+  registerLineStatusRoute(app, { config, cache: lineStatusCache, budget: tflBudget });
+  registerStopDetailRoute(app, { config, cache: stopDetailCache, budget: tflBudget });
+  registerCrowdingRoute(app, { config, cache: crowdingCache, budget: tflBudget });
+  registerLiftDisruptionsRoute(app, { config, cache: liftDisruptionsCache, budget: tflBudget });
+  registerBikePointsRoute(app, { config, cache: bikePointsCache, budget: tflBudget });
+
+  // Non-TfL upstreams get their own budgets — they must never starve TfL calls.
+  const AIRCRAFT_TTL_MS = 4_000; // planes are fast; keep the picture fresh
+  const CALLSIGN_TTL_MS = 3_600_000; // routes/airlines are static per callsign
+  const JAMCAMS_TTL_MS = 600_000; // camera list changes rarely
+  const adsbBudget = new RateBudget(60, 60_000);
+  const adsbdbBudget = new RateBudget(30, 60_000);
+  registerAircraftRoute(app, { config, cache: new TtlCache(AIRCRAFT_TTL_MS), budget: adsbBudget });
+  registerCallsignRoute(app, { config, cache: new TtlCache(CALLSIGN_TTL_MS), budget: adsbdbBudget });
+  registerJamCamsRoute(app, { config, cache: new TtlCache(JAMCAMS_TTL_MS), budget: tflBudget });
+
+  // National Rail boards — Darwin fair use is generous, but boards are heavy:
+  // long-ish cache and a dedicated budget keep us a polite consumer.
+  const NR_BOARD_TTL_MS = 45_000;
+  const darwinBudget = new RateBudget(40, 60_000);
+  registerNrBoardRoute(app, { config, cache: new TtlCache(NR_BOARD_TTL_MS), budget: darwinBudget });
+
+  return app;
+}
