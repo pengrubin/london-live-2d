@@ -2,7 +2,7 @@
 
 **Every train, bus, boat, ship, plane and helicopter over London — live, on one map.**
 
-### 🌍 Live demo: [london-live.up.railway.app](https://london-live.up.railway.app)
+### 🌍 Live demo: **[london.pengrubin.com](https://london.pengrubin.com)**
 
 ![Overview: central London with live tube, rail and river traffic](docs/images/overview.png)
 
