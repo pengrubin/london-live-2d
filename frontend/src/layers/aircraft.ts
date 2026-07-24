@@ -147,11 +147,16 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
     source: SOURCE_ID,
     layout: {
       'icon-image': ['get', 'icon'],
-      'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.55, 13, 0.8],
+      'icon-size': ['interpolate', ['linear'], ['zoom'],
+        9, ['case', ['==', ['get', 'ground'], 1], 0.33, 0.55],
+        13, ['case', ['==', ['get', 'ground'], 1], 0.48, 0.8]],
       'icon-rotate': ['get', 'track'],
       'icon-rotation-alignment': 'map',
       'icon-allow-overlap': true,
       'icon-ignore-placement': true,
+    },
+    paint: {
+      'icon-opacity': ['case', ['==', ['get', 'ground'], 1], 0.45, 1],
     },
   });
 
@@ -167,7 +172,6 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
         (a) =>
           typeof a.lat === 'number' &&
           typeof a.lon === 'number' &&
-          a.alt_baro !== 'ground' &&
           !(a.category ?? '').startsWith('C'), // ground vehicles/obstacles
       );
       fetchedAt = Date.now();
@@ -189,7 +193,7 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
     }
     const dtS = (Date.now() - fetchedAt) / 1000;
     const features = fleet.map((a) => {
-      const speedMs = (a.gs ?? 0) * KN_TO_MS;
+      const speedMs = a.alt_baro === 'ground' ? 0 : (a.gs ?? 0) * KN_TO_MS;
       const rad = (((a.track ?? 0) - 0) * Math.PI) / 180;
       const lon = (a.lon as number) + (speedMs * dtS * Math.sin(rad)) / M_PER_DEG_LON;
       const lat = (a.lat as number) + (speedMs * dtS * Math.cos(rad)) / M_PER_DEG_LAT;
@@ -203,6 +207,7 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
           typeCode: a.t ?? '',
           desc: a.desc ?? '',
           alt: altitudeLabel(a.alt_baro),
+          ground: a.alt_baro === 'ground' ? 1 : 0,
           gs: a.gs ?? 0,
           track: a.track ?? 0,
         },

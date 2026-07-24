@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-23T12:06:56.013Z",
+  "generatedAt": "2026-07-23T23:47:47.997Z",
   "lines": [
     {
       "id": "bakerloo",
@@ -114,6 +114,18 @@
       "name": "Windrush",
       "mode": "overground",
       "color": "#ED7158"
+    },
+    {
+      "id": "tram",
+      "name": "Trams",
+      "mode": "tram",
+      "color": "#5FB526"
+    },
+    {
+      "id": "london-cable-car",
+      "name": "IFS Cloud Cable Car",
+      "mode": "cable-car",
+      "color": "#DC241F"
     },
     {
       "id": "rb1",

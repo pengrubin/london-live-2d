@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"lineId":"london-cable-car","color":"#DC241F"},"geometry":{"type":"LineString","coordinates":[[0.00834,51.49957],[0.01765,51.50773]]}},{"type":"Feature","properties":{"lineId":"london-cable-car","color":"#DC241F"},"geometry":{"type":"LineString","coordinates":[[0.01765,51.50773],[0.00834,51.49957]]}}]}

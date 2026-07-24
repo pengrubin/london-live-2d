@@ -6,7 +6,8 @@ import { Popup, type Map as MaplibreMap, type MapLayerMouseEvent } from 'maplibr
 export const JAMCAMS_LAYER_ID = 'jamcams-dots';
 const SOURCE_ID = 'jamcams';
 const MIN_ZOOM = 11.5;
-const IMAGE_REFRESH_MS = 10_000;
+/** clips are ~10 s; re-fetch a fresh one when the loop would go stale */
+const VIDEO_REFRESH_MS = 60_000;
 
 interface TflPlace {
   id?: string;
@@ -78,7 +79,7 @@ export async function addJamCams(map: MaplibreMap): Promise<void> {
     tip.remove();
   });
 
-  const viewer = new Popup({ closeButton: true, closeOnClick: true, offset: 12, maxWidth: '360px' });
+  const viewer = new Popup({ closeButton: true, closeOnClick: true, offset: 12, maxWidth: '520px' });
   let refreshTimer: number | undefined;
   viewer.on('close', () => {
     if (refreshTimer !== undefined) clearInterval(refreshTimer);
@@ -89,14 +90,23 @@ export async function addJamCams(map: MaplibreMap): Promise<void> {
     if (!p?.imageUrl) return;
     tip.remove();
     const name = p.name ?? 'Camera';
+    // TfL also publishes a ~10 s video clip alongside each still (same key,
+    // .mp4) — motion reads far better than the 352×288 still ever can.
+    const videoUrl = (p.imageUrl ?? '').replace(/\.jpg$/i, '.mp4');
+    const media = (): string =>
+      videoUrl !== p.imageUrl
+        ? `<video src="${esc(videoUrl)}?t=${Date.now()}" width="480" autoplay muted loop playsinline
+             style="border-radius:4px;display:block;background:#000"
+             onerror="this.outerHTML='<img src=&quot;${esc(p.imageUrl ?? '')}?t=${Date.now()}&quot; width=&quot;480&quot; style=&quot;border-radius:4px;display:block&quot;/>'"></video>`
+        : `<img src="${esc(p.imageUrl ?? '')}?t=${Date.now()}" width="480" style="border-radius:4px;display:block" alt="${esc(name)}"/>`;
     const render = (): string =>
       `<div class="vp"><div class="sp-title">📷 ${esc(name)}</div>
-      <img src="${esc(p.imageUrl ?? '')}?t=${Date.now()}" width="330" style="border-radius:4px;display:block" alt="${esc(name)}"/>
-      <div class="vp-dim">refreshes every 10 s</div></div>`;
+      ${media()}
+      <div class="vp-dim">TfL refreshes each clip ~every 5 min · source is 352×288</div></div>`;
     viewer.setLngLat(e.lngLat).setHTML(render()).addTo(map);
     if (refreshTimer !== undefined) clearInterval(refreshTimer);
     refreshTimer = window.setInterval(() => {
       if (viewer.isOpen()) viewer.setHTML(render());
-    }, IMAGE_REFRESH_MS);
+    }, VIDEO_REFRESH_MS);
   });
 }

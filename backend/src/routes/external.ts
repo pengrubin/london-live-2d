@@ -86,3 +86,29 @@ export function registerJamCamsRoute(app: FastifyInstance, deps: ProxyDeps): voi
     },
   });
 }
+
+/** Thames tide gauges (Environment Agency): GET /api/tide-gauges (no params).
+ * Returns [{ref,label,lat,lon,levelM,readingAt,trend}] — see ea-tides.ts. */
+export function registerTideGaugesRoute(app: FastifyInstance, deps: ProxyDeps): void {
+  registerProxyRoute(app, deps, {
+    path: '/api/tide-gauges',
+    fetchUpstream: async () => {
+      const { fetchTideGauges } = await import('../ea-tides');
+      return { status: 200, body: await fetchTideGauges() };
+    },
+  });
+}
+
+
+/** TfL road disruptions (roadworks, closures …): GET /api/road-disruptions. */
+export function registerRoadDisruptionsRoute(app: FastifyInstance, deps: ProxyDeps): void {
+  registerProxyRoute(app, deps, {
+    path: '/api/road-disruptions',
+    fetchUpstream: (_value, appKey) => {
+      const url = new URL('/Road/all/Disruption', TFL_BASE_URL);
+      url.searchParams.set('stripContent', 'false');
+      url.searchParams.set('app_key', appKey);
+      return fetchJson(url.toString());
+    },
+  });
+}

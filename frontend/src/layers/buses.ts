@@ -17,9 +17,14 @@
 // SNAP_ON_M (released past SNAP_OFF_M — hysteresis, per-bus state), and its
 // icon follows the polyline tangent. The raw motion model is untouched —
 // snapping is a pure display transform; buses without routes render as before.
+// Parked indicator: each tracker keeps lastMovedAt, refreshed whenever the bus
+// drifts > 60 m from its movement anchor; > 20 min without that (lenient — a
+// worst-case jam stays red) flags parked:1 and both tiers recolor the bus
+// black. Recolor only — parked buses are never removed.
 
 import {
   Popup,
+  type ExpressionSpecification,
   type GeoJSONSource,
   type Map as MaplibreMap,
   type MapLayerMouseEvent,
@@ -70,6 +75,21 @@ const SNAP_OFF_M = 80;
 const SNAP_LOCAL_WINDOW = 30;
 /** Full-polyline re-search at least this often per bus. */
 const SNAP_FULL_SEARCH_MS = 3_000;
+/** Displacement from the movement anchor that counts as "the bus moved". */
+const PARKED_MOVE_M = 60;
+/** No movement for this long ⇒ parked (lenient — worst-case jams stay red). */
+const PARKED_AFTER_MS = 20 * 60_000;
+/** Parked buses recolor to near-black; white outline keeps them visible. */
+const PARKED_FILL = '#1a1a1a';
+/** Parked circle-tier dots get a grey stroke so they read on the dark map. */
+const PARKED_STROKE = '#888';
+
+/** Style expression: `whenParked` for parked:1 features, `otherwise` else. */
+const parkedCase = (
+  whenParked: string | number,
+  otherwise: string | number,
+): ExpressionSpecification =>
+  ['case', ['==', ['get', 'parked'], 1], whenParked, otherwise] as ExpressionSpecification;
 
 /** Wire row from /api/buses (short keys — see backend bods-client). */
 interface BusWire {
@@ -123,6 +143,10 @@ interface BusTracker {
   hasTrackVelocity: boolean;
   /** Wall time this bus last appeared in a poll, ms. */
   lastSeen: number;
+  /** Movement anchor fix (degrees) — parked displacement is measured from here. */
+  moveRef: { x: number; y: number };
+  /** Wall time displacement from moveRef last exceeded PARKED_MOVE_M, ms. */
+  lastMovedAt: number;
   line: string;
   operator: string;
   dest: string;
@@ -240,8 +264,8 @@ function fallbackVelocity(bearing: number | null): { velLon: number; velLat: num
   };
 }
 
-/** Rounded-rect bus bullet, nose up: TfL bus red, white outline + windscreen. */
-function makeBusIcon(): ImageData {
+/** Rounded-rect bus bullet, nose up: `fill` body, white outline + windscreen. */
+function makeBusIcon(fill: string): ImageData {
   const c = document.createElement('canvas');
   c.width = 28;
   c.height = 44;
@@ -253,7 +277,7 @@ function makeBusIcon(): ImageData {
   const r = 6;
   x.beginPath();
   x.roundRect(-w / 2, -h / 2, w, h, [r, r, 4, 4]);
-  x.fillStyle = TFL_BUS_RED;
+  x.fillStyle = fill;
   x.fill();
   x.strokeStyle = '#ffffff';
   x.lineWidth = 2;
@@ -267,7 +291,12 @@ function makeBusIcon(): ImageData {
 }
 
 export async function startBuses(map: MaplibreMap): Promise<void> {
-  if (!map.hasImage('bus-bullet')) map.addImage('bus-bullet', makeBusIcon(), { pixelRatio: 2 });
+  if (!map.hasImage('bus-bullet')) {
+    map.addImage('bus-bullet', makeBusIcon(TFL_BUS_RED), { pixelRatio: 2 });
+  }
+  if (!map.hasImage('bus-icon-parked')) {
+    map.addImage('bus-icon-parked', makeBusIcon(PARKED_FILL), { pixelRatio: 2 });
+  }
 
   const empty = { type: 'FeatureCollection' as const, features: [] };
   map.addSource(DOTS_SOURCE_ID, { type: 'geojson', data: empty });
@@ -282,9 +311,11 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       source: DOTS_SOURCE_ID,
       maxzoom: TIER_SPLIT_ZOOM,
       paint: {
-        'circle-color': TFL_BUS_RED,
+        'circle-color': parkedCase(PARKED_FILL, TFL_BUS_RED),
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 1.5, TIER_SPLIT_ZOOM, 3],
         'circle-opacity': 0.85,
+        'circle-stroke-color': parkedCase(PARKED_STROKE, TFL_BUS_RED),
+        'circle-stroke-width': parkedCase(1, 0),
       },
     },
     beforeId,
@@ -296,7 +327,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       source: ICONS_SOURCE_ID,
       minzoom: TIER_SPLIT_ZOOM,
       layout: {
-        'icon-image': 'bus-bullet',
+        'icon-image': parkedCase('bus-icon-parked', 'bus-bullet'),
         'icon-size': ['interpolate', ['linear'], ['zoom'], TIER_SPLIT_ZOOM, 0.62, 16, 1],
         'icon-rotate': ['get', 'bearing'],
         'icon-rotation-alignment': 'map',
@@ -361,6 +392,8 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
         rotRef: { x: bus.x, y: bus.y },
         hasTrackVelocity: false,
         lastSeen: now,
+        moveRef: { x: bus.x, y: bus.y },
+        lastMovedAt: now,
         line: bus.l,
         operator: bus.o,
         dest: bus.d,
@@ -392,6 +425,15 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       existing.prevFix = existing.lastFix;
       existing.lastFix = { x: bus.x, y: bus.y, t: bus.t };
       updateVelocity(existing);
+      const movedM = Math.hypot(
+        (bus.x - existing.moveRef.x) * M_PER_DEG_LON,
+        (bus.y - existing.moveRef.y) * M_PER_DEG_LAT,
+      );
+      if (movedM > PARKED_MOVE_M) {
+        existing.lastMovedAt = now;
+        existing.moveRef.x = bus.x;
+        existing.moveRef.y = bus.y;
+      }
     }
     // Without a track-derived velocity the reported Bearing is the best
     // rotation we have; movement-derived rotation takes over once it moves.
@@ -486,6 +528,11 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
     tr.snapBearing = diff > 90 ? (proj.bearing + 180) % 360 : proj.bearing;
   }
 
+  /** parked flag for feature properties: 1 after PARKED_AFTER_MS without movement. */
+  function parkedFlag(tr: BusTracker, now: number): 0 | 1 {
+    return now - tr.lastMovedAt > PARKED_AFTER_MS ? 1 : 0;
+  }
+
   /** What actually gets drawn: snapped pose when snapped, raw pose otherwise. */
   function displayOf(tr: BusTracker): { x: number; y: number; bearing: number } {
     return tr.snapped
@@ -511,7 +558,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       const pose = displayOf(tr);
       features.push({
         type: 'Feature' as const,
-        properties: {},
+        properties: { parked: parkedFlag(tr, now) },
         geometry: { type: 'Point' as const, coordinates: [pose.x, pose.y] },
       });
     }
@@ -570,6 +617,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
           operator: tr.operator,
           dest: tr.dest,
           bearing: pose.bearing,
+          parked: parkedFlag(tr, now),
         },
         geometry: { type: 'Point', coordinates: [pose.x, pose.y] },
       });
@@ -589,7 +637,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
     tip
       .setLngLat(e.lngLat)
       .setHTML(
-        `<div class="vp"><b>${esc(String(p.line))}</b>${dest ? ` <span class="vp-dim">to ${esc(dest)}</span>` : ''}</div>`,
+        `<div class="vp"><b>${esc(String(p.line))}</b>${dest ? ` <span class="vp-dim">to ${esc(dest)}</span>` : ''}${Number(p.parked) === 1 ? ' · parked' : ''}</div>`,
       )
       .addTo(map);
   });

@@ -35,6 +35,8 @@ function applyFilter(map: MaplibreMap, hidden: ReadonlySet<string>): void {
 export interface OverlayToggle {
   label: string;
   layerIds: string[];
+  /** start in the off state (layer ships with visibility 'none') */
+  startOff?: boolean;
 }
 
 export function addLegend(
@@ -102,6 +104,7 @@ export function addLegend(
       const label = document.createElement('span');
       label.textContent = overlay.label;
       row.append(swatch, label);
+      if (overlay.startOff) row.classList.add('off');
       row.addEventListener('click', () => {
         const turningOff = !row.classList.contains('off');
         row.classList.toggle('off', turningOff);

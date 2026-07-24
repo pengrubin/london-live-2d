@@ -39,6 +39,8 @@ const LINES = [
   { id: 'suffragette', name: 'Suffragette', mode: 'overground', color: '#5BBD72' },
   { id: 'weaver', name: 'Weaver', mode: 'overground', color: '#823A62' },
   { id: 'windrush', name: 'Windrush', mode: 'overground', color: '#ED7158' },
+  { id: 'tram', name: 'Trams', mode: 'tram', color: '#5FB526' },
+  { id: 'london-cable-car', name: 'IFS Cloud Cable Car', mode: 'cable-car', color: '#DC241F' },
   // Thames river services (Uber Boat by Thames Clippers + Woolwich Ferry).
   { id: 'rb1', name: 'RB1', mode: 'river-bus', color: '#2EB4E9' },
   { id: 'rb4', name: 'RB4', mode: 'river-bus', color: '#61C29D' },

@@ -26,6 +26,8 @@ import {
   registerCallsignRoute,
   registerJamCamsRoute,
   registerNrBoardRoute,
+  registerRoadDisruptionsRoute,
+  registerTideGaugesRoute,
 } from './routes/external';
 import { registerBusRoutesRoute } from './routes/bus-routes';
 
@@ -109,6 +111,27 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   registerAircraftRoute(app, { config, cache: new TtlCache(AIRCRAFT_TTL_MS), budget: adsbBudget });
   registerCallsignRoute(app, { config, cache: new TtlCache(CALLSIGN_TTL_MS), budget: adsbdbBudget });
   registerJamCamsRoute(app, { config, cache: new TtlCache(JAMCAMS_TTL_MS), budget: tflBudget });
+
+  // Thames tide gauges — Environment Agency upstream, NOT TfL, so it gets its
+  // own budget. EA publishes every 15 min; a 5-min cache keeps us polite.
+  const TIDE_GAUGES_TTL_MS = 300_000;
+  const eaBudget = new RateBudget(10, 60_000);
+  registerTideGaugesRoute(app, {
+    config,
+    cache: new TtlCache(TIDE_GAUGES_TTL_MS),
+    budget: eaBudget,
+  });
+
+  // Shared e-bikes/e-scooters — GBFS operator feeds, NOT TfL, so they get
+  // their own budget. Feeds refresh roughly every minute; 60 s cache matches.
+  const MICROMOBILITY_TTL_MS = 60_000;
+  // Road disruptions are a TfL feed — they share the TfL budget.
+  const ROAD_DISRUPTIONS_TTL_MS = 120_000; // roadworks list drifts slowly
+  registerRoadDisruptionsRoute(app, {
+    config,
+    cache: new TtlCache(ROAD_DISRUPTIONS_TTL_MS),
+    budget: tflBudget,
+  });
 
   // National Rail boards — Darwin fair use is generous, but boards are heavy:
   // long-ish cache and a dedicated budget keep us a polite consumer.

@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":"940GZZALGWP","name":"Greenwich Peninsula","lineId":"london-cable-car"},"geometry":{"type":"Point","coordinates":[0.00834,51.49957]}},{"type":"Feature","properties":{"id":"940GZZALRDK","name":"Royal Docks","lineId":"london-cable-car"},"geometry":{"type":"Point","coordinates":[0.01765,51.50773]}}]}

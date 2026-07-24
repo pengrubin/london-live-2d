@@ -13,6 +13,9 @@ import { startVessels, VESSELS_LAYER_ID } from './layers/vessels';
 import { addJamCams, JAMCAMS_LAYER_ID } from './layers/jamcams';
 import { startNrTrains, NR_TRAINS_LAYER_ID } from './realtime/nr-trains';
 import { startBuses, BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID } from './layers/buses';
+import { startRoadDisruptions, ROAD_DISRUPTIONS_LAYER_IDS } from './layers/road-disruptions';
+import { startTideGauges, TIDE_GAUGES_LAYER_IDS } from './layers/tide-gauges';
+import { startRainRadar, RAIN_RADAR_LAYER_ID } from './layers/rain-radar';
 
 const LONDON_CENTER: [number, number] = [-0.1276, 51.5072];
 // Slightly wider than the pmtiles extract bbox so panning never hits a hard wall
@@ -84,6 +87,9 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       startAircraft(target),
       startNrTrains(target),
       startBuses(target),
+      startRoadDisruptions(target),
+      startTideGauges(target),
+      startRainRadar(target),
     ]);
     addLegend(target, manifestLines, [
       { label: 'Buses', layerIds: [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID] },
@@ -91,7 +97,9 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       { label: 'Aircraft', layerIds: [AIRCRAFT_LAYER_ID] },
       { label: 'Ships', layerIds: [VESSELS_LAYER_ID] },
       { label: 'JamCams', layerIds: [JAMCAMS_LAYER_ID] },
-    ]);
+      { label: 'Roadworks', layerIds: ROAD_DISRUPTIONS_LAYER_IDS },
+      { label: 'Tide gauges', layerIds: TIDE_GAUGES_LAYER_IDS },
+      { label: 'Rain radar', layerIds: [RAIN_RADAR_LAYER_ID], startOff: true },    ]);
     window.__trains = trains;
     setupStationPopups(target, trains.colorByLine, trains.closeVehiclePopup);
     const nameByLine = new Map(manifestLines.map((line) => [line.id, line.name]));
