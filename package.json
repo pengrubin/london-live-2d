@@ -2,8 +2,8 @@
   "name": "london-live-2d",
   "private": true,
   "scripts": {
-    "build": "npm --prefix frontend ci --include=dev && npm --prefix frontend run build && npm --prefix backend ci --include=dev",
-    "start": "npm --prefix backend run start"
+    "build": "cd frontend && npm ci --include=dev && npm run build && cd ../backend && npm ci --include=dev",
+    "start": "cd backend && npm run start"
   },
   "engines": {
     "node": ">=20"
