@@ -73,7 +73,11 @@ const map = new maplibregl.Map({
   center: initialView.center,
   zoom: initialView.zoom,
   maxBounds: LONDON_BOUNDS,
-  attributionControl: { compact: true },
+  attributionControl: {
+    compact: true,
+    customAttribution:
+      '<a href="https://github.com/pengrubin" target="_blank"><b>© PENG</b></a>',
+  },
 });
 
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
