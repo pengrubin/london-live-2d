@@ -4,7 +4,9 @@
 // Input:  data/bus-traces/YYYY-MM-DD.jsonl  (last 3 days; written by backend)
 //         data/bus-routes/prior/<key>.json  (optional BODS timetable shapes)
 // Output: data/bus-routes/learned/<key>.json {poly, quality:{journeys, meanResidualM}}
-//         data/bus-routes/learned/.last-run.json (scheduler freshness stamp)
+//         scheduler freshness stamp: PERSIST_DIR/bus-learner.last-run.json when
+//         PERSIST_DIR is set (production volume, survives redeploys), else
+//         data/bus-routes/learned/.last-run.json — matching learner-scheduler.ts.
 //
 // Method, per line+direction with ≥ MIN_JOURNEYS complete journeys:
 //   seed  = prior shape if present, else the median-length journey,
@@ -32,6 +34,12 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TRACES_DIR = process.env.BUS_TRACES_DIR ?? join(ROOT, 'data', 'bus-traces');
 const PRIOR_DIR = process.env.BUS_PRIOR_DIR ?? join(ROOT, 'data', 'bus-routes', 'prior');
 const LEARNED_DIR = process.env.BUS_LEARNED_DIR ?? join(ROOT, 'data', 'bus-routes', 'learned');
+// Freshness stamp relocates to the persist volume in production so the
+// scheduler's read (learner-scheduler.ts persistPath('bus-learner.last-run.json'))
+// finds it after a redeploy; locally it stays exactly where it lives today.
+const LAST_RUN_PATH = process.env.PERSIST_DIR
+  ? join(process.env.PERSIST_DIR, 'bus-learner.last-run.json')
+  : join(LEARNED_DIR, '.last-run.json');
 
 const TRACE_WINDOW_DAYS = 3;
 const MIN_JOURNEYS = 5;
@@ -438,10 +446,8 @@ async function main() {
 
   summary.meanResidualM = summary.learned === 0 ? 0 : Number((residualTotal / summary.learned).toFixed(1));
   summary.tookS = Number(((Date.now() - startedAt) / 1000).toFixed(1));
-  await writeFile(
-    join(LEARNED_DIR, '.last-run.json'),
-    JSON.stringify({ ranAt: Date.now(), ...summary }),
-  );
+  await mkdir(dirname(LAST_RUN_PATH), { recursive: true });
+  await writeFile(LAST_RUN_PATH, JSON.stringify({ ranAt: Date.now(), ...summary }));
   console.log(JSON.stringify(summary));
 }
 

@@ -14,6 +14,7 @@ import type { BusWire } from './bods-client';
 import type { NrSampleRow } from './nr-sampler';
 import type { TtlCache } from './cache';
 import type { AppConfig } from './config';
+import { persistPath } from './config';
 import type { RateBudget } from './rate-budget';
 import { fetchArrivals } from './tfl-client';
 import { inferTrains } from './shared/position-inference';
@@ -250,8 +251,6 @@ export function makeCachedArrivalsFetcher(deps: ArrivalsFetcherDeps): () => Prom
 // ── the tracker ──
 
 export interface LeaderboardDeps {
-  /** repo data/ directory; standings persist to <dataDir>/leaderboard.json */
-  dataDir: string;
   log: (msg: string) => void;
   getBuses: () => readonly BusWire[];
   getVessels: () => readonly Vessel[];
@@ -277,7 +276,10 @@ export class LeaderboardTracker {
 
   constructor(deps: LeaderboardDeps) {
     this.deps = deps;
-    this.filePath = join(deps.dataDir, 'leaderboard.json');
+    // Standings are runtime-written state: PERSIST_DIR/leaderboard.json in
+    // production (a mounted volume, so it survives redeploys), else
+    // data/leaderboard.json locally — identical to the previous path.
+    this.filePath = persistPath('leaderboard.json');
   }
 
   start(): void {

@@ -16,6 +16,11 @@ import { appendFile, mkdir, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Bus } from './bods-client';
 
+// NOTE: traces are runtime-written under data/bus-traces/ (self-pruned, capped
+// at 2 GB). They stay in data/ for now, but could relocate to PERSIST_DIR
+// (see config.persistPath) in a later step to survive redeploys like the
+// leaderboard standings and learner marker already do.
+
 const FLUSH_INTERVAL_MS = 5_000;
 const MAINTENANCE_INTERVAL_MS = 60 * 60_000;
 const RETENTION_DAYS = 7;

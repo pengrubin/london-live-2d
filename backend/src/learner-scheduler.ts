@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
+import { persistPath } from './config';
 
 const STALE_AFTER_MS = 20 * 60 * 60_000; // 20 h
 const RUN_INTERVAL_MS = 24 * 60 * 60_000; // 24 h
@@ -23,9 +24,9 @@ interface LastRunState {
   readonly ranAt?: number;
 }
 
-function lastRunAt(learnedDir: string): number {
+function lastRunAt(markerPath: string): number {
   try {
-    const raw = readFileSync(join(learnedDir, '.last-run.json'), 'utf8');
+    const raw = readFileSync(markerPath, 'utf8');
     const state = JSON.parse(raw) as LastRunState;
     return typeof state.ranAt === 'number' ? state.ranAt : 0;
   } catch {
@@ -91,8 +92,11 @@ export class LearnerScheduler {
   }
 
   start(): void {
-    const learnedDir = join(this.dataDir, 'bus-routes', 'learned');
-    const age = Date.now() - lastRunAt(learnedDir);
+    // Freshness marker is runtime-written state: it rides on PERSIST_DIR in
+    // production so the 20 h/24 h schedule survives redeploys (else the learner
+    // would re-run on every boot). learn-bus-routes.mjs writes the matching
+    // path (it inherits PERSIST_DIR from this spawned child's env).
+    const age = Date.now() - lastRunAt(persistPath('bus-learner.last-run.json'));
     if (age > STALE_AFTER_MS) {
       this.log(
         `learner pipeline: last run ${age === Date.now() ? 'never' : `${Math.round(age / 3_600_000)} h ago`} — scheduling startup run`,

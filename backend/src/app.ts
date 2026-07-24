@@ -76,6 +76,9 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   let bodsClient: BodsClient | null = null;
   if (config.bodsApiKey) {
     // Trace log + self-scheduled route learner ride along with the poller.
+    // NB: bus-traces/ and bus-routes/learned/ are runtime-written but large, so
+    // they still live under data/ for now — a later step could move them to
+    // PERSIST_DIR (like leaderboard.json + the learner marker already do).
     const traces = new TraceWriter(join(DATA_DIR, 'bus-traces'), (msg) => app.log.info(msg));
     traces.start();
     const bods = new BodsClient(
@@ -152,7 +155,6 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   }
 
   const leaderboard = new LeaderboardTracker({
-    dataDir: DATA_DIR,
     log,
     getBuses: () => bodsClient?.list() ?? [],
     getVessels: () => aisClient?.list() ?? [],

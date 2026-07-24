@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_CORS_ORIGIN, DEFAULT_PORT } from './constants';
 
@@ -12,9 +13,47 @@ export interface AppConfig {
   readonly darwinToken: string | undefined;
   /** BODS (data.bus-data.dft.gov.uk) key for live buses; feature is off when absent. */
   readonly bodsApiKey: string | undefined;
+  /**
+   * Directory for runtime-mutable state (leaderboard standings, learner marker).
+   * Set in production to a mounted volume (e.g. Railway Volume at /data) so this
+   * state survives redeploys; unset locally, where state stays under data/.
+   */
+  readonly persistDir: string | undefined;
 }
 
 const ENV_FILE_PATH = fileURLToPath(new URL('../.env', import.meta.url));
+
+/** Repo data/ directory (sits beside backend/) — the fallback persist root. */
+const DATA_DIR = fileURLToPath(new URL('../../data', import.meta.url));
+
+/**
+ * Legacy on-disk locations (relative to data/) for runtime-written files whose
+ * path today differs from their flat PERSIST_DIR name. Keeps local (PERSIST_DIR
+ * unset) behavior byte-identical to today while allowing a clean flat layout on
+ * the volume. Files not listed here fall back to `data/<segments>` unchanged.
+ */
+const LEGACY_DATA_PATHS: Readonly<Record<string, string>> = {
+  'bus-learner.last-run.json': 'bus-routes/learned/.last-run.json',
+};
+
+/**
+ * Absolute path for a runtime-mutable state file. When PERSIST_DIR is set
+ * (production → a mounted volume like /data) all such files live flat under it;
+ * when unset each file falls back to the exact location it uses today under
+ * data/. The parent directory is created (recursive) so first writes never fail.
+ *
+ * NOTE: only runtime-WRITTEN state routes through here. Git-committed baked data
+ * (branches / lines / stations / nr / manifest) is still read from data/ as-is.
+ */
+export function persistPath(...segments: string[]): string {
+  const persistDir = readEnv('PERSIST_DIR');
+  const logical = segments.join('/');
+  const target = persistDir
+    ? join(persistDir, ...segments)
+    : join(DATA_DIR, ...(LEGACY_DATA_PATHS[logical] ?? logical).split('/'));
+  mkdirSync(dirname(target), { recursive: true });
+  return target;
+}
 
 /** Minimal dotenv-style parser: KEY=value lines, `#` comments, optional quotes. */
 function parseEnvFile(contents: string): ReadonlyMap<string, string> {
@@ -60,6 +99,7 @@ export function loadConfig(): AppConfig {
   const aisApiKey = readEnv('AIS_API_KEY');
   const darwinToken = readEnv('DARWIN_TOKEN');
   const bodsApiKey = readEnv('BODS_API_KEY');
+  const persistDir = readEnv('PERSIST_DIR');
 
-  return { tflAppKey, port, corsOrigin, aisApiKey, darwinToken, bodsApiKey };
+  return { tflAppKey, port, corsOrigin, aisApiKey, darwinToken, bodsApiKey, persistDir };
 }
