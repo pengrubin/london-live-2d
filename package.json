@@ -6,6 +6,6 @@
     "start": "cd backend && npm run start"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   }
 }
