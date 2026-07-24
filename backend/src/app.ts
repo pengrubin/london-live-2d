@@ -1,6 +1,8 @@
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import cors from '@fastify/cors';
+import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { AisClient } from './ais-client';
 import { BodsClient } from './bods-client';
@@ -46,7 +48,14 @@ const SCRIPTS_DIR = join(REPO_ROOT, 'scripts');
 export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
 
-  await app.register(cors, { origin: config.corsOrigin });
+  // CORS_ORIGIN may be a single origin or a comma-separated list.
+  const corsOrigins = config.corsOrigin
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+  await app.register(cors, {
+    origin: corsOrigins.length > 1 ? corsOrigins : config.corsOrigin,
+  });
 
   // Live vessel names (optional feature — needs an aisstream.io key in .env)
   let aisClient: AisClient | null = null;
@@ -173,6 +182,24 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const NR_BOARD_TTL_MS = 45_000;
   const darwinBudget = new RateBudget(40, 60_000);
   registerNrBoardRoute(app, { config, cache: new TtlCache(NR_BOARD_TTL_MS), budget: darwinBudget });
+
+  // ── production static serving ──
+  // Single-service deploy (Railway): the backend serves the built frontend
+  // plus the baked JSON in data/ — mirroring Vite's publicDir so the
+  // frontend's relative fetches (/manifest.json, /lines/…, /stations/…,
+  // /branches/…, /nr/…, /bus-routes/learned/…) work identically in prod.
+  // Registered AFTER all API routes: explicit /api/* routes always win over
+  // the static wildcard. Guarded so local dev (frontend/dist absent or
+  // NODE_ENV unset) is unchanged. The 136 MB london.pmtiles is NOT served
+  // from here in prod — the frontend points at R2 via VITE_PMTILES_URL.
+  const FRONTEND_DIST = join(REPO_ROOT, 'frontend', 'dist');
+  if (process.env.NODE_ENV === 'production' && existsSync(FRONTEND_DIST)) {
+    await app.register(fastifyStatic, {
+      // First matching root wins: built assets first, then baked data.
+      root: [FRONTEND_DIST, DATA_DIR],
+    });
+    app.log.info({ roots: [FRONTEND_DIST, DATA_DIR] }, 'static serving enabled');
+  }
 
   return app;
 }

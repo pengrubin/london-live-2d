@@ -2,9 +2,12 @@ import { defineConfig } from 'vite';
 
 // data/ holds the pmtiles basemap and (from P1 on) baked route/station JSON.
 // Serving it as publicDir keeps large binary data out of frontend/ and out of
-// the bundling pipeline; in production the same files go to R2/Pages assets.
-export default defineConfig({
-  publicDir: '../data',
+// the bundling pipeline. DEV ONLY: for `vite build`, publicDir is disabled —
+// otherwise Vite would copy all of data/ (136 MB pmtiles + hundreds of MB of
+// bus-traces/osm-cache) into dist/. In production the backend serves data/
+// directly and the pmtiles comes from R2 (VITE_PMTILES_URL).
+export default defineConfig(({ command }) => ({
+  publicDir: command === 'build' ? false : '../data',
   server: {
     port: 5173,
     // Forward API calls to the Fastify backend so frontend code can use
@@ -19,4 +22,4 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['maplibre-gl'],
   },
-});
+}));

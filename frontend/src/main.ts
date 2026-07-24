@@ -1,5 +1,11 @@
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+// maplibre resolves its render worker's filename at runtime (relative to
+// import.meta.url), which the bundler cannot see — in a production build the
+// worker would 404. `?worker&url` makes Vite bundle the worker (with its
+// shared-chunk import) and hand back its URL; dev keeps maplibre's own
+// resolution, which works from node_modules.
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { Protocol } from 'pmtiles';
 import { layers, namedFlavor } from '@protomaps/basemaps';
 import { addTransitLineLayers } from './layers/transit-lines';
@@ -41,6 +47,10 @@ function readInitialViewFromUrl(): { center: [number, number]; zoom: number } {
 
 const initialView = readInitialViewFromUrl();
 
+if (import.meta.env.PROD) {
+  maplibregl.setWorkerUrl(maplibreWorkerUrl);
+}
+
 const protocol = new Protocol();
 maplibregl.addProtocol('pmtiles', protocol.tile);
 
@@ -53,7 +63,7 @@ const map = new maplibregl.Map({
     sources: {
       protomaps: {
         type: 'vector',
-        url: 'pmtiles:///london.pmtiles',
+        url: `pmtiles://${import.meta.env.VITE_PMTILES_URL ?? '/london.pmtiles'}`,
         attribution:
           '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org">OpenStreetMap</a>',
       },
