@@ -43,6 +43,70 @@ export interface NrTrackedTrain {
   stops: NrTimedStop[];
 }
 
+// ── gateway stations (fast / express fix) ─────────────────────────────────
+// Fast trains leave a London terminus and their FIRST calling point lies
+// OUTSIDE the in-box station graph (e.g. Euston→Milton Keynes, Paddington→
+// Reading). After filtering calling points to in-box stations only the origin
+// survives → no segment pair → the train never renders even while physically
+// crossing visible London track. Each gateway maps a first-out-of-box
+// calling-point CRS to `snap`: the outermost in-box station on the SAME line of
+// route (a real rail-graph node). origin→snap then gives a segment pair along
+// the true corridor (WCML/GWML/ECML/MML/GEML/…) out to the bbox edge, where the
+// train correctly leaves view. lat/lon are the gateway's real coordinates
+// (verified against data/osm-cache/uk-stations.json); positioning uses the snap
+// node's baked coordinates. KEEP IN SYNC with frontend/src/realtime/nr-trains.ts.
+export interface NrGateway {
+  crs: string;
+  name: string;
+  lat: number;
+  lon: number;
+  /** outermost in-box station on the same line of route (a rail-graph node) */
+  snap: string;
+}
+export const NR_GATEWAYS: NrGateway[] = [
+  // West Coast Main Line (Euston) → Kings Langley
+  { crs: 'MKC', name: 'Milton Keynes Central', lat: 52.03436, lon: -0.77341, snap: 'KGL' },
+  { crs: 'TRI', name: 'Tring', lat: 51.80033, lon: -0.62225, snap: 'KGL' },
+  // Great Western Main Line (Paddington) → Langley
+  { crs: 'RDG', name: 'Reading', lat: 51.45877, lon: -0.97217, snap: 'LNY' },
+  { crs: 'SLO', name: 'Slough', lat: 51.51192, lon: -0.5918, snap: 'LNY' },
+  { crs: 'MAI', name: 'Maidenhead', lat: 51.5186, lon: -0.72246, snap: 'LNY' },
+  { crs: 'TWY', name: 'Twyford', lat: 51.47561, lon: -0.86389, snap: 'LNY' },
+  // East Coast Main Line / Great Northern (King's Cross) → Potters Bar
+  { crs: 'SVG', name: 'Stevenage', lat: 51.89903, lon: -0.20644, snap: 'PBR' },
+  { crs: 'HIT', name: 'Hitchin', lat: 51.95291, lon: -0.2625, snap: 'PBR' },
+  { crs: 'WGC', name: 'Welwyn Garden City', lat: 51.80096, lon: -0.20308, snap: 'PBR' },
+  { crs: 'PBO', name: 'Peterborough', lat: 52.57495, lon: -0.24981, snap: 'PBR' },
+  // Midland Main Line / Thameslink (St Pancras) → Radlett
+  { crs: 'LUT', name: 'Luton', lat: 51.88223, lon: -0.41488, snap: 'RDT' },
+  { crs: 'LTN', name: 'Luton Airport Parkway', lat: 51.87116, lon: -0.39348, snap: 'RDT' },
+  { crs: 'SAC', name: 'St Albans City', lat: 51.74883, lon: -0.32684, snap: 'RDT' },
+  { crs: 'BDM', name: 'Bedford', lat: 52.13618, lon: -0.47945, snap: 'RDT' },
+  // Great Eastern Main Line (Liverpool St) → Shenfield
+  { crs: 'CHM', name: 'Chelmsford', lat: 51.7366, lon: 0.46932, snap: 'SNF' },
+  { crs: 'COL', name: 'Colchester', lat: 51.90048, lon: 0.89409, snap: 'SNF' },
+  // West Anglia Main Line (Liverpool St) → Cheshunt
+  { crs: 'HWN', name: 'Harlow Town', lat: 51.78164, lon: 0.0948, snap: 'CHN' },
+  { crs: 'BIS', name: 'Bishops Stortford', lat: 51.86669, lon: 0.16557, snap: 'CHN' },
+  { crs: 'SSD', name: 'Stansted Airport', lat: 51.88898, lon: 0.26162, snap: 'CHN' },
+  // c2c (Fenchurch St) → West Horndon
+  { crs: 'BSO', name: 'Basildon', lat: 51.56867, lon: 0.45731, snap: 'WHR' },
+  // Chiltern Main Line (Marylebone) → Denham Golf Club
+  { crs: 'HWY', name: 'High Wycombe', lat: 51.62979, lon: -0.74514, snap: 'DGC' },
+  { crs: 'GER', name: 'Gerrards Cross', lat: 51.58888, lon: -0.55537, snap: 'DGC' },
+  // South West Main Line (Waterloo) → West Byfleet / Clandon
+  { crs: 'WOK', name: 'Woking', lat: 51.31847, lon: -0.55781, snap: 'WBY' },
+  { crs: 'BSK', name: 'Basingstoke', lat: 51.26804, lon: -1.0869, snap: 'WBY' },
+  { crs: 'GLD', name: 'Guildford', lat: 51.23691, lon: -0.58041, snap: 'CLA' },
+  // South Eastern Main Line (Charing Cross) → Sevenoaks
+  { crs: 'TON', name: 'Tonbridge', lat: 51.19113, lon: 0.26971, snap: 'SEV' },
+  // Brighton Main Line (Victoria / London Bridge) → Merstham
+  { crs: 'RDH', name: 'Redhill', lat: 51.24012, lon: -0.16485, snap: 'MHM' },
+  { crs: 'GTW', name: 'Gatwick Airport', lat: 51.15642, lon: -0.16102, snap: 'MHM' },
+];
+/** gateway CRS → snap-node CRS (outermost in-box station on its line) */
+const NR_GATEWAY_SNAP = new Map<string, string>(NR_GATEWAYS.map((g) => [g.crs, g.snap]));
+
 const HALF_DAY_MS = 12 * 3600_000;
 const DAY_MS = 24 * 3600_000;
 /** Trains whose final stop passed this long ago are pruned. */
@@ -201,10 +265,18 @@ export function mergeBoard(
         ]
       : [];
     const rest: NrTimedStop[] = svc.callingPoints
-      .filter((p) => stations.has(p.crs))
-      .map((p) => ({ crs: p.crs, name: p.name, time: stopTime(p, now) ?? 0 }))
-      .filter((p) => p.time > 0);
-    const stops = [...first, ...rest].filter((p) => p.time > 0);
+      .map((p): NrTimedStop | null => {
+        // in-box station: use directly. out-of-box gateway: snap to the
+        // outermost in-box node on its line so origin→snap forms a segment pair
+        // along the real corridor. otherwise drop (invisible > wrong).
+        const crs = stations.has(p.crs) ? p.crs : (NR_GATEWAY_SNAP.get(p.crs) ?? null);
+        if (crs === null || !stations.has(crs)) return null;
+        return { crs, name: p.name, time: stopTime(p, now) ?? 0 };
+      })
+      .filter((p): p is NrTimedStop => p !== null && p.time > 0);
+    const merged = [...first, ...rest].filter((p) => p.time > 0);
+    // collapse consecutive stops sharing a CRS so no zero-length leg is produced
+    const stops = merged.filter((p, i) => i === 0 || p.crs !== merged[i - 1]!.crs);
     if (stops.length < 2) continue;
     const existing = trains.get(svc.rid);
     if (existing && existing.stops.length >= stops.length) continue;
