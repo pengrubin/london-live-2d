@@ -18,7 +18,7 @@ import { addLeaderboard } from './ui/leaderboard';
 import { startAircraft, AIRCRAFT_LAYER_ID } from './layers/aircraft';
 import { findVessel, startVessels, VESSELS_LAYER_ID } from './layers/vessels';
 import { addJamCams, JAMCAMS_LAYER_ID } from './layers/jamcams';
-import { startNrTrains, NR_TRAINS_LAYER_ID } from './realtime/nr-trains';
+import { findNrTrain, startNrTrains, NR_TRAINS_LAYER_ID } from './realtime/nr-trains';
 import { findBus, startBuses, BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID } from './layers/buses';
 import { startRoadDisruptions, ROAD_DISRUPTIONS_LAYER_IDS } from './layers/road-disruptions';
 import { startTideGauges, TIDE_GAUGES_LAYER_IDS } from './layers/tide-gauges';
@@ -117,6 +117,7 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       { label: 'Rain radar', layerIds: [RAIN_RADAR_LAYER_ID], startOff: true },    ]);
     addLeaderboard(target, trains.colorByLine, {
       findTrain: trains.findVehicle,
+      findNrTrain,
       findBus,
       findVessel,
     });

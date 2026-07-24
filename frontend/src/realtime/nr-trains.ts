@@ -11,6 +11,7 @@ import {
 } from 'maplibre-gl';
 import { pointAtFraction, polylineLength, type LngLat } from './geometry';
 import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
+import { appendRankLine } from '../ui/rank-line';
 
 export const NR_TRAINS_LAYER_ID = 'nr-trains-dots';
 const SOURCE_ID = 'nr-trains';
@@ -77,6 +78,42 @@ interface NrTrain {
 
 const esc = (s: string): string =>
   s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
+
+// Live train table + path resolver at module scope so findNrTrain (the
+// leaderboard's dblclick locator) can evaluate positions outside the
+// startNrTrains closure. Populated once startNrTrains has loaded the graph.
+const trains = new Map<string, NrTrain>();
+let activeRailPath: ((a: string, b: string) => LngLat[] | null) | null = null;
+
+interface TrainFix {
+  lngLat: LngLat;
+  bearing: number;
+  /** index of the stop the train most recently departed */
+  legIndex: number;
+}
+
+/** Clock-driven position of a tracked train, or null when off-coverage. */
+function currentFix(t: NrTrain, now: number): TrainFix | null {
+  if (!activeRailPath) return null;
+  const { stops } = t;
+  if (stops[0].time > now) return null; // not yet departed our coverage
+  let i = 0;
+  while (i < stops.length - 1 && stops[i + 1].time <= now) i++;
+  if (i >= stops.length - 1) return null; // journey finished
+  const path = activeRailPath(stops[i].crs, stops[i + 1].crs);
+  if (!path || polylineLength(path) === 0) return null;
+  const span = stops[i + 1].time - stops[i].time;
+  const frac = span <= 0 ? 0 : Math.min(1, (now - stops[i].time) / span);
+  const pt = pointAtFraction(path, frac);
+  return { lngLat: pt.lngLat, bearing: pt.bearing, legIndex: i };
+}
+
+/** rid → current displayed position, for the leaderboard dblclick locator. */
+export function findNrTrain(rid: string): [number, number] | null {
+  const t = trains.get(rid);
+  if (!t) return null;
+  return currentFix(t, Date.now())?.lngLat ?? null;
+}
 
 /** "HH:mm" → epoch ms nearest to now (handles the midnight wrap). */
 function parseTime(hhmm: string, now: number): number | null {
@@ -177,6 +214,7 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
     cachePath(key, poly);
     return poly;
   }
+  activeRailPath = railPath;
 
   // ── vehicle icon + layer ──
   if (!map.hasImage('train-national-rail')) {
@@ -220,7 +258,6 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
   );
 
   // ── board polling (round-robin, deduped by rid) ──
-  const trains = new Map<string, NrTrain>();
   let hubIndex = 0;
   let boardsUnavailable = false;
 
@@ -286,28 +323,21 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
     const now = Date.now();
     const features = [];
     for (const t of trains.values()) {
-      const { stops } = t;
-      if (stops[0].time > now) continue; // not yet departed our coverage
-      let i = 0;
-      while (i < stops.length - 1 && stops[i + 1].time <= now) i++;
-      if (i >= stops.length - 1) continue; // journey finished
-      const path = railPath(stops[i].crs, stops[i + 1].crs);
-      if (!path || polylineLength(path) === 0) continue;
-      const span = stops[i + 1].time - stops[i].time;
-      const frac = span <= 0 ? 0 : Math.min(1, (now - stops[i].time) / span);
-      const pt = pointAtFraction(path, frac);
+      const fix = currentFix(t, now);
+      if (!fix) continue;
+      const next = t.stops[fix.legIndex + 1];
       features.push({
         type: 'Feature' as const,
         properties: {
           rid: t.rid,
           operator: t.operator,
           destination: t.destination,
-          nextStop: stops[i + 1].name,
-          etaMin: Math.max(0, Math.round((stops[i + 1].time - now) / 60_000)),
+          nextStop: next.name,
+          etaMin: Math.max(0, Math.round((next.time - now) / 60_000)),
           delayed: t.delayed ? 1 : 0,
-          bearing: pt.bearing,
+          bearing: fix.bearing,
         },
-        geometry: { type: 'Point' as const, coordinates: pt.lngLat },
+        geometry: { type: 'Point' as const, coordinates: fix.lngLat },
       });
     }
     const src = map.getSource(SOURCE_ID);
@@ -360,6 +390,7 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
         ${calling ? `<div class="vp-section">Calling at</div>${calling}` : ''}</div>`,
       )
       .addTo(map);
+    appendRankLine(detail, 'train', `train:nr:${String(p.rid)}`);
   });
 
   await pollNextBoard();

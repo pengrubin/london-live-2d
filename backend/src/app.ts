@@ -16,6 +16,7 @@ import {
   registerLeaderboardRoute,
 } from './leaderboard';
 import { LearnerScheduler } from './learner-scheduler';
+import { loadNrGraph, makeCachedNrBoardFetcher, NrSampler } from './nr-sampler';
 import { RateBudget } from './rate-budget';
 import { TraceWriter } from './trace-writer';
 import { registerArrivalsRoute } from './routes/arrivals';
@@ -129,6 +130,27 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   // polling and never double-spends the budget.
   const log = (msg: string): void => app.log.info(msg);
   const branchData = loadBranchData(DATA_DIR, log);
+
+  // National Rail boards — Darwin fair use is generous, but boards are heavy:
+  // long-ish cache and a dedicated budget keep us a polite consumer. The cache
+  // and budget are shared between /api/nr-board and the leaderboard's NR
+  // sampler (identical cache key: the CRS), so NR ranking never double-spends.
+  const NR_BOARD_TTL_MS = 45_000;
+  const nrBoardCache = new TtlCache<unknown>(NR_BOARD_TTL_MS);
+  const darwinBudget = new RateBudget(40, 60_000);
+
+  // NR trains rank alongside tube in the "train" mode; off without a token.
+  let nrSampler: NrSampler | null = null;
+  if (config.darwinToken) {
+    const nrGraph = loadNrGraph(DATA_DIR, log);
+    if (nrGraph) {
+      nrSampler = new NrSampler(
+        nrGraph,
+        makeCachedNrBoardFetcher({ config, cache: nrBoardCache, budget: darwinBudget, log }),
+      );
+    }
+  }
+
   const leaderboard = new LeaderboardTracker({
     dataDir: DATA_DIR,
     log,
@@ -143,6 +165,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     }),
     branchesByLine: branchData.branchesByLine,
     lineNameById: branchData.lineNameById,
+    nrSampler,
   });
   leaderboard.start();
   app.addHook('onClose', () => leaderboard.stop());
@@ -185,11 +208,9 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     budget: tflBudget,
   });
 
-  // National Rail boards — Darwin fair use is generous, but boards are heavy:
-  // long-ish cache and a dedicated budget keep us a polite consumer.
-  const NR_BOARD_TTL_MS = 45_000;
-  const darwinBudget = new RateBudget(40, 60_000);
-  registerNrBoardRoute(app, { config, cache: new TtlCache(NR_BOARD_TTL_MS), budget: darwinBudget });
+  // National Rail boards share nrBoardCache + darwinBudget with the
+  // leaderboard's NR sampler (declared above, before the tracker wiring).
+  registerNrBoardRoute(app, { config, cache: nrBoardCache, budget: darwinBudget });
 
   // ── production static serving ──
   // Single-service deploy (Railway): the backend serves the built frontend

@@ -49,12 +49,15 @@ interface LeaderboardResponse {
 export interface VehicleLocator {
   /** train key is "lineId:vehicleId" (also used by TfL river vehicles) */
   findTrain: (key: string) => [number, number] | null;
+  /** National Rail rid → current displayed position on the NR live map */
+  findNrTrain: (rid: string) => [number, number] | null;
   /** bus id is the operator-qualified vehicle id "OPERATOR:VehicleRef" */
   findBus: (id: string) => [number, number] | null;
   findVessel: (mmsi: number) => [number, number] | null;
 }
 
 const TUBE_ID_PREFIX = 'tube:';
+const NR_ID_PREFIX = 'train:nr:';
 const RIVER_ID_PREFIX = 'ship:tfl:';
 const BUS_ID_PREFIX = 'bus:';
 const AIS_ID_PREFIX = 'ship:';
@@ -62,6 +65,7 @@ const AIS_ID_PREFIX = 'ship:';
 /** Map a leaderboard entry id onto the matching live-layer lookup. */
 function lookupPosition(id: string, locator: VehicleLocator): [number, number] | null {
   if (id.startsWith(TUBE_ID_PREFIX)) return locator.findTrain(id.slice(TUBE_ID_PREFIX.length));
+  if (id.startsWith(NR_ID_PREFIX)) return locator.findNrTrain(id.slice(NR_ID_PREFIX.length));
   if (id.startsWith(RIVER_ID_PREFIX)) return locator.findTrain(id.slice(RIVER_ID_PREFIX.length));
   if (id.startsWith(BUS_ID_PREFIX)) return locator.findBus(id.slice(BUS_ID_PREFIX.length));
   if (id.startsWith(AIS_ID_PREFIX)) {

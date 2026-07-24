@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Vessel } from './ais-client';
 import type { BusWire } from './bods-client';
+import type { NrSampleRow } from './nr-sampler';
 import type { TtlCache } from './cache';
 import type { AppConfig } from './config';
 import type { RateBudget } from './rate-budget';
@@ -25,6 +26,10 @@ const MIN_MOVE_M = 5;
 /** Implied-speed sanity caps (m/s): faster deltas are feed glitches, not travel. */
 const MAX_SPEED_RAIL_BUS_MS = 40;
 const MAX_SPEED_SHIP_MS = 25;
+/** National Rail runs InterCity stock (~200 km/h) — higher teleport guard. */
+const MAX_SPEED_NR_TRAIN_MS = 65;
+/** NR entries live in the train ranking but carry their own id namespace. */
+const NR_TRAIN_ID_PREFIX = 'train:nr:';
 /** A vehicle unseen for longer than this restarts its track (no distance credit). */
 const MAX_GAP_MS = 5 * 60_000;
 /** Drop last-position entries unseen for this long (bounds memory). */
@@ -251,6 +256,8 @@ export interface LeaderboardDeps {
   getBuses: () => readonly BusWire[];
   getVessels: () => readonly Vessel[];
   fetchTubePredictions: () => Promise<Prediction[] | null>;
+  /** null when DARWIN_TOKEN / the rail graph is absent — NR ranking off. */
+  nrSampler: { tick(now: number): Promise<readonly NrSampleRow[]> } | null;
   branchesByLine: Map<string, LineBranches>;
   lineNameById: Map<string, string>;
 }
@@ -346,6 +353,7 @@ export class LeaderboardTracker {
       this.sampleBuses(now, keys);
       this.sampleVessels(now, keys);
       await this.sampleTrains(now, keys);
+      await this.sampleNrTrains(now, keys);
       this.pruneLastFixes(now);
     } catch (err) {
       this.deps.log(`leaderboard sample error: ${String(err)}`);
@@ -364,10 +372,17 @@ export class LeaderboardTracker {
     }
   }
 
-  private sampleVessels(now: number, keys: PeriodKeys): void {
+  private sampleVessels(_now: number, keys: PeriodKeys): void {
     for (const vessel of this.deps.getVessels()) {
       const label = vessel.name || `MMSI ${vessel.mmsi}`;
-      this.record('ship', `ship:${vessel.mmsi}`, label, undefined, vessel.lat, vessel.lon, now, keys);
+      // Credit against the AIS fix time (lastSeen), NOT the sample tick: the
+      // vessel table holds its last position through delivery gaps, so
+      // tick-time crediting compresses the whole gap's real movement into one
+      // 15 s window and the implied speed trips the ship teleport guard —
+      // silently discarding most of a vessel's travel. With the fix time,
+      // repeats of an unchanged fix yield gapMs = 0 (no-ops) and the catch-up
+      // jump is divided by the true elapsed time.
+      this.record('ship', `ship:${vessel.mmsi}`, label, undefined, vessel.lat, vessel.lon, vessel.lastSeen, keys);
     }
   }
 
@@ -391,6 +406,16 @@ export class LeaderboardTracker {
     this.prevSegments = nextSegments;
   }
 
+  /** National Rail trains rank alongside tube ("train" API mode). */
+  private async sampleNrTrains(now: number, keys: PeriodKeys): Promise<void> {
+    const sampler = this.deps.nrSampler;
+    if (!sampler) return;
+    const rows = await sampler.tick(now);
+    for (const row of rows) {
+      this.record('tube', row.id, row.label, undefined, row.lat, row.lon, now, keys);
+    }
+  }
+
   private record(
     mode: LeaderboardMode,
     id: string,
@@ -408,7 +433,12 @@ export class LeaderboardTracker {
     if (gapMs <= 0 || gapMs > MAX_GAP_MS) return; // long silence → restart track
     const meters = haversineMeters(prev.lat, prev.lon, lat, lon);
     if (meters < MIN_MOVE_M) return; // GPS/inference jitter
-    const maxSpeed = mode === 'ship' ? MAX_SPEED_SHIP_MS : MAX_SPEED_RAIL_BUS_MS;
+    const maxSpeed =
+      mode === 'ship'
+        ? MAX_SPEED_SHIP_MS
+        : id.startsWith(NR_TRAIN_ID_PREFIX)
+          ? MAX_SPEED_NR_TRAIN_MS
+          : MAX_SPEED_RAIL_BUS_MS;
     if (meters / (gapMs / 1000) > maxSpeed) return; // teleport → feed glitch
     for (const period of PERIODS) {
       const bucketKey = `${period}:${keys[period]}`;
@@ -533,8 +563,12 @@ export function registerLeaderboardRoute(app: FastifyInstance, tracker: Leaderbo
     if (rawId === undefined || rawId.length === 0) {
       return reply.code(400).send({ error: 'Query parameter "id" is required.' });
     }
-    // Accept the public "train:" spelling for tube/rail entry ids too.
-    const id = rawId.startsWith('train:') ? `tube:${rawId.slice('train:'.length)}` : rawId;
+    // Accept the public "train:" spelling for tube/rail entry ids too —
+    // except "train:nr:*", which is a National Rail id stored verbatim.
+    const id =
+      rawId.startsWith('train:') && !rawId.startsWith(NR_TRAIN_ID_PREFIX)
+        ? `tube:${rawId.slice('train:'.length)}`
+        : rawId;
     const info = tracker.rank(rawMode, id);
     if (!info) return reply.code(404).send({ error: 'No ranking for that vehicle today.' });
     return info;
