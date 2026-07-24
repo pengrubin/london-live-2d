@@ -36,6 +36,8 @@ interface Vessel {
   widthM: number | null;
   draughtM: number | null;
   flag: string | null;
+  /** epoch ms of the vessel's own AIS fix — extrapolation anchor */
+  lastSeen: number;
 }
 
 const esc = (s: string): string =>
@@ -158,7 +160,6 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
   );
 
   let vessels: Vessel[] = [];
-  let fetchedAt = 0;
 
   async function poll(): Promise<void> {
     try {
@@ -168,7 +169,6 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
       if (Array.isArray(list)) {
         vessels = list;
         liveVessels = list;
-        fetchedAt = Date.now();
       }
     } catch {
       // keep the previous picture
@@ -184,12 +184,17 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
       schedule();
       return;
     }
-    const dtS = (Date.now() - fetchedAt) / 1000;
+    // Anchor dead reckoning to each fix's own timestamp: AIS fixes arrive with
+    // ~60 s median gaps, so anchoring to our poll time made fast ships lurch
+    // forward then snap back every poll (the reported 'looping path'). Cap the
+    // extrapolation so stale fixes don't overshoot.
+    const nowMs = Date.now();
     const boats = tflBoatPositions(map);
     const features = vessels
       .map((v) => {
         const speedMs = (v.sog ?? 0) * KN_TO_MS;
         const rad = ((v.cog ?? 0) * Math.PI) / 180;
+        const dtS = Math.min(Math.max(0, (nowMs - v.lastSeen) / 1000), 120);
         const lngLat: LngLat = [
           v.lon + (speedMs * dtS * Math.sin(rad)) / M_PER_DEG_LON,
           v.lat + (speedMs * dtS * Math.cos(rad)) / M_PER_DEG_LAT,
