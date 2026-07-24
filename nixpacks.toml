@@ -1,0 +1,15 @@
+# Explicit Railway (Nixpacks) phases — deterministic, no npm-in-npm scripts.
+[phases.setup]
+nixPkgs = ['nodejs_24']
+
+[phases.install]
+cmds = [
+  'cd frontend && npm ci --include=dev',
+  'cd backend && npm ci --include=dev',
+]
+
+[phases.build]
+cmds = ['cd frontend && npm run build']
+
+[start]
+cmd = 'cd backend && npm run start'
