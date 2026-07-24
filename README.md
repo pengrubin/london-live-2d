@@ -78,3 +78,9 @@ node scripts/bake-routes.mjs && node scripts/bake-osm-geometry.mjs \
 self-scheduling bus-route learner · `scripts/` data baking (TfL, OSM, timetables, NR graph) ·
 `data/` baked geometry (committed) + basemap/traces (not committed) · `docs/` architecture,
 implementation plan, roadmap.
+
+## Privacy
+
+The "locate me" button uses your browser's geolocation only after you tap it (never on load).
+Your coordinates are used purely to recentre the map in your browser — they are never sent to
+the server, logged, or stored.

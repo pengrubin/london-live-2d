@@ -13,6 +13,10 @@ export interface LegendLine {
   displayColor?: string;
 }
 
+// Phones (portrait) get too little room for the panels; start them collapsed so
+// the map stays visible and let the user tap the header to expand.
+const MOBILE_MEDIA_QUERY = '(max-width: 640px)';
+
 const MODE_ORDER = ['tube', 'dlr', 'elizabeth-line', 'overground', 'river-bus'];
 const MODE_LABEL: Record<string, string> = {
   tube: 'Underground',
@@ -58,6 +62,8 @@ export function addLegend(
   header.addEventListener('click', () => {
     panel.classList.toggle('collapsed');
   });
+
+  if (window.matchMedia(MOBILE_MEDIA_QUERY).matches) panel.classList.add('collapsed');
 
   const sorted = [...lines].sort(
     (a, b) =>

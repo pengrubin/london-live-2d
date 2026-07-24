@@ -24,6 +24,9 @@ const MODE_LABEL: Record<Mode, string> = {
   ship: '⛴ Ships',
 };
 
+// Phones (portrait) start the panel collapsed so the map stays visible.
+const MOBILE_MEDIA_QUERY = '(max-width: 640px)';
+
 const BUS_CHIP_COLOR = '#DA291C'; // London bus red
 const SHIP_CHIP_COLOR = '#2E86DE';
 const FALLBACK_CHIP_COLOR = '#8a94a0';
@@ -147,6 +150,8 @@ export function addLeaderboard(
   header.addEventListener('click', () => {
     panel.classList.toggle('collapsed');
   });
+
+  if (window.matchMedia(MOBILE_MEDIA_QUERY).matches) panel.classList.add('collapsed');
 
   const tabs = document.createElement('div');
   tabs.className = 'lb-tabs';

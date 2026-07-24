@@ -76,7 +76,7 @@ const map = new maplibregl.Map({
   attributionControl: {
     compact: true,
     customAttribution:
-      '<a href="https://github.com/pengrubin" target="_blank"><b>© PENG</b></a> · Location used only to move the map, not stored',
+      '<a href="https://github.com/pengrubin" target="_blank"><b>© PENG</b></a>',
   },
 });
 
@@ -105,7 +105,7 @@ function isOutsideLondon(lon: number, lat: number): boolean {
 
 function showOutsideLondonToast(): void {
   showToast(
-    'You appear to be outside Greater London — showing the nearest edge. Your location is used only to move the map, not stored.',
+    'You appear to be outside Greater London — showing the nearest edge.',
   );
 }
 
