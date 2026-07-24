@@ -45,6 +45,10 @@ export function injectPopupStyles(): void {
     .sp-fact { color: #888; font-size: 11px; }
     .sp-warn { color: #da3; font-size: 11px; margin-top: 2px; }
     .vp-reason { color: #888; font-size: 11px; margin: 1px 0 3px; }
+    .vp-photo {
+      display: block; width: 100%; max-width: 280px; border-radius: 6px;
+      margin: 0 0 6px;
+    }
   `;
   document.head.appendChild(style);
 }

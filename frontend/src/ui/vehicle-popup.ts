@@ -6,6 +6,7 @@ import { Popup, type Map as MaplibreMap } from 'maplibre-gl';
 import type { DisplayedTrain } from '../realtime/interpolator';
 import { injectPopupStyles, truncate } from './station-popup';
 import { fetchRank, rankLineText } from './rank-line';
+import { dimensionsLine, fetchShipPhoto, flagLine } from './ship-info';
 
 const CONTENT_REFRESH_MS = 1000;
 const MAX_CALLING_STOPS = 5;
@@ -26,6 +27,8 @@ interface VehicleDetail {
   lineStatus: string | null; // non-null only when service is disrupted
   lineStatusReasons: string[]; // deduped human-readable disruption reasons
   vessel: MatchedVessel | null; // boats only: nearest live AIS ship
+  /** blob URL for the matched vessel's photo, resolved after the detail */
+  vesselPhotoUrl: string | null;
   /** today's leaderboard standing line, e.g. "Top 3 / 681 · 6.4 km today" */
   rankLine: string | null;
 }
@@ -34,6 +37,10 @@ interface MatchedVessel {
   name: string;
   sogKnots: number | null;
   mmsi: number;
+  lengthM: number | null;
+  widthM: number | null;
+  draughtM: number | null;
+  flag: string | null;
 }
 
 interface AisVessel {
@@ -42,6 +49,10 @@ interface AisVessel {
   lat: number;
   lon: number;
   sog: number | null;
+  lengthM?: number | null;
+  widthM?: number | null;
+  draughtM?: number | null;
+  flag?: string | null;
 }
 
 /** A TfL boat and an AIS ship within this range are the same physical vessel. */
@@ -58,9 +69,17 @@ function nearestVessel(vessels: AisVessel[], lngLat: readonly [number, number]):
     const d = Math.hypot(dx, dy);
     if (d <= VESSEL_MATCH_M && (!best || d < best.d)) best = { vessel: v, d };
   }
-  return best
-    ? { name: best.vessel.name, sogKnots: best.vessel.sog, mmsi: best.vessel.mmsi }
-    : null;
+  if (!best) return null;
+  const v = best.vessel;
+  return {
+    name: v.name,
+    sogKnots: v.sog,
+    mmsi: v.mmsi,
+    lengthM: v.lengthM ?? null,
+    widthM: v.widthM ?? null,
+    draughtM: v.draughtM ?? null,
+    flag: v.flag ?? null,
+  };
 }
 
 interface VehicleArrivalPrediction {
@@ -101,6 +120,7 @@ async function fetchDetail(
     lineStatus: null,
     lineStatusReasons: [],
     vessel: null,
+    vesselPhotoUrl: null,
     rankLine: null,
   };
   const isBoat = train.lineId.startsWith('rb') || train.lineId === 'woolwich-ferry';
@@ -192,6 +212,13 @@ function popupHtml(d: DisplayedTrain, color: string, detail: VehicleDetail | nul
       `<div class="vp-vessel">⚓ <b>${esc(v.name)}</b>${speed}</div>` +
         `<div class="vp-dim">MMSI ${v.mmsi}</div>`,
     );
+    if (detail.vesselPhotoUrl) {
+      parts.push(`<img class="vp-photo" src="${esc(detail.vesselPhotoUrl)}" alt="">`);
+    }
+    const dims = dimensionsLine(v.lengthM, v.widthM, v.draughtM);
+    if (dims) parts.push(`<div class="vp-dim">${esc(dims)}</div>`);
+    const flag = flagLine(v.flag);
+    if (flag) parts.push(`<div class="vp-dim">${esc(flag)}</div>`);
   }
 
   if (detail?.lineStatus) {
@@ -271,10 +298,15 @@ export class VehiclePopup {
       this.detailRequestedFor = this.selectedKey;
       const forKey = this.selectedKey;
       void fetchDetail(d.train, d.lngLat).then((detail) => {
-        if (this.selectedKey === forKey) {
-          this.detail = detail;
-          this.lastContentAt = 0; // re-render with the enriched content
-        }
+        if (this.selectedKey !== forKey) return;
+        this.detail = detail;
+        this.lastContentAt = 0; // re-render with the enriched content
+        if (!detail.vessel) return;
+        void fetchShipPhoto(detail.vessel.mmsi).then((url) => {
+          if (!url || this.selectedKey !== forKey || this.detail !== detail) return;
+          this.detail = { ...detail, vesselPhotoUrl: url };
+          this.lastContentAt = 0; // re-render with the photo
+        });
       });
     }
     if (!this.popup.isOpen()) this.popup.addTo(this.map);

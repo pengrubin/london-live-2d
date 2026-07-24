@@ -11,6 +11,8 @@ import {
 import { metersBetween, type LngLat } from '../realtime/geometry';
 import { isLayerShown } from '../util/render-gate';
 import { appendRankLine } from '../ui/rank-line';
+import { dimensionsLine, fetchShipPhoto, flagLine } from '../ui/ship-info';
+import { injectPopupStyles } from '../ui/station-popup';
 
 export const VESSELS_LAYER_ID = 'vessels-icons';
 const SOURCE_ID = 'vessels';
@@ -30,6 +32,10 @@ interface Vessel {
   cog: number | null;
   shipType: number | null;
   destination: string | null;
+  lengthM: number | null;
+  widthM: number | null;
+  draughtM: number | null;
+  flag: string | null;
 }
 
 const esc = (s: string): string =>
@@ -99,7 +105,29 @@ function tflBoatPositions(map: MaplibreMap): LngLat[] {
   return out;
 }
 
+/**
+ * Lazily fetches the ship photo and, if one exists and the popup still shows
+ * the same vessel, prepends it to the card (same guard pattern as the rank
+ * line: tag the content root before the async fetch resolves).
+ */
+function prependShipPhoto(popup: Popup, mmsi: number): void {
+  const root = popup.getElement()?.querySelector<HTMLElement>('.vp');
+  if (!root) return;
+  root.dataset.photoFor = String(mmsi);
+  void fetchShipPhoto(mmsi).then((url) => {
+    if (!url) return;
+    const current = popup.getElement()?.querySelector<HTMLElement>('.vp');
+    if (!current || !current.isConnected || current.dataset.photoFor !== String(mmsi)) return;
+    const img = document.createElement('img');
+    img.className = 'vp-photo';
+    img.alt = '';
+    img.src = url;
+    current.prepend(img);
+  });
+}
+
 export async function startVessels(map: MaplibreMap): Promise<void> {
+  injectPopupStyles(); // .vp-photo lives in the shared injected style tag
   const classes = ['pass', 'cargo', 'tanker', 'fish', 'pleasure', 'special', 'other'];
   for (const key of classes) {
     const name = `ship-${key}`;
@@ -181,6 +209,10 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
             sog: v.sog ?? 0,
             cog: v.cog ?? 0,
             destination: v.destination ?? '',
+            lengthM: v.lengthM ?? 0,
+            widthM: v.widthM ?? 0,
+            draughtM: v.draughtM ?? 0,
+            flag: v.flag ?? '',
           },
           geometry: { type: 'Point' as const, coordinates: lngLat },
         };
@@ -216,16 +248,21 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
     if (!p) return;
     tip.remove();
     const dest = String(p.destination).trim();
+    const dims = dimensionsLine(Number(p.lengthM), Number(p.widthM), Number(p.draughtM));
+    const flag = flagLine(String(p.flag));
     detail
       .setLngLat(e.lngLat)
       .setHTML(
         `<div class="vp"><div class="sp-title">⚓ ${esc(String(p.name))}</div>
         <div>${esc(String(p.clsLabel))}</div>
+        ${dims ? `<div class="vp-dim">${esc(dims)}</div>` : ''}
+        ${flag ? `<div class="vp-dim">${esc(flag)}</div>` : ''}
         <div class="vp-dim">${Number(p.sog).toFixed(1)} kn · MMSI ${esc(String(p.mmsi))}</div>
         ${dest ? `<div class="vp-dim">Bound for ${esc(dest)}</div>` : ''}</div>`,
       )
       .addTo(map);
     appendRankLine(detail, 'ship', `ship:${String(p.mmsi)}`);
+    prependShipPhoto(detail, Number(p.mmsi));
   });
 
   await poll();

@@ -2,6 +2,8 @@
 // in-memory table of ships on the London Thames so the frontend can attach a
 // real vessel name to each TfL river-bus marker.
 
+import { flagFromMmsi } from './mid-flags';
+
 /** Thames through Greater London (two boxes: central river + estuary approach). */
 const THAMES_BOUNDING_BOXES = [
   [
@@ -27,7 +29,22 @@ export interface Vessel {
   shipType: number | null;
   /** declared destination port, from static data */
   destination: string | null;
+  /** overall length in metres (Dimension A+B), from static data */
+  lengthM: number | null;
+  /** beam in metres (Dimension C+D), from static data */
+  widthM: number | null;
+  /** maximum static draught in metres, from static data */
+  draughtM: number | null;
+  /** flag state derived from the MMSI's MID prefix; 'Unknown' when unmapped */
+  flag: string;
   lastSeen: number;
+}
+
+interface AisDimension {
+  A?: number;
+  B?: number;
+  C?: number;
+  D?: number;
 }
 
 interface AisMessage {
@@ -40,8 +57,19 @@ interface AisMessage {
   };
   Message?: {
     PositionReport?: { Sog?: number; Cog?: number };
-    ShipStaticData?: { Type?: number; Destination?: string };
+    ShipStaticData?: {
+      Type?: number;
+      Destination?: string;
+      Dimension?: AisDimension;
+      MaximumStaticDraught?: number;
+    };
   };
+}
+
+/** Sums a bow/stern (or port/starboard) dimension pair; null when unreported. */
+function dimensionSum(a: number | undefined, b: number | undefined): number | null {
+  const total = (a ?? 0) + (b ?? 0);
+  return total > 0 ? total : null;
 }
 
 export class AisClient {
@@ -114,6 +142,8 @@ export class AisClient {
       const report = msg.Message?.PositionReport;
       const staticData = msg.Message?.ShipStaticData;
       const prev = this.vessels.get(meta.MMSI);
+      const dim = staticData?.Dimension;
+      const draught = staticData?.MaximumStaticDraught;
       this.vessels.set(meta.MMSI, {
         mmsi: meta.MMSI,
         name: (meta.ShipName ?? '').trim() || (prev?.name ?? ''),
@@ -123,6 +153,10 @@ export class AisClient {
         cog: report?.Cog ?? prev?.cog ?? null,
         shipType: staticData?.Type ?? prev?.shipType ?? null,
         destination: staticData?.Destination?.trim() || (prev?.destination ?? null),
+        lengthM: dimensionSum(dim?.A, dim?.B) ?? prev?.lengthM ?? null,
+        widthM: dimensionSum(dim?.C, dim?.D) ?? prev?.widthM ?? null,
+        draughtM: draught !== undefined && draught > 0 ? draught : (prev?.draughtM ?? null),
+        flag: flagFromMmsi(meta.MMSI),
         lastSeen: Date.now(),
       });
     } catch {

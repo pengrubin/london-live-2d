@@ -38,6 +38,7 @@ import {
   registerTideGaugesRoute,
 } from './routes/external';
 import { registerBusRoutesRoute } from './routes/bus-routes';
+import { registerShipPhotoRoute } from './routes/ship-photo';
 
 /** Repo layout anchors — data/ and scripts/ sit beside backend/. */
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -155,6 +156,9 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   registerAircraftRoute(app, { config, cache: new TtlCache(AIRCRAFT_TTL_MS), budget: adsbBudget });
   registerCallsignRoute(app, { config, cache: new TtlCache(CALLSIGN_TTL_MS), budget: adsbdbBudget });
   registerJamCamsRoute(app, { config, cache: new TtlCache(JAMCAMS_TTL_MS), budget: tflBudget });
+
+  // Ship photos (VesselFinder scrape) — own budget + 24 h cache inside.
+  registerShipPhotoRoute(app);
 
   // Thames tide gauges — Environment Agency upstream, NOT TfL, so it gets its
   // own budget. EA publishes every 15 min; a 5-min cache keeps us polite.

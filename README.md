@@ -17,7 +17,7 @@ Greater-London scale. Author: **PENG**.
 | 🚆 National Rail (431 stations) | Darwin via Rail Data Marketplace | Inferred from departure boards + calling points, pathed over a baked station-to-station rail graph |
 | 🚌 Buses (~6,700 live) | DfT Bus Open Data (SIRI-VM) | Real GPS + per-vehicle α-β-style tracker; **self-learning route geometry** snaps buses to their true paths (auto-retrains daily from collected traces) |
 | ⛴ Riverboats (RB1/RB4/RB6/Woolwich Ferry) | TfL | Countdown inference along the OSM Thames centreline, with curved pier approaches |
-| ⚓ Ships | AIS (aisstream.io) | Real positions; typed icons (cargo/tanker/passenger/tug) |
+| ⚓ Ships | AIS (aisstream.io) | Real positions; typed icons (cargo/tanker/passenger/tug); detail cards show dimensions, flag and a photo — ship photographs courtesy of [VesselFinder](https://www.vesselfinder.com), fetched per-MMSI |
 | ✈️ Aircraft & helicopters | ADS-B (airplanes.live) | Real positions, dead-reckoned between polls; click for route lookup |
 | 📷 JamCams (878 traffic cameras) | TfL | Click for a live still, auto-refreshing |
 
