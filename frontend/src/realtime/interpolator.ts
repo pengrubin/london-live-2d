@@ -74,6 +74,12 @@ function freshState(t: Train, now: number): DisplayState {
 export class TrainInterpolator {
   private states = new Map<string, DisplayState>();
 
+  /** Displayed position of a currently tracked train by key, or null. */
+  findVehicle(key: string): LngLat | null {
+    const state = this.states.get(key);
+    return state ? state.lngLat : null;
+  }
+
   /** segmentKey per train key — feed back into inferTrains for branch hysteresis. */
   segmentAssignments(): Map<string, string> {
     const out = new Map<string, string>();

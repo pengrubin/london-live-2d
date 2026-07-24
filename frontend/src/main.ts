@@ -8,11 +8,12 @@ import { startTrains, type TrainsHandle } from './realtime/trains-controller';
 import { setupStationPopups } from './ui/station-popup';
 import { setupHoverTooltips } from './ui/hover-tooltip';
 import { addLegend } from './ui/legend';
+import { addLeaderboard } from './ui/leaderboard';
 import { startAircraft, AIRCRAFT_LAYER_ID } from './layers/aircraft';
-import { startVessels, VESSELS_LAYER_ID } from './layers/vessels';
+import { findVessel, startVessels, VESSELS_LAYER_ID } from './layers/vessels';
 import { addJamCams, JAMCAMS_LAYER_ID } from './layers/jamcams';
 import { startNrTrains, NR_TRAINS_LAYER_ID } from './realtime/nr-trains';
-import { startBuses, BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID } from './layers/buses';
+import { findBus, startBuses, BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID } from './layers/buses';
 import { startRoadDisruptions, ROAD_DISRUPTIONS_LAYER_IDS } from './layers/road-disruptions';
 import { startTideGauges, TIDE_GAUGES_LAYER_IDS } from './layers/tide-gauges';
 import { startRainRadar, RAIN_RADAR_LAYER_ID } from './layers/rain-radar';
@@ -100,6 +101,11 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       { label: 'Roadworks', layerIds: ROAD_DISRUPTIONS_LAYER_IDS },
       { label: 'Tide gauges', layerIds: TIDE_GAUGES_LAYER_IDS },
       { label: 'Rain radar', layerIds: [RAIN_RADAR_LAYER_ID], startOff: true },    ]);
+    addLeaderboard(target, trains.colorByLine, {
+      findTrain: trains.findVehicle,
+      findBus,
+      findVessel,
+    });
     window.__trains = trains;
     setupStationPopups(target, trains.colorByLine, trains.closeVehiclePopup);
     const nameByLine = new Map(manifestLines.map((line) => [line.id, line.name]));

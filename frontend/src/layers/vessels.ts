@@ -10,6 +10,7 @@ import {
 } from 'maplibre-gl';
 import { metersBetween, type LngLat } from '../realtime/geometry';
 import { isLayerShown } from '../util/render-gate';
+import { appendRankLine } from '../ui/rank-line';
 
 export const VESSELS_LAYER_ID = 'vessels-icons';
 const SOURCE_ID = 'vessels';
@@ -33,6 +34,15 @@ interface Vessel {
 
 const esc = (s: string): string =>
   s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
+
+/** Latest AIS poll result — kept for findVessel() lookups. */
+let liveVessels: readonly Vessel[] = [];
+
+/** Last reported [lng, lat] of a live AIS vessel by MMSI, or null. */
+export function findVessel(mmsi: number): [number, number] | null {
+  const vessel = liveVessels.find((v) => v.mmsi === mmsi);
+  return vessel ? [vessel.lon, vessel.lat] : null;
+}
 
 interface ShipClass {
   key: string;
@@ -129,6 +139,7 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
       const list = (await res.json()) as Vessel[];
       if (Array.isArray(list)) {
         vessels = list;
+        liveVessels = list;
         fetchedAt = Date.now();
       }
     } catch {
@@ -214,6 +225,7 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
         ${dest ? `<div class="vp-dim">Bound for ${esc(dest)}</div>` : ''}</div>`,
       )
       .addTo(map);
+    appendRankLine(detail, 'ship', `ship:${String(p.mmsi)}`);
   });
 
   await poll();

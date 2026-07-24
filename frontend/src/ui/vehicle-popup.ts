@@ -5,6 +5,7 @@
 import { Popup, type Map as MaplibreMap } from 'maplibre-gl';
 import type { DisplayedTrain } from '../realtime/interpolator';
 import { injectPopupStyles, truncate } from './station-popup';
+import { fetchRank, rankLineText } from './rank-line';
 
 const CONTENT_REFRESH_MS = 1000;
 const MAX_CALLING_STOPS = 5;
@@ -25,6 +26,8 @@ interface VehicleDetail {
   lineStatus: string | null; // non-null only when service is disrupted
   lineStatusReasons: string[]; // deduped human-readable disruption reasons
   vessel: MatchedVessel | null; // boats only: nearest live AIS ship
+  /** today's leaderboard standing line, e.g. "Top 3 / 681 · 6.4 km today" */
+  rankLine: string | null;
 }
 
 interface MatchedVessel {
@@ -98,16 +101,29 @@ async function fetchDetail(
     lineStatus: null,
     lineStatusReasons: [],
     vessel: null,
+    rankLine: null,
   };
   const isBoat = train.lineId.startsWith('rb') || train.lineId === 'woolwich-ferry';
+  // Leaderboard entry id: river boats rank as ships, everything else as trains.
+  const rankPromise = train.vehicleId
+    ? fetchRank(
+        isBoat ? 'ship' : 'train',
+        `${isBoat ? 'ship:tfl' : 'tube'}:${train.lineId}:${train.vehicleId}`,
+      )
+    : Promise.resolve(null);
 
-  const [vehicleRes, statusRes, vesselsRes] = await Promise.allSettled([
+  const [vehicleRes, statusRes, vesselsRes, rankRes] = await Promise.allSettled([
     train.vehicleId
       ? fetch(`/api/vehicle-arrivals?id=${encodeURIComponent(train.vehicleId)}`)
       : Promise.reject(new Error('no vehicleId')),
     fetch(`/api/line-status?lines=${encodeURIComponent(train.lineId)}`),
     isBoat ? fetch('/api/vessels') : Promise.reject(new Error('not a boat')),
+    rankPromise,
   ]);
+
+  if (rankRes.status === 'fulfilled' && rankRes.value) {
+    detail.rankLine = rankLineText(rankRes.value);
+  }
 
   if (vesselsRes.status === 'fulfilled' && vesselsRes.value.ok) {
     const vessels = (await vesselsRes.value.json()) as AisVessel[];
@@ -167,6 +183,7 @@ function popupHtml(d: DisplayedTrain, color: string, detail: VehicleDetail | nul
   if (t.vehicleId) meta.push(`${isBoat ? 'Vessel' : 'Train'} #${esc(t.vehicleId)}`);
   if (t.direction) meta.push(esc(t.direction));
   if (meta.length) parts.push(`<div class="vp-dim">${meta.join(' · ')}</div>`);
+  if (detail?.rankLine) parts.push(`<div class="vp-dim">${esc(detail.rankLine)}</div>`);
 
   if (detail?.vessel) {
     const v = detail.vessel;

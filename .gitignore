@@ -12,4 +12,6 @@ data/london.pmtiles
 data/bus-traces/
 data/osm-cache/
 data/bus-routes/
+data/leaderboard.json
+data/leaderboard.json.tmp
 node_modules/

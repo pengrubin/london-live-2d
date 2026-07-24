@@ -30,6 +30,7 @@ import {
   type MapLayerMouseEvent,
 } from 'maplibre-gl';
 import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
+import { appendRankLine } from '../ui/rank-line';
 
 export const BUSES_DOTS_LAYER_ID = 'buses-dots';
 export const BUSES_ICONS_LAYER_ID = 'buses-icons';
@@ -172,6 +173,19 @@ const esc = (s: string): string =>
 
 /** Must match the backend learner: route key → served file basename. */
 const sanitizeKey = (key: string): string => key.replace(/[^A-Za-z0-9_.-]/g, '_');
+
+/** Live tracker map of the running buses layer — set by startBuses. */
+let activeTrackers: ReadonlyMap<string, BusTracker> | null = null;
+
+/**
+ * Displayed [lng, lat] of a live bus by operator-qualified vehicle id
+ * ("OPERATOR:VehicleRef"), or null when it isn't currently tracked.
+ */
+export function findBus(id: string): [number, number] | null {
+  const tr = activeTrackers?.get(id);
+  if (!tr) return null;
+  return tr.snapped ? [tr.snapX, tr.snapY] : [tr.disp.x, tr.disp.y];
+}
 
 /** Sanitized keys with a learned route on the server; null until loaded. */
 let routeIndex: Set<string> | null = null;
@@ -340,6 +354,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
 
   /** Per-bus motion trackers, keyed by operator-qualified vehicle id. */
   const trackers = new Map<string, BusTracker>();
+  activeTrackers = trackers; // exposes findBus() lookups to the leaderboard
 
   function setSource(sourceId: string, features: GeoJSON.Feature[]): void {
     const src = map.getSource(sourceId);
@@ -663,6 +678,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
         <div class="vp-dim">Vehicle ${esc(vehicleRef)}</div></div>`,
       )
       .addTo(map);
+    appendRankLine(detail, 'bus', `bus:${id}`);
   });
 
   void loadRouteIndex(); // fire-and-forget: snapping activates when it lands

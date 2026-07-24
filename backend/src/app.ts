@@ -7,6 +7,12 @@ import { BodsClient } from './bods-client';
 import { TtlCache } from './cache';
 import type { AppConfig } from './config';
 import { ARRIVALS_CACHE_TTL_MS, TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS } from './constants';
+import {
+  LeaderboardTracker,
+  loadBranchData,
+  makeCachedArrivalsFetcher,
+  registerLeaderboardRoute,
+} from './leaderboard';
 import { LearnerScheduler } from './learner-scheduler';
 import { RateBudget } from './rate-budget';
 import { TraceWriter } from './trace-writer';
@@ -43,16 +49,19 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   await app.register(cors, { origin: config.corsOrigin });
 
   // Live vessel names (optional feature — needs an aisstream.io key in .env)
+  let aisClient: AisClient | null = null;
   if (config.aisApiKey) {
     const ais = new AisClient(config.aisApiKey, (msg) => app.log.info(msg));
     ais.start();
     app.addHook('onClose', () => ais.stop());
     app.get('/api/vessels', () => ais.list());
+    aisClient = ais;
   } else {
     app.get('/api/vessels', () => []);
   }
 
   // All-London live buses (optional feature — needs a BODS key in .env)
+  let bodsClient: BodsClient | null = null;
   if (config.bodsApiKey) {
     // Trace log + self-scheduled route learner ride along with the poller.
     const traces = new TraceWriter(join(DATA_DIR, 'bus-traces'), (msg) => app.log.info(msg));
@@ -71,6 +80,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
       learner.stop();
     });
     app.get('/api/buses', () => bods.list());
+    bodsClient = bods;
   } else {
     app.get('/api/buses', () => []);
   }
@@ -101,6 +111,31 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   registerCrowdingRoute(app, { config, cache: crowdingCache, budget: tflBudget });
   registerLiftDisruptionsRoute(app, { config, cache: liftDisruptionsCache, budget: tflBudget });
   registerBikePointsRoute(app, { config, cache: bikePointsCache, budget: tflBudget });
+
+  // ── vehicle distance leaderboard ──
+  // Tube positions come from the SAME arrivals cache + TfL budget as
+  // /api/arrivals (identical cache key), so the sampler piggybacks on frontend
+  // polling and never double-spends the budget.
+  const log = (msg: string): void => app.log.info(msg);
+  const branchData = loadBranchData(DATA_DIR, log);
+  const leaderboard = new LeaderboardTracker({
+    dataDir: DATA_DIR,
+    log,
+    getBuses: () => bodsClient?.list() ?? [],
+    getVessels: () => aisClient?.list() ?? [],
+    fetchTubePredictions: makeCachedArrivalsFetcher({
+      config,
+      cache: arrivalsCache,
+      budget: tflBudget,
+      lineIds: branchData.lineIds,
+      log,
+    }),
+    branchesByLine: branchData.branchesByLine,
+    lineNameById: branchData.lineNameById,
+  });
+  leaderboard.start();
+  app.addHook('onClose', () => leaderboard.stop());
+  registerLeaderboardRoute(app, leaderboard);
 
   // Non-TfL upstreams get their own budgets — they must never starve TfL calls.
   const AIRCRAFT_TTL_MS = 4_000; // planes are fast; keep the picture fresh

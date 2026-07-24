@@ -116,6 +116,8 @@ export interface TrainsHandle {
   closeVehiclePopup: () => void;
   /** key of the vehicle whose detail card is open, if any */
   selectedVehicleKey: () => string | null;
+  /** displayed [lng, lat] of a live train by key ("lineId:vehicleId"), or null */
+  findVehicle: (key: string) => [number, number] | null;
 }
 
 export async function startTrains(map: MaplibreMap): Promise<TrainsHandle> {
@@ -215,5 +217,6 @@ export async function startTrains(map: MaplibreMap): Promise<TrainsHandle> {
     colorByLine,
     closeVehiclePopup: () => vehiclePopup.close(),
     selectedVehicleKey: () => vehiclePopup.selected,
+    findVehicle: (key) => interpolator.findVehicle(key),
   };
 }
