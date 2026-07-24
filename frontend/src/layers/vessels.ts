@@ -22,6 +22,14 @@ const M_PER_DEG_LAT = 110540;
 const M_PER_DEG_LON = 111320 * Math.cos((51.5 * Math.PI) / 180);
 /** An AIS ship this close to a TfL boat marker IS that boat. */
 const TFL_DEDUPE_M = 200;
+/** Below this age a vessel is fully live: full size, full opacity. */
+const FRESH_MS = 30_000;
+/** Past this age a vessel is dropped from the map entirely. */
+const GONE_MS = 900_000; // 15 min
+/** Faded ships shrink to this fraction of full icon size … */
+const MIN_SCALE = 0.5;
+/** … and fade to this icon opacity, at the moment they are removed. */
+const MIN_OPACITY = 0.35;
 
 interface Vessel {
   mmsi: number;
@@ -43,13 +51,24 @@ interface Vessel {
 const esc = (s: string): string =>
   s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c);
 
-/** Latest AIS poll result — kept for findVessel() lookups. */
-let liveVessels: readonly Vessel[] = [];
+interface TrackedVessel {
+  vessel: Vessel;
+  /** epoch ms this vessel last appeared in an /api/vessels response */
+  lastListedAt: number;
+}
 
-/** Last reported [lng, lat] of a live AIS vessel by MMSI, or null. */
+/**
+ * Every vessel we've seen recently, keyed by MMSI. Updated on each poll and
+ * pruned once a vessel ages past GONE_MS. Vessels absent from the latest poll
+ * stay here (shown shrunk + faded) until they're pruned — kept for findVessel()
+ * so a just-gone-quiet leaderboard ship can still be located.
+ */
+const tracked = new Map<number, TrackedVessel>();
+
+/** Last reported [lng, lat] of a tracked AIS vessel by MMSI, or null. */
 export function findVessel(mmsi: number): [number, number] | null {
-  const vessel = liveVessels.find((v) => v.mmsi === mmsi);
-  return vessel ? [vessel.lon, vessel.lat] : null;
+  const t = tracked.get(mmsi);
+  return t ? [t.vessel.lon, t.vessel.lat] : null;
 }
 
 interface ShipClass {
@@ -149,27 +168,33 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
       source: SOURCE_ID,
       layout: {
         'icon-image': ['concat', 'ship-', ['get', 'cls']],
-        'icon-size': ['interpolate', ['linear'], ['zoom'], 10, 0.45, 14, 0.8],
+        // Zoom interpolate stays outermost (required for icon-size); the
+        // per-feature staleness shrink multiplies each stop's base size.
+        'icon-size': ['interpolate', ['linear'], ['zoom'],
+          10, ['*', 0.45, ['get', 'sizeScale']],
+          14, ['*', 0.8, ['get', 'sizeScale']]],
         'icon-rotate': ['get', 'cog'],
         'icon-rotation-alignment': 'map',
         'icon-allow-overlap': true,
         'icon-ignore-placement': true,
       },
+      paint: {
+        'icon-opacity': ['get', 'opacity'],
+      },
     },
     'trains-dots', // beneath TfL vehicles so bullets stay readable
   );
-
-  let vessels: Vessel[] = [];
 
   async function poll(): Promise<void> {
     try {
       const res = await fetch('/api/vessels');
       if (!res.ok) return;
       const list = (await res.json()) as Vessel[];
-      if (Array.isArray(list)) {
-        vessels = list;
-        liveVessels = list;
-      }
+      if (!Array.isArray(list)) return;
+      // Vessels present in this response are (re)freshened; absent ones keep
+      // their old lastListedAt and age toward the faded/gone thresholds.
+      const now = Date.now();
+      for (const v of list) tracked.set(v.mmsi, { vessel: v, lastListedAt: now });
     } catch {
       // keep the previous picture
     }
@@ -180,7 +205,7 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
     const schedule = (): void => {
       window.setTimeout(() => requestAnimationFrame(render), 500); // ships are slow
     };
-    if (!isLayerShown(map, VESSELS_LAYER_ID) || (vessels.length === 0 && lastWasEmpty)) {
+    if (!isLayerShown(map, VESSELS_LAYER_ID) || (tracked.size === 0 && lastWasEmpty)) {
       schedule();
       return;
     }
@@ -190,38 +215,56 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
     // extrapolation so stale fixes don't overshoot.
     const nowMs = Date.now();
     const boats = tflBoatPositions(map);
-    const features = vessels
-      .map((v) => {
+    const features = [];
+    for (const [mmsi, t] of tracked) {
+      const age = nowMs - t.lastListedAt;
+      if (age >= GONE_MS) {
+        tracked.delete(mmsi); // no longer live long enough — drop it
+        continue;
+      }
+      const v = t.vessel;
+      // Fresh vessels dead-reckon forward from their own fix; stale ones hold
+      // their last known position (no fresh course to extrapolate along).
+      let lngLat: LngLat;
+      if (age < FRESH_MS) {
         const speedMs = (v.sog ?? 0) * KN_TO_MS;
         const rad = ((v.cog ?? 0) * Math.PI) / 180;
         const dtS = Math.min(Math.max(0, (nowMs - v.lastSeen) / 1000), 120);
-        const lngLat: LngLat = [
+        lngLat = [
           v.lon + (speedMs * dtS * Math.sin(rad)) / M_PER_DEG_LON,
           v.lat + (speedMs * dtS * Math.cos(rad)) / M_PER_DEG_LAT,
         ];
-        return { v, lngLat };
-      })
-      .filter(({ lngLat }) => !boats.some((b) => metersBetween(b, lngLat) < TFL_DEDUPE_M))
-      .map(({ v, lngLat }) => {
-        const cls = classify(v.shipType);
-        return {
-          type: 'Feature' as const,
-          properties: {
-            mmsi: v.mmsi,
-            name: v.name || `MMSI ${v.mmsi}`,
-            cls: cls.key,
-            clsLabel: cls.label,
-            sog: v.sog ?? 0,
-            cog: v.cog ?? 0,
-            destination: v.destination ?? '',
-            lengthM: v.lengthM ?? 0,
-            widthM: v.widthM ?? 0,
-            draughtM: v.draughtM ?? 0,
-            flag: v.flag ?? '',
-          },
-          geometry: { type: 'Point' as const, coordinates: lngLat },
-        };
+      } else {
+        lngLat = [v.lon, v.lat];
+      }
+      // Suppress any vessel (fresh or stale) sitting on a live TfL river-bus
+      // marker so the same physical boat isn't drawn twice.
+      if (boats.some((b) => metersBetween(b, lngLat) < TFL_DEDUPE_M)) continue;
+      // Linearly shrink + fade across the FRESH_MS…GONE_MS window.
+      const fade = Math.min(Math.max(0, (age - FRESH_MS) / (GONE_MS - FRESH_MS)), 1);
+      const sizeScale = 1 - fade * (1 - MIN_SCALE);
+      const opacity = 1 - fade * (1 - MIN_OPACITY);
+      const cls = classify(v.shipType);
+      features.push({
+        type: 'Feature' as const,
+        properties: {
+          mmsi: v.mmsi,
+          name: v.name || `MMSI ${v.mmsi}`,
+          cls: cls.key,
+          clsLabel: cls.label,
+          sog: v.sog ?? 0,
+          cog: v.cog ?? 0,
+          destination: v.destination ?? '',
+          lengthM: v.lengthM ?? 0,
+          widthM: v.widthM ?? 0,
+          draughtM: v.draughtM ?? 0,
+          flag: v.flag ?? '',
+          sizeScale,
+          opacity,
+        },
+        geometry: { type: 'Point' as const, coordinates: lngLat },
       });
+    }
     const src = map.getSource(SOURCE_ID);
     if (src && 'setData' in src) {
       (src as GeoJSONSource).setData({ type: 'FeatureCollection', features });

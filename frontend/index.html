@@ -42,6 +42,20 @@
       .tip-chips .sp-chip { display: inline-block; margin-left: 3px; vertical-align: baseline; }
       .hover-tip .maplibregl-popup-content { pointer-events: none; padding: 7px 10px; }
 
+      /* ── one-off toast (geolocate notices) ── */
+      .map-toast {
+        position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%);
+        z-index: 6; max-width: min(360px, calc(100vw - 32px));
+        background: rgba(16, 18, 22, 0.95); border: 1px solid #333; border-radius: 6px;
+        padding: 9px 14px; color: #ddd; font: 12px/1.5 system-ui, sans-serif;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6); text-align: center;
+        pointer-events: none; animation: map-toast-in 0.18s ease-out;
+      }
+      @keyframes map-toast-in {
+        from { opacity: 0; transform: translate(-50%, 8px); }
+        to { opacity: 1; transform: translate(-50%, 0); }
+      }
+
       /* ── legend panel ── */
       .legend {
         position: absolute; right: 10px; top: 110px; z-index: 5;

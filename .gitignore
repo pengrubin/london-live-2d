@@ -15,3 +15,4 @@ data/bus-routes/
 data/leaderboard.json
 data/leaderboard.json.tmp
 node_modules/
+docs/COSTS.md

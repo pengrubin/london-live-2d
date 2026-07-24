@@ -76,12 +76,79 @@ const map = new maplibregl.Map({
   attributionControl: {
     compact: true,
     customAttribution:
-      '<a href="https://github.com/pengrubin" target="_blank"><b>© PENG</b></a>',
+      '<a href="https://github.com/pengrubin" target="_blank"><b>© PENG</b></a> · Location used only to move the map, not stored',
   },
 });
 
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+// User-initiated "locate me" control. Privacy-safe: the browser permission
+// prompt only fires on click, never on load, and the coordinates stay on the
+// client (maplibre never transmits them). Sits directly under the zoom +/-
+// buttons in the top-right stack.
+const geolocate = new maplibregl.GeolocateControl({
+  positionOptions: { enableHighAccuracy: true },
+  trackUserLocation: false,
+  showAccuracyCircle: true,
+  showUserLocation: true,
+  // Cap the fly-to zoom at ~14 (default is 15). maxBounds still clamps the
+  // camera so it can never pan outside Greater London.
+  fitBoundsOptions: { maxZoom: 14 },
+});
+map.addControl(geolocate, 'top-right');
+
+// True when [lon, lat] falls outside the Greater London bbox (maxBounds).
+function isOutsideLondon(lon: number, lat: number): boolean {
+  const [[west, south], [east, north]] = LONDON_BOUNDS;
+  return lon < west || lon > east || lat < south || lat > north;
+}
+
+function showOutsideLondonToast(): void {
+  showToast(
+    'You appear to be outside Greater London — showing the nearest edge. Your location is used only to move the map, not stored.',
+  );
+}
+
+// maplibre already clamps to maxBounds (== LONDON_BOUNDS): when the located
+// position lies outside, it emits `outofmaxbounds` (and does NOT fly), so the
+// nearest edge is shown. That event is the precise outside-bbox signal.
+geolocate.on('outofmaxbounds', (event) => {
+  if (isOutsideLondon(event.coords.longitude, event.coords.latitude)) {
+    showOutsideLondonToast();
+  }
+});
+
+// Belt-and-suspenders: if a successful geolocate ever reports coords beyond the
+// London bbox (e.g. maxBounds tweaked wider than LONDON_BOUNDS), still notify.
+geolocate.on('geolocate', (event) => {
+  if (isOutsideLondon(event.coords.longitude, event.coords.latitude)) {
+    showOutsideLondonToast();
+  }
+});
+
+geolocate.on('error', () => {
+  showToast('Location unavailable or permission denied.');
+});
+
 map.addControl(new maplibregl.ScaleControl(), 'bottom-left');
+
+const TOAST_DISMISS_MS = 4000;
+let activeToast: HTMLDivElement | null = null;
+
+// Lightweight one-off notice, absolutely positioned over the map and
+// auto-dismissed. Styling lives in index.html's <style> block (.map-toast).
+function showToast(message: string): void {
+  if (activeToast) activeToast.remove();
+  const toast = document.createElement('div');
+  toast.className = 'map-toast';
+  toast.textContent = message;
+  map.getContainer().append(toast);
+  activeToast = toast;
+  window.setTimeout(() => {
+    if (toast === activeToast) activeToast = null;
+    toast.remove();
+  }, TOAST_DISMISS_MS);
+}
 
 map.on('error', (e: maplibregl.ErrorEvent) => {
   console.error('[map]', e.error);
