@@ -8,6 +8,7 @@ import {
   type MapLayerMouseEvent,
 } from 'maplibre-gl';
 import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
+import { injectPopupStyles } from '../ui/station-popup';
 
 export const AIRCRAFT_LAYER_ID = 'aircraft-icons';
 const SOURCE_ID = 'aircraft';
@@ -106,6 +107,68 @@ function altitudeLabel(alt: number | 'ground' | undefined): string {
   return `${alt.toLocaleString()} ft`;
 }
 
+interface AircraftPhoto {
+  src: string;
+  photographer: string;
+  link: string;
+}
+
+/** Photo lookups by "reg|hex"; null = checked, no photo. Session-lifetime cache. */
+const photoByAircraft = new Map<string, Promise<AircraftPhoto | null>>();
+
+/** One backend request per airframe per session (the backend caches 24 h). */
+function fetchAircraftPhoto(reg: string, hex: string): Promise<AircraftPhoto | null> {
+  const key = `${reg}|${hex}`;
+  const cached = photoByAircraft.get(key);
+  if (cached) return cached;
+  const pending = (async (): Promise<AircraftPhoto | null> => {
+    try {
+      const params = new URLSearchParams();
+      if (reg) params.set('reg', reg);
+      if (hex) params.set('hex', hex);
+      const res = await fetch(`/api/aircraft-photo?${params.toString()}`);
+      if (!res.ok) return null;
+      const json = (await res.json()) as Partial<AircraftPhoto>;
+      if (!json.src) return null;
+      return { src: json.src, photographer: json.photographer ?? '', link: json.link ?? '' };
+    } catch {
+      return null;
+    }
+  })();
+  photoByAircraft.set(key, pending);
+  return pending;
+}
+
+/**
+ * Lazily fetches the airframe photo and, if one exists and the popup still
+ * shows the same aircraft, prepends it plus the photographer-attribution line
+ * (required by Planespotters) to the card. Same guard pattern as the vessel
+ * photo: tag the content root before the async fetch resolves.
+ */
+function prependAircraftPhoto(popup: Popup, reg: string, hex: string): void {
+  const root = popup.getElement()?.querySelector<HTMLElement>('.vp');
+  if (!root) return;
+  const tag = `${reg}|${hex}`;
+  root.dataset.photoFor = tag;
+  void fetchAircraftPhoto(reg, hex).then((photo) => {
+    if (!photo) return;
+    const current = popup.getElement()?.querySelector<HTMLElement>('.vp');
+    if (!current || !current.isConnected || current.dataset.photoFor !== tag) return;
+    const credit = document.createElement('a');
+    credit.className = 'vp-credit';
+    credit.href = photo.link;
+    credit.target = '_blank';
+    credit.rel = 'noopener noreferrer';
+    credit.textContent = `📷 ${photo.photographer || 'Planespotters.net'}`;
+    current.prepend(credit);
+    const img = document.createElement('img');
+    img.className = 'vp-photo';
+    img.alt = '';
+    img.src = photo.src;
+    current.prepend(img);
+  });
+}
+
 interface RouteInfo {
   origin: string;
   destination: string;
@@ -134,6 +197,7 @@ async function fetchRoute(callsign: string): Promise<RouteInfo | null> {
 }
 
 export async function startAircraft(map: MaplibreMap): Promise<void> {
+  injectPopupStyles(); // .vp-photo / .vp-credit live in the shared injected style tag
   if (!map.hasImage('ac-plane')) map.addImage('ac-plane', makePlaneIcon(), { pixelRatio: 2 });
   if (!map.hasImage('ac-heli')) map.addImage('ac-heli', makeHeliIcon(), { pixelRatio: 2 });
 
@@ -251,6 +315,7 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
       <div class="vp-dim">${esc(String(p.alt))} · ${Math.round(Number(p.gs))} kn · reg ${esc(String(p.reg || '—'))}</div>
       <div class="vp-dim" id="ac-route">Looking up route…</div></div>`;
     detail.setLngLat(e.lngLat).setHTML(body).addTo(map);
+    prependAircraftPhoto(detail, String(p.reg ?? '').trim(), String(p.hex ?? '').trim());
     const callsign = String(p.callsign).trim();
     if (callsign) {
       void fetchRoute(callsign).then((route) => {

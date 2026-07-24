@@ -7,6 +7,7 @@ import type { DisplayedTrain } from '../realtime/interpolator';
 import { injectPopupStyles, truncate } from './station-popup';
 import { fetchRank, rankLineText } from './rank-line';
 import { dimensionsLine, fetchShipPhoto, flagLine } from './ship-info';
+import { stockPhotoUrl } from './stock-photos';
 
 const CONTENT_REFRESH_MS = 1000;
 const MAX_CALLING_STOPS = 5;
@@ -190,7 +191,11 @@ async function fetchDetail(
 function popupHtml(d: DisplayedTrain, color: string, detail: VehicleDetail | null): string {
   const t = d.train;
   const isBoat = t.lineId.startsWith('rb') || t.lineId === 'woolwich-ferry';
+  // Trains get their line's bundled rolling-stock photo; boats keep the live
+  // VesselFinder photo flow further down.
+  const stockPhoto = isBoat ? null : stockPhotoUrl(t.lineId);
   const parts: string[] = [
+    ...(stockPhoto ? [`<img class="vp-photo" src="${esc(stockPhoto)}" alt="">`] : []),
     `<div class="vp-line" style="background:${esc(color)}">${esc(t.lineName)}</div>`,
     `<div class="vp-dest">→ ${esc(cleanName(t.destination))}</div>`,
     `<div>Next: <b>${esc(t.nextStopName)}</b> · ${countdownLabel(t.timeToStation, t.receivedAt)}</div>`,

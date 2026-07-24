@@ -49,6 +49,11 @@ export function injectPopupStyles(): void {
       display: block; width: 100%; max-width: 280px; border-radius: 6px;
       margin: 0 0 6px;
     }
+    .vp-credit {
+      display: block; color: #777; font-size: 10px; margin: -3px 0 6px;
+      text-decoration: none;
+    }
+    a.vp-credit:hover { color: #aab; text-decoration: underline; }
   `;
   document.head.appendChild(style);
 }

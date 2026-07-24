@@ -18,8 +18,12 @@ Greater-London scale. Author: **PENG**.
 | 🚌 Buses (~6,700 live) | DfT Bus Open Data (SIRI-VM) | Real GPS + per-vehicle α-β-style tracker; **self-learning route geometry** snaps buses to their true paths (auto-retrains daily from collected traces) |
 | ⛴ Riverboats (RB1/RB4/RB6/Woolwich Ferry) | TfL | Countdown inference along the OSM Thames centreline, with curved pier approaches |
 | ⚓ Ships | AIS (aisstream.io) | Real positions; typed icons (cargo/tanker/passenger/tug); detail cards show dimensions, flag and a photo — ship photographs courtesy of [VesselFinder](https://www.vesselfinder.com), fetched per-MMSI |
-| ✈️ Aircraft & helicopters | ADS-B (airplanes.live) | Real positions, dead-reckoned between polls; click for route lookup |
+| ✈️ Aircraft & helicopters | ADS-B (airplanes.live) | Real positions, dead-reckoned between polls; click for route lookup and an airframe photo via [Planespotters.net](https://www.planespotters.net) (with photographer attribution) |
 | 📷 JamCams (878 traffic cameras) | TfL | Click for a live still, auto-refreshing |
+
+Train detail cards also show a representative photo of the line's rolling stock,
+bundled from [Wikimedia Commons](https://commons.wikimedia.org) (CC-licensed —
+sources, licenses and authors in [docs/PHOTO_CREDITS.md](docs/PHOTO_CREDITS.md)).
 
 ![Click a train for its calling pattern, platform and delay status](docs/images/train-detail.png)
 
