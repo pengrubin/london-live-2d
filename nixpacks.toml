@@ -4,8 +4,8 @@ nixPkgs = ['nodejs_22']
 
 [phases.install]
 cmds = [
-  'cd frontend && npm ci --include=dev',
-  'cd backend && npm ci --include=dev',
+  'cd frontend && npm install --include=dev',
+  'cd backend && npm install --include=dev',
 ]
 
 [phases.build]
