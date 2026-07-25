@@ -12,7 +12,7 @@ import {
 import { pointAtFraction, polylineLength, type LngLat } from './geometry';
 import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
 import { appendRankLine } from '../ui/rank-line';
-import { enablePopupDragToPan } from '../ui/popup-drag';
+import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
 
 export const NR_TRAINS_LAYER_ID = 'nr-trains-dots';
 const SOURCE_ID = 'nr-trains';
@@ -424,8 +424,12 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
     // Keep an open detail popup glued to its train. findNrTrain returns null
     // once the train leaves coverage — leave the popup at its last position.
     if (selectedRid && detail.isOpen()) {
-      const pos = findNrTrain(selectedRid);
-      if (pos) detail.setLngLat(pos);
+      const el = detail.getElement();
+      // Freeze following while the user is selecting/copying text in the card.
+      if (!el || !isPopupTextInteracting(el)) {
+        const pos = findNrTrain(selectedRid);
+        if (pos) detail.setLngLat(pos);
+      }
     }
     requestAnimationFrame(render);
   }

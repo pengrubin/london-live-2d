@@ -9,7 +9,7 @@ import {
 } from 'maplibre-gl';
 import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
 import { injectPopupStyles } from '../ui/station-popup';
-import { enablePopupDragToPan } from '../ui/popup-drag';
+import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
 
 export const AIRCRAFT_LAYER_ID = 'aircraft-icons';
 const SOURCE_ID = 'aircraft';
@@ -292,8 +292,12 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
     // Keep an open detail popup glued to its aircraft. When the hex drops out of
     // the fleet the lookup misses — leave the popup at its last position.
     if (selectedHex && detail.isOpen()) {
-      const pos = posByHex.get(selectedHex);
-      if (pos) detail.setLngLat(pos);
+      const el = detail.getElement();
+      // Freeze following while the user is selecting/copying text in the card.
+      if (!el || !isPopupTextInteracting(el)) {
+        const pos = posByHex.get(selectedHex);
+        if (pos) detail.setLngLat(pos);
+      }
     }
     requestAnimationFrame(render);
   }

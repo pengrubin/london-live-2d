@@ -5,7 +5,7 @@
 import { Popup, type Map as MaplibreMap } from 'maplibre-gl';
 import type { DisplayedTrain } from '../realtime/interpolator';
 import { injectPopupStyles, truncate } from './station-popup';
-import { enablePopupDragToPan } from './popup-drag';
+import { enablePopupDragToPan, isPopupTextInteracting } from './popup-drag';
 import { fetchRank, rankLineText } from './rank-line';
 import { dimensionsLine, fetchShipPhoto, flagLine } from './ship-info';
 import { stockPhotoUrl } from './stock-photos';
@@ -317,6 +317,11 @@ export class VehiclePopup {
       });
     }
     if (!this.popup.isOpen()) this.popup.addTo(this.map);
+    // Freeze both the follow reposition AND the periodic content refresh while
+    // the user is selecting/copying text — the setHTML is the bigger selection
+    // killer here. Next unfrozen frame snaps back to the vehicle (resume).
+    const el = this.popup.getElement();
+    if (el && isPopupTextInteracting(el)) return;
     this.popup.setLngLat(d.lngLat);
     const now = Date.now();
     if (now - this.lastContentAt >= CONTENT_REFRESH_MS) {

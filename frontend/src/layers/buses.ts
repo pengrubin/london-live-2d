@@ -31,7 +31,7 @@ import {
 } from 'maplibre-gl';
 import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
 import { appendRankLine } from '../ui/rank-line';
-import { enablePopupDragToPan } from '../ui/popup-drag';
+import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
 
 export const BUSES_DOTS_LAYER_ID = 'buses-dots';
 export const BUSES_ICONS_LAYER_ID = 'buses-icons';
@@ -643,8 +643,12 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
     // Keep an open detail popup glued to its bus as it drives. findBus returns
     // null once the bus leaves tracking — leave the popup at its last spot then.
     if (selectedBusId && detail.isOpen()) {
-      const pos = findBus(selectedBusId);
-      if (pos) detail.setLngLat(pos);
+      const el = detail.getElement();
+      // Freeze following while the user is selecting/copying text in the card.
+      if (!el || !isPopupTextInteracting(el)) {
+        const pos = findBus(selectedBusId);
+        if (pos) detail.setLngLat(pos);
+      }
     }
     requestAnimationFrame(renderIcons);
   }

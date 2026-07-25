@@ -13,7 +13,7 @@ import { isLayerShown } from '../util/render-gate';
 import { appendRankLine } from '../ui/rank-line';
 import { dimensionsLine, fetchShipPhoto, flagLine } from '../ui/ship-info';
 import { injectPopupStyles } from '../ui/station-popup';
-import { enablePopupDragToPan } from '../ui/popup-drag';
+import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
 
 export const VESSELS_LAYER_ID = 'vessels-icons';
 const SOURCE_ID = 'vessels';
@@ -274,8 +274,12 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
     // Glue an open detail popup to its vessel. A faded/stale ship still resolves
     // via findVessel, so the popup keeps following its last-known marker.
     if (selectedMmsi !== null && detail.isOpen()) {
-      const pos = findVessel(selectedMmsi);
-      if (pos) detail.setLngLat(pos);
+      const el = detail.getElement();
+      // Freeze following while the user is selecting/copying text in the card.
+      if (!el || !isPopupTextInteracting(el)) {
+        const pos = findVessel(selectedMmsi);
+        if (pos) detail.setLngLat(pos);
+      }
     }
     schedule();
   }

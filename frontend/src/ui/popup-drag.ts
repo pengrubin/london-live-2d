@@ -34,6 +34,22 @@ export function enablePopupDragToPan(map: MaplibreMap, popup: Popup): void {
   });
 }
 
+/**
+ * True while the user is actively selecting/copying text inside `el`, so a
+ * follow-popup should FREEZE (skip its per-frame setLngLat / setHTML) rather
+ * than yank the DOM out from under the browser's selection. Two signals:
+ *   (a) the drag helper's long-press flag (`dataset.selecting`), which covers
+ *       the brief gap before the OS actually materialises a selection, and
+ *   (b) a live, non-collapsed selection anchored inside `el` — platform
+ *       agnostic, so it also freezes desktop click-drag selection for free.
+ * Returns false once the selection clears, letting the popup resume following.
+ */
+export function isPopupTextInteracting(el: HTMLElement): boolean {
+  if (el.dataset.selecting === '1') return true;
+  const s = window.getSelection();
+  return !!s && !s.isCollapsed && !!s.anchorNode && el.contains(s.anchorNode);
+}
+
 function attachDragToPan(map: MaplibreMap, el: HTMLElement): void {
   let mode: DragMode = 'undecided';
   let startX = 0;
@@ -52,6 +68,9 @@ function attachDragToPan(map: MaplibreMap, el: HTMLElement): void {
   const reset = (): void => {
     mode = 'undecided';
     clearTimer();
+    // Selection nascent-gap flag is cleared on touch release; from here the
+    // live-selection branch of isPopupTextInteracting takes over.
+    delete el.dataset.selecting;
   };
 
   const onTouchStart = (e: TouchEvent): void => {
@@ -70,7 +89,12 @@ function attachDragToPan(map: MaplibreMap, el: HTMLElement): void {
     clearTimer();
     timer = window.setTimeout(() => {
       // Finger held roughly stationary → yield to native text selection.
-      if (mode === 'undecided') mode = 'select';
+      if (mode === 'undecided') {
+        mode = 'select';
+        // Freeze the follow-popup through the ~100 ms gap before the OS
+        // materialises the selection (then branch 1b takes over).
+        el.dataset.selecting = '1';
+      }
       timer = null;
     }, LONG_PRESS_MS);
   };
