@@ -12,6 +12,7 @@ import {
 import { pointAtFraction, polylineLength, type LngLat } from './geometry';
 import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
 import { appendRankLine } from '../ui/rank-line';
+import { enablePopupDragToPan } from '../ui/popup-drag';
 
 export const NR_TRAINS_LAYER_ID = 'nr-trains-dots';
 const SOURCE_ID = 'nr-trains';
@@ -447,6 +448,7 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
     tip.remove();
   });
   const detail = new Popup({ closeButton: true, closeOnClick: true, offset: 14, maxWidth: '300px' });
+  enablePopupDragToPan(map, detail);
   // The currently-selected train (by rid), followed by the detail popup.
   let selectedRid: string | null = null;
   detail.on('close', () => {

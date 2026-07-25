@@ -18,6 +18,11 @@
         padding: 10px 12px;
         font: 12px/1.5 system-ui, sans-serif;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+        /* Allow selecting/copying card text on mobile (MapLibre defaults some
+           of these off); long-press then yields the native selection menu. */
+        user-select: text;
+        -webkit-user-select: text;
+        -webkit-touch-callout: default;
       }
       .maplibregl-popup .maplibregl-popup-tip { border-top-color: #333 !important; border-bottom-color: #333 !important; }
       .maplibregl-popup .maplibregl-popup-close-button { color: #888; font-size: 16px; right: 4px; top: 2px; }
@@ -140,6 +145,14 @@
         /* keep the top-right legend clear of the geolocate control on phones too */
         .legend { top: 150px; }
         .leaderboard { top: 10px; }
+        /* Popups are NOT internally scrolled on mobile: with drag-to-pan the
+           whole card is reachable by panning the map. Let them size to content
+           (no max-height/overflow-y clip); keep a generous width for reading. */
+        .maplibregl-popup .maplibregl-popup-content {
+          max-height: none;
+          overflow: visible;
+          max-width: 80vw;
+        }
       }
     </style>
   </head>

@@ -4,6 +4,7 @@
 // docks once those slower lookups resolve.
 
 import { Popup, type LngLat, type Map as MaplibreMap, type MapLayerMouseEvent } from 'maplibre-gl';
+import { enablePopupDragToPan } from './popup-drag';
 
 const STATIONS_LAYER_ID = 'stations-circle';
 const MAX_DEPARTURES = 8;
@@ -271,6 +272,7 @@ export function setupStationPopups(
 ): void {
   injectPopupStyles();
   const popup = new Popup({ closeButton: true, closeOnClick: true, offset: 10, maxWidth: '300px' });
+  enablePopupDragToPan(map, popup);
   let clickSeq = 0;
 
   map.on('click', STATIONS_LAYER_ID, (e: MapLayerMouseEvent) => {

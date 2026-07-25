@@ -13,6 +13,7 @@ import { isLayerShown } from '../util/render-gate';
 import { appendRankLine } from '../ui/rank-line';
 import { dimensionsLine, fetchShipPhoto, flagLine } from '../ui/ship-info';
 import { injectPopupStyles } from '../ui/station-popup';
+import { enablePopupDragToPan } from '../ui/popup-drag';
 
 export const VESSELS_LAYER_ID = 'vessels-icons';
 const SOURCE_ID = 'vessels';
@@ -297,6 +298,7 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
   });
 
   const detail = new Popup({ closeButton: true, closeOnClick: true, offset: 14, maxWidth: '280px' });
+  enablePopupDragToPan(map, detail);
   // The currently-selected vessel (by MMSI), followed by the detail popup.
   let selectedMmsi: number | null = null;
   detail.on('close', () => {

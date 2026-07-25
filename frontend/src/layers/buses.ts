@@ -31,6 +31,7 @@ import {
 } from 'maplibre-gl';
 import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
 import { appendRankLine } from '../ui/rank-line';
+import { enablePopupDragToPan } from '../ui/popup-drag';
 
 export const BUSES_DOTS_LAYER_ID = 'buses-dots';
 export const BUSES_ICONS_LAYER_ID = 'buses-icons';
@@ -668,6 +669,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
   });
 
   const detail = new Popup({ closeButton: true, closeOnClick: true, offset: 14, maxWidth: '280px' });
+  enablePopupDragToPan(map, detail);
   // The currently-selected bus, followed by the detail popup each frame.
   let selectedBusId: string | null = null;
   detail.on('close', () => {

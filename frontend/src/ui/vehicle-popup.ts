@@ -5,6 +5,7 @@
 import { Popup, type Map as MaplibreMap } from 'maplibre-gl';
 import type { DisplayedTrain } from '../realtime/interpolator';
 import { injectPopupStyles, truncate } from './station-popup';
+import { enablePopupDragToPan } from './popup-drag';
 import { fetchRank, rankLineText } from './rank-line';
 import { dimensionsLine, fetchShipPhoto, flagLine } from './ship-info';
 import { stockPhotoUrl } from './stock-photos';
@@ -287,6 +288,7 @@ export class VehiclePopup {
       this.popup.on('close', () => {
         this.selectedKey = null;
       });
+      enablePopupDragToPan(this.map, this.popup);
     }
   }
 

@@ -9,6 +9,7 @@ import {
 } from 'maplibre-gl';
 import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
 import { injectPopupStyles } from '../ui/station-popup';
+import { enablePopupDragToPan } from '../ui/popup-drag';
 
 export const AIRCRAFT_LAYER_ID = 'aircraft-icons';
 const SOURCE_ID = 'aircraft';
@@ -316,6 +317,7 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
   });
 
   const detail = new Popup({ closeButton: true, closeOnClick: true, offset: 14, maxWidth: '300px' });
+  enablePopupDragToPan(map, detail);
   // The currently-selected aircraft (by hex), followed by the detail popup.
   let selectedHex: string | null = null;
   detail.on('close', () => {
