@@ -33,6 +33,70 @@ const SIDINGS = /sidings?\b/i;
 /** currentLocation prefixes proving the train has left its previous stop. */
 const DEPARTED = /^(between|left) /i;
 const DEPARTED_MARGIN_S = 20;
+/**
+ * Near-platform clamp for the ARRIVING arm. When currentLocation says the train
+ * is "Approaching <its own next stop>", TfL's timeToStation is often laggy-high
+ * (the Metropolitan-line failure: tts freezes ~45-60s stale while the train is
+ * already at/near the platform). Place the dot at least this far along the
+ * approach so it tracks reality; never move it BACKWARD (max, not set).
+ */
+const APPROACHING_FRAC = 0.85;
+
+/**
+ * Tolerant station-name equality for matching TfL's currentLocation string
+ * against a branch stop name. Normalizes real-world spelling variants so that
+ * "At King's Cross St. Pancras Platform 3" matches the baked "King's Cross
+ * St. Pancras", and "Approaching Harrow-on-the-Hill" matches "Harrow-on-the-Hill":
+ *   • lowercase; apostrophes dropped (King's → kings)
+ *   • "St." / "St", hyphens, underscores flattened to spaces (so St. == St)
+ *   • trailing "Underground/DLR/Rail Station" and "Platform N" adornments removed
+ *   • any remaining punctuation → space; whitespace collapsed
+ */
+function normStation(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/\s+(underground|dlr|rail)?\s*station\b.*$/g, ' ')
+    .replace(/\s+platform\b.*$/g, ' ')
+    .replace(/['`‘’]/g, '')
+    .replace(/[.\-_/]/g, ' ')
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const APPROACHING_RE = /^\s*approaching\s+(.+)$/i;
+const AT_RE = /^\s*at\s+(.+)$/i;
+
+/** currentLocation → the station it names, and whether the train is AT vs APPROACHING it. */
+function locationTarget(
+  currentLocation: string | undefined,
+): { kind: 'at' | 'approaching'; name: string } | null {
+  if (!currentLocation) return null;
+  const app = APPROACHING_RE.exec(currentLocation);
+  if (app) return { kind: 'approaching', name: normStation(app[1]!) };
+  const at = AT_RE.exec(currentLocation);
+  if (at) return { kind: 'at', name: normStation(at[1]!) };
+  return null;
+}
+
+/**
+ * Which currentLocation arm (if any) applies to a train's OWN next stop.
+ *
+ * CRITICAL guard: the arms may act ONLY when the named station equals the
+ * train's next stop (the naptan/stationName the prediction is for). "At Aldgate
+ * Platform" while the next stop is Liverpool Street — or "At Fulham Broadway"
+ * while next is Parsons Green — is a terminus/interchange dwell of a different
+ * listing; snapping on it caused the false jumps seen in diagnosis. A bare
+ * "At Platform" (no station named) normalizes to "platform" and matches nothing.
+ */
+function currentLocationArm(
+  currentLocation: string | undefined,
+  nextStopName: string,
+): 'at' | 'approaching' | null {
+  const target = locationTarget(currentLocation);
+  if (!target || !target.name) return null;
+  return target.name === normStation(nextStopName) ? target.kind : null;
+}
 
 /** Lines sharing physical rolling stock: a vehicleId is one train group-wide. */
 const STOCK_GROUP = new Map<string, string>([
@@ -190,7 +254,11 @@ function positionOnBranch(cand: Candidate, p: Prediction): Train | undefined {
     destinationId: p.destinationNaptanId,
     synthetic: false,
   };
-  if (stopIndex === 0 || p.timeToStation <= AT_PLATFORM_S) {
+  // currentLocation is measured ~25-30s more truthful than tts exactly when tts
+  // is worst. "At <this next stop> Platform" ⇒ treat as arrived even if the
+  // countdown is still laggy-high (Option 2's 'At X' arm).
+  const arm = currentLocationArm(p.currentLocation, nextStop.name);
+  if (stopIndex === 0 || p.timeToStation <= AT_PLATFORM_S || arm === 'at') {
     // Dwelling trains still face along the track: use the bearing at the end of
     // the approach segment (or the start of the departure segment at a terminus).
     const hasApproach = stopIndex > 0;
@@ -219,7 +287,11 @@ function positionOnBranch(cand: Candidate, p: Prediction): Train | undefined {
   if (DEPARTED.test(p.currentLocation ?? '') && p.timeToStation + DEPARTED_MARGIN_S > runTime) {
     runTime = p.timeToStation + DEPARTED_MARGIN_S;
   }
-  const frac = 1 - Math.min(1, p.timeToStation / runTime);
+  let frac = 1 - Math.min(1, p.timeToStation / runTime);
+  // "Approaching <this next stop>": place near the platform despite a laggy-high
+  // countdown. Forward-only (max) keeps it monotonic so it composes with the
+  // interpolator and never drags a well-positioned dot backward.
+  if (arm === 'approaching') frac = Math.max(frac, APPROACHING_FRAC);
   const pt = pointAtFraction(segment, frac);
   return {
     ...base,
@@ -335,9 +407,14 @@ export function inferTrains(
     // the SUCCESSOR stop's countdown instead: while genuinely dwelling that
     // countdown exceeds the scheduled run time (ratio clamps to the stop), and
     // the moment it drops below, the train pulls away — stale dues can't hold it.
+    // "At <next stop> Platform" fires the handoff even when tts is laggy-high
+    // (Option 2's 'At X' arm): currentLocation is the more truthful signal here.
+    const atNextStop =
+      p.timeToStation <= AT_PLATFORM_S ||
+      currentLocationArm(p.currentLocation, cand.branch.stops[cand.stopIndex]!.name) === 'at';
     let placePred = p;
     let placeCand = cand;
-    if (p.timeToStation <= AT_PLATFORM_S && cand.stopIndex < cand.branch.stops.length - 1) {
+    if (atNextStop && cand.stopIndex < cand.branch.stops.length - 1) {
       const successorId = cand.branch.stops[cand.stopIndex + 1]!.id;
       const successor = byKeyStop.get(key)?.get(successorId);
       if (successor) {

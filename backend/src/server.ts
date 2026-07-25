@@ -12,6 +12,20 @@ async function main(): Promise<void> {
 
   await app.listen({ port: config.port, host: '0.0.0.0' });
 
+  // Graceful shutdown: Railway sends SIGTERM on every redeploy. Without this,
+  // the process is killed mid-flight and npm reports the signal as a non-zero
+  // "error", which Railway surfaces as a crash alert. Closing cleanly and
+  // exiting 0 makes redeploys look like the routine stops they are.
+  const shutdown = (signal: string): void => {
+    app.log.info({ signal }, 'shutting down');
+    void app.close().then(
+      () => process.exit(0),
+      () => process.exit(0),
+    );
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
+
   // Structured startup summary — never log TFL_APP_KEY.
   app.log.info(
     {

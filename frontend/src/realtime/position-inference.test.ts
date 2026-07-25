@@ -35,6 +35,16 @@ function straightLine(lineId: string): LineBranches {
 const branchesFor = (...lineIds: string[]): Map<string, LineBranches> =>
   new Map(lineIds.map((id) => [id, straightLine(id)]));
 
+// Same geometry as straightLine, but the middle stop carries a real-world name
+// with punctuation (apostrophe / "St." / hyphen) to exercise name normalization.
+function namedMiddleLine(lineId: string, bName: string): Map<string, LineBranches> {
+  const line = straightLine(lineId);
+  for (const br of line.branches) {
+    for (const s of br.stops) if (s.id === 'B') (s as { name: string }).name = bName;
+  }
+  return new Map([[lineId, line]]);
+}
+
 const pred = (over: Partial<Prediction>): Prediction => ({
   lineId: 'victoria',
   naptanId: 'B',
@@ -125,6 +135,88 @@ describe('at-platform handoff (stale "due" cannot pin a departed train)', () => 
       branchesFor('victoria'),
     );
     expect(t.lngLat).toEqual([STOP_C.lon, STOP_C.lat]);
+  });
+});
+
+describe('currentLocation ARRIVING/AT compensation (Metropolitan lag fix)', () => {
+  // (a) "Approaching <next stop>" with a laggy-high countdown: the raw ratio
+  // (1km ≈ 83s run, 70s out → ~0.16) would strand it near the previous stop.
+  test('"Approaching <nextStop>" with laggy-high tts is advanced to >= 0.85', () => {
+    const [t] = inferTrains(
+      [pred({ vehicleId: '11', naptanId: 'B', timeToStation: 70, direction: 'outbound', currentLocation: 'Approaching Beta' })],
+      branchesFor('victoria'),
+    );
+    expect(t.nextStopId).toBe('B');
+    expect(t.segmentFrac).toBeGreaterThanOrEqual(0.85); // advanced near the platform
+    expect(t.lngLat[0]).toBeGreaterThanOrEqual(STOP_A.lon + 0.85 * (STOP_B.lon - STOP_A.lon));
+    expect(t.lngLat[0]).toBeLessThanOrEqual(STOP_B.lon);
+  });
+
+  // (b) "At <next stop> Platform" with tts still high: today (tts 40 > 15) it
+  // would sit mid-segment (~0.52); the 'At X' arm places it AT the station.
+  test('"At <nextStop> Platform" with tts=40 is placed AT the station (frac=1)', () => {
+    const [t] = inferTrains(
+      [pred({ vehicleId: '12', naptanId: 'B', timeToStation: 40, direction: 'outbound', currentLocation: 'At Beta Platform' })],
+      branchesFor('victoria'),
+    );
+    expect(t.nextStopId).toBe('B');
+    expect(t.segmentFrac).toBe(1);
+    expect(t.lngLat).toEqual([STOP_B.lon, STOP_B.lat]);
+  });
+
+  // (b′) with a successor prediction, "At <nextStop>" fires the handoff even
+  // above AT_PLATFORM_S: the train pulls away toward C on C's countdown.
+  test('"At <nextStop> Platform" above AT_PLATFORM_S fires the successor handoff', () => {
+    const [t] = inferTrains(
+      [
+        pred({ vehicleId: '13', naptanId: 'B', timeToStation: 40, direction: 'outbound', currentLocation: 'At Beta Platform' }),
+        pred({ vehicleId: '13', naptanId: 'C', timeToStation: 45, direction: 'outbound', currentLocation: 'At Beta Platform' }),
+      ],
+      branchesFor('victoria'),
+    );
+    expect(t.nextStopId).toBe('C'); // handed off to the successor stop
+    expect(t.lngLat[0]).toBeGreaterThan(STOP_B.lon);
+    expect(t.lngLat[0]).toBeLessThan(STOP_C.lon);
+  });
+
+  // (c) false-positive guard: the named station is NOT the next stop → no snap.
+  test('"At <otherStation> Platform" (not the next stop) does NOT snap the train', () => {
+    const [t] = inferTrains(
+      // next stop is Beta, but the string names Gamma (a real stop, not next)
+      [pred({ vehicleId: '14', naptanId: 'B', timeToStation: 40, direction: 'outbound', currentLocation: 'At Gamma Platform' })],
+      branchesFor('victoria'),
+    );
+    expect(t.nextStopId).toBe('B');
+    expect(t.segmentFrac).toBeLessThan(0.85); // left where the countdown puts it
+    expect(t.lngLat[0]).toBeGreaterThan(STOP_A.lon);
+    expect(t.lngLat[0]).toBeLessThan(STOP_B.lon);
+  });
+
+  // (d) name normalization: apostrophe / "St." / hyphen variants still match.
+  test('normalized name variants match ("Kings Cross St Pancras", hyphen forms)', () => {
+    const apos = inferTrains(
+      [pred({ lineId: 'metropolitan', vehicleId: '15', naptanId: 'B', timeToStation: 40, direction: 'outbound', currentLocation: 'At Kings Cross St Pancras Platform 3' })],
+      namedMiddleLine('metropolitan', "King's Cross St. Pancras"),
+    )[0];
+    expect(apos.segmentFrac).toBe(1); // matched despite apostrophe + "St." variance
+
+    const hyphen = inferTrains(
+      [pred({ lineId: 'metropolitan', vehicleId: '16', naptanId: 'B', timeToStation: 70, direction: 'outbound', currentLocation: 'Approaching Harrow-on-the-Hill' })],
+      namedMiddleLine('metropolitan', 'Harrow-on-the-Hill'),
+    )[0];
+    expect(hyphen.segmentFrac).toBeGreaterThanOrEqual(0.85);
+  });
+
+  // (e) a normal, well-calibrated case is unaffected: currentLocation matches
+  // neither arm ("Between …"), so positioning is the plain ratio as before.
+  test('an accurate-line train with a non-matching currentLocation is unchanged', () => {
+    const withArm = inferTrains(
+      [pred({ lineId: 'district', vehicleId: '17', naptanId: 'B', timeToStation: 40, direction: 'outbound', currentLocation: 'Between Alpha and Beta' })],
+      branchesFor('district'),
+    )[0];
+    // 1km ≈ 83s run, 40s out → ~0.52 along; not clamped, not snapped
+    expect(withArm.segmentFrac).toBeGreaterThan(0.4);
+    expect(withArm.segmentFrac).toBeLessThan(0.6);
   });
 });
 
