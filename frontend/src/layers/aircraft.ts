@@ -37,6 +37,144 @@ const esc = (s: string): string =>
 
 const isHelicopter = (a: Aircraft): boolean => a.category === 'A7';
 
+// ── Emergency-helicopter classification ──────────────────────────────────────
+// London POLICE (NPAS / Met Police Air Support) and AIR-AMBULANCE (HEMS)
+// helicopters, so they can be rendered distinctly among the live ADS-B fleet.
+//
+// Registrations and callsign conventions verified July 2026 against operator
+// sites and aircraft databases (londonsairambulance.org.uk, aakss.org.uk,
+// helis.com/database/sqd/NPAS). Fleets change, so the exact-reg allow-list is
+// backed by reg-prefix rules (whole G-POL/G-MPS/G-NPA/G-LAA/G-KSS blocks are
+// single-operator) and by callsign-prefix fallbacks. Everything is conservative:
+// only unambiguous matches classify; anything else stays a normal helicopter.
+export type EmergencyKind = 'police' | 'air-ambulance';
+
+// Exact marks of police helicopters that work the Greater-London area.
+const POLICE_REGS = new Set<string>([
+  'G-MPSA', 'G-MPSB', 'G-MPSC', // Metropolitan Police Service H145s (North Weald) — cover London directly
+  'G-NPAS', 'G-NPAA', 'G-NPAB', 'G-NPAC', // NPAS new-build H135s (2025 fleet-renewal programme)
+  'G-POLA', 'G-POLD', 'G-POLF', 'G-POLH', 'G-POLU', // police-marked EC135s
+  'G-CPAO', 'G-CPAS', 'G-LASU', // ex-London Air Support Unit / NPAS EC135s
+]);
+// Whole reg blocks that are exclusively police — future-proofs new deliveries
+// (a future G-POLx / G-MPSx / G-NPAx airframe is caught without a code change).
+const POLICE_REG_PREFIXES = ['G-POL', 'G-MPS', 'G-NPA'];
+
+// Exact marks of air-ambulance helicopters that routinely fly within the 30 nm
+// London ADS-B radius (some are based just outside Greater London but respond in).
+const AMBULANCE_REGS = new Set<string>([
+  'G-LAAA', 'G-LAAB', // London's Air Ambulance H135s "Amy"/"Beth" (in service 1 Oct 2024)
+  'G-KSST', 'G-KSSC', 'G-LNAC', // Air Ambulance Kent Surrey Sussex AW169s (Redhill) — G-LNAC observed live 25 Jul 26
+  'G-EHAT', 'G-EHEM', // Essex & Herts Air Ambulance AW169s (North Weald / Earls Colne)
+]);
+// G-LAA = London's Air Ambulance, G-KSS = Kent-Surrey-Sussex — both exclusively HEMS.
+const AMBULANCE_REG_PREFIXES = ['G-LAA', 'G-KSS'];
+
+// Callsign fallbacks (matched only after regs, so a known airframe always wins).
+// NPAS is the National Police Air Service prefix; POL is used by police units.
+const POLICE_CS_PREFIXES = ['NPAS', 'POL'];
+// HLE is the shared ICAO code Flightradar24 files all UK air ambulances under;
+// HEMS / HMED / HELIMED / MEDIC are common dispatch/operator variants.
+const AMBULANCE_CS_PREFIXES = ['HLE', 'HEMS', 'HMED', 'HELIMED', 'MEDIC'];
+
+/**
+ * Classify an aircraft as a London emergency helicopter. Pure — no side effects.
+ * Priority: curated registration table/prefixes first, then callsign prefixes.
+ * Returns null for everything that is not an unambiguous match (the common case;
+ * frequently none are airborne). Registration is authoritative and reliable even
+ * when the ADS-B `category` field is missing, so category is intentionally not
+ * required here.
+ */
+export function classifyEmergency(a: Aircraft): EmergencyKind | null {
+  const reg = (a.r ?? '').toUpperCase().trim();
+  if (reg) {
+    if (POLICE_REGS.has(reg) || POLICE_REG_PREFIXES.some((p) => reg.startsWith(p))) return 'police';
+    if (AMBULANCE_REGS.has(reg) || AMBULANCE_REG_PREFIXES.some((p) => reg.startsWith(p)))
+      return 'air-ambulance';
+  }
+  // Callsigns arrive space-padded (e.g. "HLE21   "); strip to alphanumerics.
+  const cs = (a.flight ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (cs) {
+    if (POLICE_CS_PREFIXES.some((p) => cs.startsWith(p))) return 'police';
+    if (AMBULANCE_CS_PREFIXES.some((p) => cs.startsWith(p))) return 'air-ambulance';
+  }
+  return null;
+}
+
+/** Human label + emoji for a classified emergency helicopter (''=not emergency). */
+function emergencyLabel(kind: string): string {
+  if (kind === 'police') return '🚁 Police helicopter';
+  if (kind === 'air-ambulance') return '🚑 Air Ambulance';
+  return '';
+}
+
+const POLICE_BLUE = '#1B4DE4';
+const MEDICAL_RED = '#E8112D';
+
+/**
+ * Larger, eye-catching heli icon for emergency airframes: coloured body + rotor
+ * (police blue / medical red), a soft semi-transparent halo glow so it pops on a
+ * busy map, and — for air ambulances — a white medical cross badge. Drawn in the
+ * same canvas style / pixelRatio as makeHeliIcon, on a bigger 64px canvas.
+ */
+function makeEmergencyHeliIcon(kind: EmergencyKind): ImageData {
+  const SIZE = 64;
+  const c = document.createElement('canvas');
+  c.width = SIZE;
+  c.height = SIZE;
+  const x = c.getContext('2d');
+  if (!x) throw new Error('2d canvas unavailable');
+  x.translate(SIZE / 2, SIZE / 2);
+
+  const [r, g, b] = kind === 'police' ? [27, 77, 228] : [232, 17, 45];
+  const bodyColor = kind === 'police' ? POLICE_BLUE : MEDICAL_RED;
+
+  // Soft glowing halo (outer glow ring at ~0.35 alpha) — the visual "pop".
+  const glow = x.createRadialGradient(0, 0, 8, 0, 0, 30);
+  glow.addColorStop(0, `rgba(${r},${g},${b},0)`);
+  glow.addColorStop(0.55, `rgba(${r},${g},${b},0.35)`);
+  glow.addColorStop(1, `rgba(${r},${g},${b},0)`);
+  x.fillStyle = glow;
+  x.beginPath();
+  x.arc(0, 0, 30, 0, Math.PI * 2);
+  x.fill();
+  // Crisp ring at the glow's edge.
+  x.strokeStyle = `rgba(${r},${g},${b},0.55)`;
+  x.lineWidth = 2.5;
+  x.beginPath();
+  x.arc(0, 0, 21, 0, Math.PI * 2);
+  x.stroke();
+
+  // Body (≈1.4× the normal heli body).
+  x.beginPath();
+  x.ellipse(0, 3, 8.5, 12.5, 0, 0, Math.PI * 2);
+  x.fillStyle = bodyColor;
+  x.fill();
+  x.strokeStyle = '#1a1a1a';
+  x.lineWidth = 1.5;
+  x.stroke();
+  // Rotor cross.
+  x.strokeStyle = '#f5f5f5';
+  x.lineWidth = 2.5;
+  x.beginPath();
+  x.moveTo(-17, -14);
+  x.lineTo(17, 20);
+  x.moveTo(17, -14);
+  x.lineTo(-17, 20);
+  x.stroke();
+
+  if (kind === 'air-ambulance') {
+    // White medical cross badge over the body.
+    x.fillStyle = '#ffffff';
+    const half = 2.4; // arm half-thickness
+    const arm = 6; // arm half-length
+    x.fillRect(-half, 3 - arm, half * 2, arm * 2); // vertical bar
+    x.fillRect(-arm, 3 - half, arm * 2, half * 2); // horizontal bar
+  }
+
+  return x.getImageData(0, 0, SIZE, SIZE);
+}
+
 function makePlaneIcon(): ImageData {
   const c = document.createElement('canvas');
   c.width = 48;
@@ -201,6 +339,10 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
   injectPopupStyles(); // .vp-photo / .vp-credit live in the shared injected style tag
   if (!map.hasImage('ac-plane')) map.addImage('ac-plane', makePlaneIcon(), { pixelRatio: 2 });
   if (!map.hasImage('ac-heli')) map.addImage('ac-heli', makeHeliIcon(), { pixelRatio: 2 });
+  if (!map.hasImage('ac-heli-police'))
+    map.addImage('ac-heli-police', makeEmergencyHeliIcon('police'), { pixelRatio: 2 });
+  if (!map.hasImage('ac-heli-ambulance'))
+    map.addImage('ac-heli-ambulance', makeEmergencyHeliIcon('air-ambulance'), { pixelRatio: 2 });
 
   map.addSource(SOURCE_ID, {
     type: 'geojson',
@@ -212,9 +354,13 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
     source: SOURCE_ID,
     layout: {
       'icon-image': ['get', 'icon'],
+      // Emergency helis get a noticeably larger base size so they stand out; the
+      // larger 64px canvas already helps, this pushes them further.
       'icon-size': ['interpolate', ['linear'], ['zoom'],
-        9, ['case', ['==', ['get', 'ground'], 1], 0.33, 0.55],
-        13, ['case', ['==', ['get', 'ground'], 1], 0.48, 0.8]],
+        9, ['case', ['==', ['get', 'emergency'], 1], 0.85,
+          ['case', ['==', ['get', 'ground'], 1], 0.33, 0.55]],
+        13, ['case', ['==', ['get', 'emergency'], 1], 1.2,
+          ['case', ['==', ['get', 'ground'], 1], 0.48, 0.8]]],
       'icon-rotate': ['get', 'track'],
       'icon-rotation-alignment': 'map',
       'icon-allow-overlap': true,
@@ -267,11 +413,22 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
       const lon = (a.lon as number) + (speedMs * dtS * Math.sin(rad)) / M_PER_DEG_LON;
       const lat = (a.lat as number) + (speedMs * dtS * Math.cos(rad)) / M_PER_DEG_LAT;
       posByHex.set(a.hex, [lon, lat]);
+      const emKind = classifyEmergency(a);
+      const icon =
+        emKind === 'police'
+          ? 'ac-heli-police'
+          : emKind === 'air-ambulance'
+            ? 'ac-heli-ambulance'
+            : isHelicopter(a)
+              ? 'ac-heli'
+              : 'ac-plane';
       return {
         type: 'Feature' as const,
         properties: {
           hex: a.hex,
-          icon: isHelicopter(a) ? 'ac-heli' : 'ac-plane',
+          icon,
+          emergency: emKind ? 1 : 0,
+          emKind: emKind ?? '',
           callsign: (a.flight ?? '').trim(),
           reg: a.r ?? '',
           typeCode: a.t ?? '',
@@ -308,10 +465,14 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
     const p = e.features?.[0]?.properties as Record<string, string | number> | undefined;
     if (!p) return;
     map.getCanvas().style.cursor = 'pointer';
+    const emLabel = emergencyLabel(String(p.emKind ?? ''));
+    const nameLine = emLabel
+      ? `${emLabel} · ${esc(String(p.callsign || p.reg || p.hex))}`
+      : esc(String(p.callsign || p.reg || p.hex));
     tip
       .setLngLat(e.lngLat)
       .setHTML(
-        `<div class="vp"><b>${esc(String(p.callsign || p.reg || p.hex))}</b> ${esc(String(p.typeCode))}<div class="vp-dim">${esc(String(p.alt))} · ${Math.round(Number(p.gs))} kn</div></div>`,
+        `<div class="vp"><b>${nameLine}</b> ${esc(String(p.typeCode))}<div class="vp-dim">${esc(String(p.alt))} · ${Math.round(Number(p.gs))} kn</div></div>`,
       )
       .addTo(map);
   });
@@ -333,7 +494,9 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
     tip.remove();
     selectedHex = String(p.hex);
     const title = String(p.callsign || p.reg || p.hex);
-    const body = `<div class="vp"><div class="sp-title">✈ ${esc(title)}</div>
+    const emLabel = emergencyLabel(String(p.emKind ?? ''));
+    const titleLine = emLabel ? `${emLabel} — ${esc(title)}` : `✈ ${esc(title)}`;
+    const body = `<div class="vp"><div class="sp-title">${titleLine}</div>
       <div>${esc(String(p.desc || p.typeCode))}</div>
       <div class="vp-dim">${esc(String(p.alt))} · ${Math.round(Number(p.gs))} kn · reg ${esc(String(p.reg || '—'))}</div>
       <div class="vp-dim" id="ac-route">Looking up route…</div></div>`;
