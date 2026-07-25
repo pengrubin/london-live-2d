@@ -36,11 +36,32 @@ const LEGACY_DATA_PATHS: Readonly<Record<string, string>> = {
   'bus-learner.last-run.json': 'bus-routes/learned/.last-run.json',
 };
 
+/** mkdir -p that reports success instead of throwing, for graceful fallback. */
+function tryMkdir(dir: string): boolean {
+  try {
+    mkdirSync(dir, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Local (data/) absolute path for a logical state file, honoring LEGACY_DATA_PATHS. */
+function localPath(logical: string): string {
+  return join(DATA_DIR, ...(LEGACY_DATA_PATHS[logical] ?? logical).split('/'));
+}
+
 /**
  * Absolute path for a runtime-mutable state file. When PERSIST_DIR is set
  * (production → a mounted volume like /data) all such files live flat under it;
  * when unset each file falls back to the exact location it uses today under
  * data/. The parent directory is created (recursive) so first writes never fail.
+ *
+ * ROBUST FALLBACK: if the parent can't be created (unwritable / missing volume),
+ * degrade to the local data/ layout so writes still land, and — should that also
+ * fail — return the primary path anyway and let the caller's write fail (every
+ * runtime writer is wrapped to log-and-continue). This never throws, so a bad
+ * volume can't crash the backend at startup or in a poll loop.
  *
  * NOTE: only runtime-WRITTEN state routes through here. Git-committed baked data
  * (branches / lines / stations / nr / manifest) is still read from data/ as-is.
@@ -48,11 +69,42 @@ const LEGACY_DATA_PATHS: Readonly<Record<string, string>> = {
 export function persistPath(...segments: string[]): string {
   const persistDir = readEnv('PERSIST_DIR');
   const logical = segments.join('/');
-  const target = persistDir
-    ? join(persistDir, ...segments)
-    : join(DATA_DIR, ...(LEGACY_DATA_PATHS[logical] ?? logical).split('/'));
-  mkdirSync(dirname(target), { recursive: true });
-  return target;
+  const primary = persistDir ? join(persistDir, ...segments) : localPath(logical);
+  if (tryMkdir(dirname(primary))) return primary;
+  // Volume set but unwritable → fall back to the local data/ layout.
+  if (persistDir) {
+    const fallback = localPath(logical);
+    if (tryMkdir(dirname(fallback))) return fallback;
+  }
+  return primary; // last resort — caller's write will fail and be logged
+}
+
+/** The configured runtime base dir: the volume when PERSIST_DIR is set, else data/. */
+export function persistBaseDir(): string {
+  return readEnv('PERSIST_DIR') ?? DATA_DIR;
+}
+
+/**
+ * Resolve a *writable* base dir for runtime bus data (traces, learned routes,
+ * priors), degrading volume → data/ → data/-anyway. The single coherent base
+ * shared by the trace writer, the learner scripts, and the read route so the
+ * writer always writes where the learner reads and the route serves.
+ * Never throws; logs each degradation step.
+ */
+export function resolveBusDataDir(log: (msg: string) => void): string {
+  const configured = persistBaseDir();
+  const candidates = configured === DATA_DIR ? [DATA_DIR] : [configured, DATA_DIR];
+  for (const dir of candidates) {
+    if (tryMkdir(dir)) {
+      if (dir !== configured) {
+        log(`persist: base dir "${configured}" unwritable; using fallback "${dir}"`);
+      }
+      return dir;
+    }
+    log(`persist: base dir "${dir}" not writable — trying next fallback`);
+  }
+  log('persist: no writable base dir; bus-data writes will be skipped and logged');
+  return DATA_DIR;
 }
 
 /** Minimal dotenv-style parser: KEY=value lines, `#` comments, optional quotes. */

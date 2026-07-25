@@ -7,7 +7,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { AisClient } from './ais-client';
 import { BodsClient } from './bods-client';
 import { TtlCache } from './cache';
-import type { AppConfig } from './config';
+import { type AppConfig, resolveBusDataDir } from './config';
 import { ARRIVALS_CACHE_TTL_MS, TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS } from './constants';
 import {
   LeaderboardTracker,
@@ -72,14 +72,19 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     app.get('/api/vessels', () => []);
   }
 
+  // One coherent base dir for ALL runtime-written bus data (traces, learned
+  // routes, priors): the PERSIST_DIR volume when set (survives redeploys), else
+  // data/. Resolved once, with a robust volume→data/ fallback so an unwritable
+  // volume degrades instead of crashing. The writer, the learner scripts, and
+  // the read route all key off this same base, so the writer always writes where
+  // the learner reads and the route serves.
+  const busDataDir = resolveBusDataDir((msg) => app.log.warn(msg));
+
   // All-London live buses (optional feature — needs a BODS key in .env)
   let bodsClient: BodsClient | null = null;
   if (config.bodsApiKey) {
     // Trace log + self-scheduled route learner ride along with the poller.
-    // NB: bus-traces/ and bus-routes/learned/ are runtime-written but large, so
-    // they still live under data/ for now — a later step could move them to
-    // PERSIST_DIR (like leaderboard.json + the learner marker already do).
-    const traces = new TraceWriter(join(DATA_DIR, 'bus-traces'), (msg) => app.log.info(msg));
+    const traces = new TraceWriter(join(busDataDir, 'bus-traces'), (msg) => app.log.info(msg));
     traces.start();
     const bods = new BodsClient(
       config.bodsApiKey,
@@ -87,7 +92,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
       (buses, now) => traces.record(buses, now),
     );
     bods.start();
-    const learner = new LearnerScheduler(SCRIPTS_DIR, DATA_DIR, (msg) => app.log.info(msg));
+    const learner = new LearnerScheduler(SCRIPTS_DIR, busDataDir, (msg) => app.log.info(msg));
     learner.start();
     app.addHook('onClose', () => {
       bods.stop();
@@ -99,7 +104,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   } else {
     app.get('/api/buses', () => []);
   }
-  registerBusRoutesRoute(app, join(DATA_DIR, 'bus-routes', 'learned'));
+  registerBusRoutesRoute(app, join(busDataDir, 'bus-routes', 'learned'));
 
   const LINE_STATUS_TTL_MS = 60_000; // status changes slowly; poll gently
   const STOP_DETAIL_TTL_MS = 600_000; // facilities/zones are near-static

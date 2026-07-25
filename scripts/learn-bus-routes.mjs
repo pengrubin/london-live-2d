@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 // Learn bus-route polylines from collected GPS traces.
 //
-// Input:  data/bus-traces/YYYY-MM-DD.jsonl  (last 3 days; written by backend)
-//         data/bus-routes/prior/<key>.json  (optional BODS timetable shapes)
-// Output: data/bus-routes/learned/<key>.json {poly, quality:{journeys, meanResidualM}}
-//         scheduler freshness stamp: PERSIST_DIR/bus-learner.last-run.json when
-//         PERSIST_DIR is set (production volume, survives redeploys), else
-//         data/bus-routes/learned/.last-run.json — matching learner-scheduler.ts.
+// Paths are all relative to a base dir (BASE_DIR): the PERSIST_DIR volume in
+// production (pinned by the backend scheduler via BUS_DATA_DIR), else data/.
+// Input:  <base>/bus-traces/YYYY-MM-DD.jsonl  (last 3 days; written by backend)
+//         <base>/bus-routes/prior/<key>.json  (optional BODS timetable shapes)
+// Output: <base>/bus-routes/learned/<key>.json {poly, quality:{journeys, meanResidualM}}
+//         scheduler freshness stamp at BUS_LAST_RUN_PATH (the scheduler passes
+//         the exact path it reads; standalone runs default to the flat volume /
+//         data/-local convention) — matching learner-scheduler.ts.
 //
 // Method, per line+direction with ≥ MIN_JOURNEYS complete journeys:
 //   seed  = prior shape if present, else the median-length journey,
@@ -30,16 +32,25 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-// Env overrides exist for testing the learner against synthetic traces.
-const TRACES_DIR = process.env.BUS_TRACES_DIR ?? join(ROOT, 'data', 'bus-traces');
-const PRIOR_DIR = process.env.BUS_PRIOR_DIR ?? join(ROOT, 'data', 'bus-routes', 'prior');
-const LEARNED_DIR = process.env.BUS_LEARNED_DIR ?? join(ROOT, 'data', 'bus-routes', 'learned');
-// Freshness stamp relocates to the persist volume in production so the
-// scheduler's read (learner-scheduler.ts persistPath('bus-learner.last-run.json'))
-// finds it after a redeploy; locally it stays exactly where it lives today.
-const LAST_RUN_PATH = process.env.PERSIST_DIR
-  ? join(process.env.PERSIST_DIR, 'bus-learner.last-run.json')
-  : join(LEARNED_DIR, '.last-run.json');
+// Base dir for all runtime bus data. The backend scheduler pins this (via
+// BUS_DATA_DIR) to the SAME base its trace writer uses — the PERSIST_DIR volume
+// in production, else data/ — so the learner reads traces where the writer wrote
+// them and writes learned routes where the read route serves. Falls back to the
+// repo's data/ for standalone/manual runs. Finer per-dir overrides remain for
+// testing against synthetic traces.
+const BASE_DIR = process.env.BUS_DATA_DIR ?? join(ROOT, 'data');
+const TRACES_DIR = process.env.BUS_TRACES_DIR ?? join(BASE_DIR, 'bus-traces');
+const PRIOR_DIR = process.env.BUS_PRIOR_DIR ?? join(BASE_DIR, 'bus-routes', 'prior');
+const LEARNED_DIR = process.env.BUS_LEARNED_DIR ?? join(BASE_DIR, 'bus-routes', 'learned');
+// Freshness stamp must match the scheduler's read. The scheduler passes the
+// exact path via BUS_LAST_RUN_PATH (kept in lockstep even under the volume→data/
+// fallback). Standalone runs fall back to the PERSIST_DIR-flat / data/-local
+// convention the scheduler's persistPath uses.
+const LAST_RUN_PATH =
+  process.env.BUS_LAST_RUN_PATH ??
+  (process.env.PERSIST_DIR
+    ? join(process.env.PERSIST_DIR, 'bus-learner.last-run.json')
+    : join(LEARNED_DIR, '.last-run.json'));
 
 const TRACE_WINDOW_DAYS = 3;
 const MIN_JOURNEYS = 5;

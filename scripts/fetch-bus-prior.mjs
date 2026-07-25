@@ -9,7 +9,7 @@
 // Lines with no prior (the whole TfL fleet) are handled by the learner's
 // trace-only fallback — the pipeline works with zero priors.
 //
-// Output: data/bus-routes/prior/<sanitized OPERATOR:line:direction>.json
+// Output: <base>/bus-routes/prior/<sanitized OPERATOR:line:direction>.json
 //   { poly: [[lon,lat],…], stops: [[lon,lat],…] }
 // plus a .fetched.json freshness stamp the backend scheduler checks.
 //
@@ -23,7 +23,11 @@ import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const PRIOR_DIR = join(ROOT, 'data', 'bus-routes', 'prior');
+// Base dir pinned by the backend scheduler (BUS_DATA_DIR) to the same base the
+// trace writer + learner use — the PERSIST_DIR volume in production, else data/
+// — so priors land where the learner reads them. Falls back to repo data/.
+const BASE_DIR = process.env.BUS_DATA_DIR ?? join(ROOT, 'data');
+const PRIOR_DIR = process.env.BUS_PRIOR_DIR ?? join(BASE_DIR, 'bus-routes', 'prior');
 const ENV_PATH = join(ROOT, 'backend', '.env');
 
 const API_BASE = 'https://data.bus-data.dft.gov.uk/api/v1/dataset/';

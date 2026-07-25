@@ -9,7 +9,7 @@
 // Failures are logged and retried at the next cycle — never fatal.
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { persistPath } from './config';
@@ -34,6 +34,15 @@ function lastRunAt(markerPath: string): number {
   }
 }
 
+/** Count learned route files (.json, excluding the dotfile marker). */
+function learnedFileCount(learnedDir: string): number {
+  try {
+    return readdirSync(learnedDir).filter((n) => !n.startsWith('.') && n.endsWith('.json')).length;
+  } catch {
+    return 0;
+  }
+}
+
 function priorFreshEnough(priorDir: string): boolean {
   try {
     const stampPath = join(priorDir, '.fetched.json');
@@ -45,11 +54,16 @@ function priorFreshEnough(priorDir: string): boolean {
 }
 
 /** Run one script, resolve with its last non-empty stdout line (the summary). */
-function runScript(scriptPath: string, log: (msg: string) => void): Promise<void> {
+function runScript(
+  scriptPath: string,
+  log: (msg: string) => void,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [scriptPath], {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: SCRIPT_TIMEOUT_MS,
+      env,
     });
     let out = '';
     let errTail = '';
@@ -81,6 +95,8 @@ export class LearnerScheduler {
   private readonly scriptsDir: string;
   private readonly dataDir: string;
   private readonly log: (msg: string) => void;
+  /** Resolved once so the scheduler's read and the spawned learner's write agree. */
+  private readonly markerPath: string;
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   private cycleTimer: ReturnType<typeof setInterval> | null = null;
   private running = false;
@@ -89,14 +105,31 @@ export class LearnerScheduler {
     this.scriptsDir = scriptsDir;
     this.dataDir = dataDir;
     this.log = log;
+    // persistPath is robust (never throws) — safe to resolve at construction.
+    this.markerPath = persistPath('bus-learner.last-run.json');
+  }
+
+  /** Env for spawned scripts: pins them to the SAME base dir + marker the writer
+   *  and this scheduler use, so writer→learner→route all agree even under the
+   *  volume→data/ fallback (BUS_DATA_DIR/BUS_LAST_RUN_PATH override the scripts'
+   *  own PERSIST_DIR-derived defaults). */
+  private scriptEnv(): NodeJS.ProcessEnv {
+    return { ...process.env, BUS_DATA_DIR: this.dataDir, BUS_LAST_RUN_PATH: this.markerPath };
   }
 
   start(): void {
     // Freshness marker is runtime-written state: it rides on PERSIST_DIR in
     // production so the 20 h/24 h schedule survives redeploys (else the learner
     // would re-run on every boot). learn-bus-routes.mjs writes the matching
-    // path (it inherits PERSIST_DIR from this spawned child's env).
-    const age = Date.now() - lastRunAt(persistPath('bus-learner.last-run.json'));
+    // path (passed explicitly via BUS_LAST_RUN_PATH).
+    //
+    // Marker↔data fate guard: if a marker says "recently ran" but the learned
+    // dir has zero files, the two lost sync (e.g. a redeploy wiped a data/-local
+    // learned/ while a volume-backed marker survived). Treat that as "never ran"
+    // so we re-learn once traces exist instead of idling for 20 h.
+    const learnedDir = join(this.dataDir, 'bus-routes', 'learned');
+    const ranAt = learnedFileCount(learnedDir) > 0 ? lastRunAt(this.markerPath) : 0;
+    const age = Date.now() - ranAt;
     if (age > STALE_AFTER_MS) {
       this.log(
         `learner pipeline: last run ${age === Date.now() ? 'never' : `${Math.round(age / 3_600_000)} h ago`} — scheduling startup run`,
@@ -119,11 +152,12 @@ export class LearnerScheduler {
     if (this.running) return;
     this.running = true;
     try {
+      const env = this.scriptEnv();
       const priorDir = join(this.dataDir, 'bus-routes', 'prior');
       if (!priorFreshEnough(priorDir)) {
-        await runScript(join(this.scriptsDir, 'fetch-bus-prior.mjs'), this.log);
+        await runScript(join(this.scriptsDir, 'fetch-bus-prior.mjs'), this.log, env);
       }
-      await runScript(join(this.scriptsDir, 'learn-bus-routes.mjs'), this.log);
+      await runScript(join(this.scriptsDir, 'learn-bus-routes.mjs'), this.log, env);
     } finally {
       this.running = false;
     }

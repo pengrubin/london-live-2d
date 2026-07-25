@@ -16,10 +16,13 @@ import { appendFile, mkdir, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Bus } from './bods-client';
 
-// NOTE: traces are runtime-written under data/bus-traces/ (self-pruned, capped
-// at 2 GB). They stay in data/ for now, but could relocate to PERSIST_DIR
-// (see config.persistPath) in a later step to survive redeploys like the
-// leaderboard standings and learner marker already do.
+// NOTE: traces are runtime-written under <base>/bus-traces/ (self-pruned, capped
+// at 2 GB), where <base> is the persist volume when PERSIST_DIR is set (survives
+// redeploys) else data/. The base is resolved by config.resolveBusDataDir and
+// handed in as `dir` — the same base the learner scripts and read route use, so
+// the writer always writes where the learner reads. All writes here are wrapped
+// (flush/maintain catch and log) so an unwritable dir drops a batch, never the
+// poll loop.
 
 const FLUSH_INTERVAL_MS = 5_000;
 const MAINTENANCE_INTERVAL_MS = 60 * 60_000;
