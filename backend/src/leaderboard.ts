@@ -282,6 +282,32 @@ export class LeaderboardTracker {
     this.filePath = persistPath('leaderboard.json');
   }
 
+  /** Diagnostics for the persistence path (which file, does it exist, when saved). */
+  persistenceStatus(): {
+    persistDirSet: boolean;
+    filePath: string;
+    fileExists: boolean;
+    savedAt: number | null;
+    buckets: number;
+  } {
+    let fileExists = false;
+    let savedAt: number | null = null;
+    try {
+      const raw = readFileSync(this.filePath, 'utf8');
+      fileExists = true;
+      savedAt = (JSON.parse(raw) as PersistedState).savedAt ?? null;
+    } catch {
+      /* not written yet */
+    }
+    return {
+      persistDirSet: Boolean(process.env.PERSIST_DIR),
+      filePath: this.filePath,
+      fileExists,
+      savedAt,
+      buckets: this.buckets.size,
+    };
+  }
+
   start(): void {
     this.load();
     void this.sample();

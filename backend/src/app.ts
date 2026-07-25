@@ -172,6 +172,8 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   leaderboard.start();
   app.addHook('onClose', () => leaderboard.stop());
   registerLeaderboardRoute(app, leaderboard);
+  // Persistence diagnostic (no secrets — path + booleans only).
+  app.get('/api/leaderboard-status', () => leaderboard.persistenceStatus());
 
   // Non-TfL upstreams get their own budgets — they must never starve TfL calls.
   const AIRCRAFT_TTL_MS = 4_000; // planes are fast; keep the picture fresh
