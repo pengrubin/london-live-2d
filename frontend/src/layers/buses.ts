@@ -639,6 +639,12 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
     }
     setSource(ICONS_SOURCE_ID, features);
     iconsWereEmpty = features.length === 0;
+    // Keep an open detail popup glued to its bus as it drives. findBus returns
+    // null once the bus leaves tracking — leave the popup at its last spot then.
+    if (selectedBusId && detail.isOpen()) {
+      const pos = findBus(selectedBusId);
+      if (pos) detail.setLngLat(pos);
+    }
     requestAnimationFrame(renderIcons);
   }
 
@@ -662,11 +668,17 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
   });
 
   const detail = new Popup({ closeButton: true, closeOnClick: true, offset: 14, maxWidth: '280px' });
+  // The currently-selected bus, followed by the detail popup each frame.
+  let selectedBusId: string | null = null;
+  detail.on('close', () => {
+    selectedBusId = null;
+  });
   map.on('click', BUSES_ICONS_LAYER_ID, (e: MapLayerMouseEvent) => {
     const p = e.features?.[0]?.properties as Record<string, string | number> | undefined;
     if (!p) return;
     tip.remove();
     const id = String(p.id);
+    selectedBusId = id;
     const vehicleRef = id.slice(id.indexOf(':') + 1);
     const dest = String(p.dest).trim();
     detail

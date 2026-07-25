@@ -246,6 +246,9 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
 
   const renderGate = makeRenderGate(SYMBOL_TIER_INTERVAL_MS);
   let lastWasEmpty = false;
+  // Current displayed [lon,lat] per aircraft hex — rebuilt each render so the
+  // selected aircraft's detail popup can follow it between the 5 s polls.
+  const posByHex = new Map<string, [number, number]>();
   function render(frameNow: number): void {
     if (!renderGate(frameNow) || !isLayerShown(map, AIRCRAFT_LAYER_ID)) {
       requestAnimationFrame(render);
@@ -256,11 +259,13 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
       return;
     }
     const dtS = (Date.now() - fetchedAt) / 1000;
+    posByHex.clear();
     const features = fleet.map((a) => {
       const speedMs = a.alt_baro === 'ground' ? 0 : (a.gs ?? 0) * KN_TO_MS;
       const rad = (((a.track ?? 0) - 0) * Math.PI) / 180;
       const lon = (a.lon as number) + (speedMs * dtS * Math.sin(rad)) / M_PER_DEG_LON;
       const lat = (a.lat as number) + (speedMs * dtS * Math.cos(rad)) / M_PER_DEG_LAT;
+      posByHex.set(a.hex, [lon, lat]);
       return {
         type: 'Feature' as const,
         properties: {
@@ -283,6 +288,12 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
       (src as GeoJSONSource).setData({ type: 'FeatureCollection', features });
     }
     lastWasEmpty = features.length === 0;
+    // Keep an open detail popup glued to its aircraft. When the hex drops out of
+    // the fleet the lookup misses — leave the popup at its last position.
+    if (selectedHex && detail.isOpen()) {
+      const pos = posByHex.get(selectedHex);
+      if (pos) detail.setLngLat(pos);
+    }
     requestAnimationFrame(render);
   }
 
@@ -305,10 +316,16 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
   });
 
   const detail = new Popup({ closeButton: true, closeOnClick: true, offset: 14, maxWidth: '300px' });
+  // The currently-selected aircraft (by hex), followed by the detail popup.
+  let selectedHex: string | null = null;
+  detail.on('close', () => {
+    selectedHex = null;
+  });
   map.on('click', AIRCRAFT_LAYER_ID, (e: MapLayerMouseEvent) => {
     const p = e.features?.[0]?.properties as Record<string, string | number> | undefined;
     if (!p) return;
     tip.remove();
+    selectedHex = String(p.hex);
     const title = String(p.callsign || p.reg || p.hex);
     const body = `<div class="vp"><div class="sp-title">✈ ${esc(title)}</div>
       <div>${esc(String(p.desc || p.typeCode))}</div>

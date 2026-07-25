@@ -270,6 +270,12 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
       (src as GeoJSONSource).setData({ type: 'FeatureCollection', features });
     }
     lastWasEmpty = features.length === 0;
+    // Glue an open detail popup to its vessel. A faded/stale ship still resolves
+    // via findVessel, so the popup keeps following its last-known marker.
+    if (selectedMmsi !== null && detail.isOpen()) {
+      const pos = findVessel(selectedMmsi);
+      if (pos) detail.setLngLat(pos);
+    }
     schedule();
   }
 
@@ -291,10 +297,16 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
   });
 
   const detail = new Popup({ closeButton: true, closeOnClick: true, offset: 14, maxWidth: '280px' });
+  // The currently-selected vessel (by MMSI), followed by the detail popup.
+  let selectedMmsi: number | null = null;
+  detail.on('close', () => {
+    selectedMmsi = null;
+  });
   map.on('click', VESSELS_LAYER_ID, (e: MapLayerMouseEvent) => {
     const p = e.features?.[0]?.properties as Record<string, string | number> | undefined;
     if (!p) return;
     tip.remove();
+    selectedMmsi = Number(p.mmsi);
     const dest = String(p.destination).trim();
     const dims = dimensionsLine(Number(p.lengthM), Number(p.widthM), Number(p.draughtM));
     const flag = flagLine(String(p.flag));

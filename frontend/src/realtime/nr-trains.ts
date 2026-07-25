@@ -420,6 +420,12 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
       (src as GeoJSONSource).setData({ type: 'FeatureCollection', features });
     }
     lastWasEmpty = features.length === 0;
+    // Keep an open detail popup glued to its train. findNrTrain returns null
+    // once the train leaves coverage — leave the popup at its last position.
+    if (selectedRid && detail.isOpen()) {
+      const pos = findNrTrain(selectedRid);
+      if (pos) detail.setLngLat(pos);
+    }
     requestAnimationFrame(render);
   }
 
@@ -441,10 +447,16 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
     tip.remove();
   });
   const detail = new Popup({ closeButton: true, closeOnClick: true, offset: 14, maxWidth: '300px' });
+  // The currently-selected train (by rid), followed by the detail popup.
+  let selectedRid: string | null = null;
+  detail.on('close', () => {
+    selectedRid = null;
+  });
   map.on('click', NR_TRAINS_LAYER_ID, (e: MapLayerMouseEvent) => {
     const p = e.features?.[0]?.properties as Record<string, string | number> | undefined;
     if (!p) return;
     tip.remove();
+    selectedRid = String(p.rid);
     const t = trains.get(String(p.rid));
     const calling = t
       ? t.stops
