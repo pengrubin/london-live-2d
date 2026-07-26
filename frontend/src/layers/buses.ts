@@ -25,6 +25,7 @@
 import {
   Popup,
   type ExpressionSpecification,
+  type FilterSpecification,
   type GeoJSONSource,
   type Map as MaplibreMap,
   type MapLayerMouseEvent,
@@ -231,30 +232,71 @@ export function findBus(id: string): [number, number] | null {
   return tr.snapped ? [tr.snapX, tr.snapY] : [tr.disp.x, tr.disp.y];
 }
 
-/**
- * Line filter: grey every bus that is NOT on one of `lines`, keeping on-line
- * buses their normal red. Passing null or an empty set restores the normal
- * colouring. Crucially this ONLY recolours — no `setFilter` — so non-matching
- * buses remain on the map and stay clickable (their detail popup still opens).
- */
-export function setBusLineFilter(map: MaplibreMap, lines: ReadonlySet<string> | null): void {
+// ── bus display coordinator ──
+// Two independent inputs decide how buses render, so they're resolved together
+// in one place rather than fighting over the same layers:
+//   • the Buses overlay toggle (Lines tab) — busesOverlayOn
+//   • the line filter (Filter tab)         — filterLines (empty = no filter)
+// Truth table (matching = on a filtered line):
+//   overlay ON,  no filter  → all buses, normal red
+//   overlay ON,  filter     → matching red, the rest grey (all still shown/clickable)
+//   overlay OFF, no filter  → hidden
+//   overlay OFF, filter     → ONLY matching shown (red); the grey rest are hidden
+let busesOverlayOn = true; // buses ship visible (no startOff on the overlay)
+let filterLines: readonly string[] = []; // snapshot of the active filter set
+
+/** Recompute layer visibility + hard filter + colouring from the two inputs. */
+function applyBusDisplay(map: MaplibreMap): void {
+  const filterActive = filterLines.length > 0;
+  const visible = busesOverlayOn || filterActive;
+  // Hard-filter to matching buses ONLY when the overlay is off but a filter is
+  // set — that's the "hide the grey ones, keep just the spotlighted line" case.
+  // In every other case there's no setFilter, so non-matching buses stay on the
+  // map and clickable.
+  const layerFilter: FilterSpecification | null =
+    !busesOverlayOn && filterActive
+      ? (['in', ['get', 'line'], ['literal', filterLines]] as FilterSpecification)
+      : null;
+
+  for (const id of [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID]) {
+    if (!map.getLayer(id)) continue;
+    map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+    map.setFilter(id, layerFilter);
+  }
+
   const hasDots = !!map.getLayer(BUSES_DOTS_LAYER_ID);
   const hasIcons = !!map.getLayer(BUSES_ICONS_LAYER_ID);
-  if (!lines || lines.size === 0) {
+  if (filterActive) {
+    if (hasDots) {
+      map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-color', dotsColorFiltered(filterLines));
+      map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-opacity', dotsOpacityFiltered(filterLines));
+    }
+    if (hasIcons) {
+      map.setLayoutProperty(BUSES_ICONS_LAYER_ID, 'icon-image', iconImageFiltered(filterLines));
+    }
+  } else {
     if (hasDots) {
       map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-color', dotsColorNormal());
       map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-opacity', DOTS_OPACITY_NORMAL);
     }
     if (hasIcons) map.setLayoutProperty(BUSES_ICONS_LAYER_ID, 'icon-image', iconImageNormal());
-    return;
   }
-  // Snapshot to a plain array once — the expressions embed it as a literal set.
-  const arr = [...lines];
-  if (hasDots) {
-    map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-color', dotsColorFiltered(arr));
-    map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-opacity', dotsOpacityFiltered(arr));
-  }
-  if (hasIcons) map.setLayoutProperty(BUSES_ICONS_LAYER_ID, 'icon-image', iconImageFiltered(arr));
+}
+
+/**
+ * Line filter: while active, on-line buses stay red and the rest grey out. Its
+ * effect on the greyed buses depends on the Buses overlay toggle — see
+ * applyBusDisplay. Passing null or an empty set clears the filter.
+ */
+export function setBusLineFilter(map: MaplibreMap, lines: ReadonlySet<string> | null): void {
+  filterLines = lines ? [...lines] : [];
+  applyBusDisplay(map);
+}
+
+/** Reflect the Buses overlay toggle (Lines tab). Combined with any active filter. */
+export function setBusesOverlayVisible(map: MaplibreMap, on: boolean): void {
+  busesOverlayOn = on;
+  applyBusDisplay(map);
 }
 
 /** Sorted (numeric-aware) unique line numbers across the live trackers, for autocomplete. */

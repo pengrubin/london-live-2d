@@ -18,7 +18,13 @@ import { startAircraft, AIRCRAFT_LAYER_ID } from './layers/aircraft';
 import { findVessel, startVessels, VESSELS_LAYER_ID } from './layers/vessels';
 import { addJamCams, JAMCAMS_LAYER_ID } from './layers/jamcams';
 import { findNrTrain, startNrTrains, NR_TRAINS_LAYER_ID } from './realtime/nr-trains';
-import { findBus, startBuses, BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID } from './layers/buses';
+import {
+  findBus,
+  setBusesOverlayVisible,
+  startBuses,
+  BUSES_DOTS_LAYER_ID,
+  BUSES_ICONS_LAYER_ID,
+} from './layers/buses';
 import { startRoadDisruptions, ROAD_DISRUPTIONS_LAYER_IDS } from './layers/road-disruptions';
 import { startTideGauges, TIDE_GAUGES_LAYER_IDS } from './layers/tide-gauges';
 import { startRainRadar, RAIN_RADAR_LAYER_ID } from './layers/rain-radar';
@@ -175,7 +181,13 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
     // One merged panel (top-left): Board / Filter / Lines tabs. Leaving the
     // top-right corner free for MapLibre's zoom + geolocate controls.
     const overlays = [
-      { label: 'Buses', layerIds: [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID], key: 'buses' },
+      {
+        label: 'Buses',
+        layerIds: [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID],
+        // Buses visibility is resolved against the line filter (see buses.ts),
+        // not a plain show/hide — route the toggle through the coordinator.
+        onToggle: (visible: boolean) => setBusesOverlayVisible(target, visible),
+      },
       { label: 'National Rail', layerIds: [NR_TRAINS_LAYER_ID] },
       { label: 'Aircraft', layerIds: [AIRCRAFT_LAYER_ID] },
       { label: 'Ships', layerIds: [VESSELS_LAYER_ID] },

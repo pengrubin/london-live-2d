@@ -20,17 +20,8 @@ function normalizeLine(raw: string): string {
   return raw.trim().toUpperCase();
 }
 
-/**
- * Build the bus filter view into `container` (a control-panel section).
- * `onFilterActive` is invoked whenever a non-empty filter is applied, so the
- * caller can guarantee the Buses overlay is visible (else there's nothing to
- * spotlight).
- */
-export function addBusFilter(
-  container: HTMLElement,
-  map: MaplibreMap,
-  onFilterActive?: () => void,
-): void {
+/** Build the bus filter view into `container` (a control-panel section). */
+export function addBusFilter(container: HTMLElement, map: MaplibreMap): void {
   // The chosen lines; the single source of truth driving setBusLineFilter().
   const selected = new Set<string>();
 
@@ -69,10 +60,7 @@ export function addBusFilter(
 
   /** Push the current selection down to the map and refresh chips + feedback. */
   function apply(): void {
-    const active = selected.size > 0;
-    setBusLineFilter(map, active ? selected : null);
-    // A filter is useless if the Buses overlay is off — make sure it's visible.
-    if (active) onFilterActive?.();
+    setBusLineFilter(map, selected.size === 0 ? null : selected);
     renderChips();
     renderFeedback();
   }

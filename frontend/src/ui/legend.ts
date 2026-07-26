@@ -43,18 +43,12 @@ export interface OverlayToggle {
   layerIds: string[];
   /** start in the off state (layer ships with visibility 'none') */
   startOff?: boolean;
-  /** stable handle so other views can force this overlay on (e.g. 'buses'). */
-  key?: string;
-}
-
-/** Imperative hooks the control panel wires between views. */
-export interface LegendHandle {
   /**
-   * Force an overlay on by key, syncing its row + map layers. Used by the bus
-   * filter: filtering is pointless if the Buses overlay was toggled off, so the
-   * filter re-enables it. No-op if the overlay is already on or the key is unknown.
+   * Custom visibility handler. When present the legend delegates this overlay's
+   * visibility to it (and does NOT touch layerIds directly) — used by Buses,
+   * whose visibility is resolved against the line filter, not a plain toggle.
    */
-  ensureOverlayOn(key: string): void;
+  onToggle?: (visible: boolean) => void;
 }
 
 /** Build the lines legend + overlays view into `container` (a control-panel section). */
@@ -63,17 +57,20 @@ export function addLegend(
   map: MaplibreMap,
   lines: readonly LegendLine[],
   overlays: readonly OverlayToggle[] = [],
-): LegendHandle {
+): void {
   const hidden = new Set<string>();
   // Every line row and every overlay row, so Select all / Unselect all can flip
-  // them in one pass, and ensureOverlayOn() can target one by key.
+  // them in one pass.
   const lineRows: { id: string; row: HTMLElement }[] = [];
   const overlayRows: { overlay: OverlayToggle; row: HTMLElement }[] = [];
-  const overlayByKey = new Map<string, { overlay: OverlayToggle; row: HTMLElement }>();
 
-  /** Toggle one overlay's row state + its map layers together. */
+  /** Toggle one overlay's row state + its map layers (or its custom handler). */
   function setOverlay(entry: { overlay: OverlayToggle; row: HTMLElement }, off: boolean): void {
     entry.row.classList.toggle('off', off);
+    if (entry.overlay.onToggle) {
+      entry.overlay.onToggle(!off);
+      return;
+    }
     for (const id of entry.overlay.layerIds) {
       if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', off ? 'none' : 'visible');
     }
@@ -166,14 +163,6 @@ export function addLegend(
       });
       body.append(row);
       overlayRows.push(entry);
-      if (overlay.key) overlayByKey.set(overlay.key, entry);
     }
   }
-
-  return {
-    ensureOverlayOn(key: string): void {
-      const entry = overlayByKey.get(key);
-      if (entry && entry.row.classList.contains('off')) setOverlay(entry, false);
-    },
-  };
 }
