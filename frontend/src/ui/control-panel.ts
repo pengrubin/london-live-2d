@@ -80,6 +80,15 @@ export function addControlPanel(
   activate(DEFAULT_TAB);
   if (window.matchMedia(MOBILE_MEDIA_QUERY).matches) panel.classList.add('collapsed');
 
+  // On phones, tapping the map (which only fires for the canvas, never for taps
+  // on the panel itself) means "let me see the map" — so collapse the panel.
+  // Desktop leaves it open. matchMedia is re-checked per tap to follow rotation.
+  map.on('click', () => {
+    if (window.matchMedia(MOBILE_MEDIA_QUERY).matches && !panel.classList.contains('collapsed')) {
+      panel.classList.add('collapsed');
+    }
+  });
+
   panel.append(header, tabStrip, cpBody);
   map.getContainer().append(panel);
 }
