@@ -13,8 +13,7 @@ import { addStationLayers } from './layers/stations';
 import { startTrains, type TrainsHandle } from './realtime/trains-controller';
 import { setupStationPopups } from './ui/station-popup';
 import { setupHoverTooltips } from './ui/hover-tooltip';
-import { addLegend } from './ui/legend';
-import { addLeaderboard } from './ui/leaderboard';
+import { addControlPanel } from './ui/control-panel';
 import { startAircraft, AIRCRAFT_LAYER_ID } from './layers/aircraft';
 import { findVessel, startVessels, VESSELS_LAYER_ID } from './layers/vessels';
 import { addJamCams, JAMCAMS_LAYER_ID } from './layers/jamcams';
@@ -173,7 +172,9 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       startTideGauges(target),
       startRainRadar(target),
     ]);
-    addLegend(target, manifestLines, [
+    // One merged panel (top-left): Board / Filter / Lines tabs. Leaving the
+    // top-right corner free for MapLibre's zoom + geolocate controls.
+    const overlays = [
       { label: 'Buses', layerIds: [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID] },
       { label: 'National Rail', layerIds: [NR_TRAINS_LAYER_ID] },
       { label: 'Aircraft', layerIds: [AIRCRAFT_LAYER_ID] },
@@ -181,8 +182,9 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       { label: 'JamCams', layerIds: [JAMCAMS_LAYER_ID] },
       { label: 'Roadworks', layerIds: ROAD_DISRUPTIONS_LAYER_IDS },
       { label: 'Tide gauges', layerIds: TIDE_GAUGES_LAYER_IDS },
-      { label: 'Rain radar', layerIds: [RAIN_RADAR_LAYER_ID], startOff: true },    ]);
-    addLeaderboard(target, trains.colorByLine, {
+      { label: 'Rain radar', layerIds: [RAIN_RADAR_LAYER_ID], startOff: true },
+    ];
+    addControlPanel(target, manifestLines, overlays, trains.colorByLine, {
       findTrain: trains.findVehicle,
       findNrTrain,
       findBus,

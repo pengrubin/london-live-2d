@@ -1,5 +1,7 @@
-// Collapsible legend panel: one row per line (colour swatch + name), click to
-// toggle that line's visibility (lines, casing and its vehicles together).
+// Lines legend view: one row per line (colour swatch + name), click to toggle
+// that line's visibility (lines, casing and its vehicles together), plus the
+// Overlays section. Rendered INTO a container supplied by the shared control
+// panel (control-panel.ts) — it no longer owns its own floating panel/header.
 
 import type { Map as MaplibreMap, FilterSpecification } from 'maplibre-gl';
 
@@ -12,10 +14,6 @@ export interface LegendLine {
   color: string;
   displayColor?: string;
 }
-
-// Phones (portrait) get too little room for the panels; start them collapsed so
-// the map stays visible and let the user tap the header to expand.
-const MOBILE_MEDIA_QUERY = '(max-width: 640px)';
 
 const MODE_ORDER = ['tube', 'dlr', 'elizabeth-line', 'overground', 'river-bus'];
 const MODE_LABEL: Record<string, string> = {
@@ -43,27 +41,20 @@ export interface OverlayToggle {
   startOff?: boolean;
 }
 
+/** Build the lines legend + overlays view into `container` (a control-panel section). */
 export function addLegend(
+  container: HTMLElement,
   map: MaplibreMap,
   lines: readonly LegendLine[],
   overlays: readonly OverlayToggle[] = [],
 ): void {
   const hidden = new Set<string>();
 
-  const panel = document.createElement('div');
-  panel.className = 'legend';
-  const header = document.createElement('div');
-  header.className = 'legend-header';
-  header.textContent = 'LINES';
+  // Keep a dedicated scroll body inside the section so long line lists scroll
+  // internally rather than stretching the shared panel.
   const body = document.createElement('div');
   body.className = 'legend-body';
-  panel.append(header, body);
-
-  header.addEventListener('click', () => {
-    panel.classList.toggle('collapsed');
-  });
-
-  if (window.matchMedia(MOBILE_MEDIA_QUERY).matches) panel.classList.add('collapsed');
+  container.append(body);
 
   const sorted = [...lines].sort(
     (a, b) =>
@@ -123,6 +114,4 @@ export function addLegend(
       body.append(row);
     }
   }
-
-  map.getContainer().append(panel);
 }

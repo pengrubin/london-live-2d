@@ -85,6 +85,13 @@ const PARKED_AFTER_MS = 20 * 60_000;
 const PARKED_FILL = '#1a1a1a';
 /** Parked circle-tier dots get a grey stroke so they read on the dark map. */
 const PARKED_STROKE = '#888';
+/** Muted grey for buses NOT on the filtered line(s) — still visible + clickable. */
+const BUS_DIM_FILL = '#7a7f87';
+/** Circle-tier opacity when no line filter is active (a plain constant). */
+const DOTS_OPACITY_NORMAL = 0.85;
+/** …and, under a filter, matching dots stay crisp while the rest fade back. */
+const DOTS_OPACITY_MATCH = 0.9;
+const DOTS_OPACITY_DIM = 0.4;
 
 /** Style expression: `whenParked` for parked:1 features, `otherwise` else. */
 const parkedCase = (
@@ -92,6 +99,42 @@ const parkedCase = (
   otherwise: string | number,
 ): ExpressionSpecification =>
   ['case', ['==', ['get', 'parked'], 1], whenParked, otherwise] as ExpressionSpecification;
+
+// ── bus line-filter expressions ──
+// Both the initial layer paint AND setBusLineFilter's restore path are built
+// from these same helpers, so the "normal" look can never drift out of sync
+// with what we snap back to when the filter clears.
+const dotsColorNormal = (): ExpressionSpecification => parkedCase(PARKED_FILL, TFL_BUS_RED);
+const iconImageNormal = (): ExpressionSpecification => parkedCase('bus-icon-parked', 'bus-bullet');
+
+/** Filtered dots: parked stays black, on-line stays red, everything else greys. */
+const dotsColorFiltered = (lines: readonly string[]): ExpressionSpecification =>
+  [
+    'case',
+    ['==', ['get', 'parked'], 1],
+    PARKED_FILL,
+    ['in', ['get', 'line'], ['literal', lines]],
+    TFL_BUS_RED,
+    BUS_DIM_FILL,
+  ] as ExpressionSpecification;
+/** Non-matching dots fade further so the red target line pops at a glance. */
+const dotsOpacityFiltered = (lines: readonly string[]): ExpressionSpecification =>
+  [
+    'case',
+    ['in', ['get', 'line'], ['literal', lines]],
+    DOTS_OPACITY_MATCH,
+    DOTS_OPACITY_DIM,
+  ] as ExpressionSpecification;
+/** Filtered icons: parked → parked bullet; on-line → red bullet; else → grey. */
+const iconImageFiltered = (lines: readonly string[]): ExpressionSpecification =>
+  [
+    'case',
+    ['==', ['get', 'parked'], 1],
+    'bus-icon-parked',
+    ['in', ['get', 'line'], ['literal', lines]],
+    'bus-bullet',
+    'bus-bullet-dim',
+  ] as ExpressionSpecification;
 
 /** Wire row from /api/buses (short keys — see backend bods-client). */
 interface BusWire {
@@ -186,6 +229,52 @@ export function findBus(id: string): [number, number] | null {
   const tr = activeTrackers?.get(id);
   if (!tr) return null;
   return tr.snapped ? [tr.snapX, tr.snapY] : [tr.disp.x, tr.disp.y];
+}
+
+/**
+ * Line filter: grey every bus that is NOT on one of `lines`, keeping on-line
+ * buses their normal red. Passing null or an empty set restores the normal
+ * colouring. Crucially this ONLY recolours — no `setFilter` — so non-matching
+ * buses remain on the map and stay clickable (their detail popup still opens).
+ */
+export function setBusLineFilter(map: MaplibreMap, lines: ReadonlySet<string> | null): void {
+  const hasDots = !!map.getLayer(BUSES_DOTS_LAYER_ID);
+  const hasIcons = !!map.getLayer(BUSES_ICONS_LAYER_ID);
+  if (!lines || lines.size === 0) {
+    if (hasDots) {
+      map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-color', dotsColorNormal());
+      map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-opacity', DOTS_OPACITY_NORMAL);
+    }
+    if (hasIcons) map.setLayoutProperty(BUSES_ICONS_LAYER_ID, 'icon-image', iconImageNormal());
+    return;
+  }
+  // Snapshot to a plain array once — the expressions embed it as a literal set.
+  const arr = [...lines];
+  if (hasDots) {
+    map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-color', dotsColorFiltered(arr));
+    map.setPaintProperty(BUSES_DOTS_LAYER_ID, 'circle-opacity', dotsOpacityFiltered(arr));
+  }
+  if (hasIcons) map.setLayoutProperty(BUSES_ICONS_LAYER_ID, 'icon-image', iconImageFiltered(arr));
+}
+
+/** Sorted (numeric-aware) unique line numbers across the live trackers, for autocomplete. */
+export function listActiveBusLines(): string[] {
+  if (!activeTrackers) return [];
+  const seen = new Set<string>();
+  for (const tr of activeTrackers.values()) {
+    if (tr.line) seen.add(tr.line);
+  }
+  return [...seen].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+}
+
+/** How many live buses are currently running one of `lines` — light UI feedback. */
+export function countActiveBusesOnLines(lines: ReadonlySet<string>): number {
+  if (!activeTrackers || lines.size === 0) return 0;
+  let n = 0;
+  for (const tr of activeTrackers.values()) {
+    if (lines.has(tr.line)) n += 1;
+  }
+  return n;
 }
 
 /** Sanitized keys with a learned route on the server; null until loaded. */
@@ -312,6 +401,12 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
   if (!map.hasImage('bus-icon-parked')) {
     map.addImage('bus-icon-parked', makeBusIcon(PARKED_FILL), { pixelRatio: 2 });
   }
+  // Grey bullet for buses OFF the filtered line(s). The bullets are raster
+  // canvas images (not SDF), so `icon-color` can't recolour them — we swap the
+  // image itself instead.
+  if (!map.hasImage('bus-bullet-dim')) {
+    map.addImage('bus-bullet-dim', makeBusIcon(BUS_DIM_FILL), { pixelRatio: 2 });
+  }
 
   const empty = { type: 'FeatureCollection' as const, features: [] };
   map.addSource(DOTS_SOURCE_ID, { type: 'geojson', data: empty });
@@ -326,9 +421,9 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       source: DOTS_SOURCE_ID,
       maxzoom: TIER_SPLIT_ZOOM,
       paint: {
-        'circle-color': parkedCase(PARKED_FILL, TFL_BUS_RED),
+        'circle-color': dotsColorNormal(),
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 1.5, TIER_SPLIT_ZOOM, 3],
-        'circle-opacity': 0.85,
+        'circle-opacity': DOTS_OPACITY_NORMAL,
         'circle-stroke-color': parkedCase(PARKED_STROKE, TFL_BUS_RED),
         'circle-stroke-width': parkedCase(1, 0),
       },
@@ -342,7 +437,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       source: ICONS_SOURCE_ID,
       minzoom: TIER_SPLIT_ZOOM,
       layout: {
-        'icon-image': parkedCase('bus-icon-parked', 'bus-bullet'),
+        'icon-image': iconImageNormal(),
         'icon-size': ['interpolate', ['linear'], ['zoom'], TIER_SPLIT_ZOOM, 0.62, 16, 1],
         'icon-rotate': ['get', 'bearing'],
         'icon-rotation-alignment': 'map',
@@ -574,7 +669,8 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       const pose = displayOf(tr);
       features.push({
         type: 'Feature' as const,
-        properties: { parked: parkedFlag(tr, now) },
+        // `line` lets the bus line filter recolour dots at low zoom too.
+        properties: { parked: parkedFlag(tr, now), line: tr.line },
         geometry: { type: 'Point' as const, coordinates: [pose.x, pose.y] },
       });
     }

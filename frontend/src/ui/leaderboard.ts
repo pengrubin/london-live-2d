@@ -1,9 +1,10 @@
-// Collapsible top-left leaderboard panel: ranks vehicles by cumulative
-// distance travelled, with Day / Week / Month tabs and a mode row that
-// ranks Trains / Buses / Ships separately. Double-clicking a row flies the
-// map to that vehicle (with a pulse highlight) when it is currently live;
-// otherwise the row briefly shows "not running".
-// Styled by reusing the legend classes plus .leaderboard/.lb-* overrides.
+// Leaderboard view: ranks vehicles by cumulative distance travelled, with
+// Day / Week / Month tabs and a mode row that ranks Trains / Buses / Ships
+// separately. Double-clicking a row flies the map to that vehicle (with a
+// pulse highlight) when it is currently live; otherwise the row briefly shows
+// "not running". Rendered INTO a container supplied by the shared control
+// panel (control-panel.ts) — it no longer owns its own floating panel/header.
+// Styled by reusing the legend classes plus .lb-* overrides.
 
 import { Marker, type Map as MaplibreMap } from 'maplibre-gl';
 
@@ -23,9 +24,6 @@ const MODE_LABEL: Record<Mode, string> = {
   bus: '🚌 Buses',
   ship: '⛴ Ships',
 };
-
-// Phones (portrait) start the panel collapsed so the map stays visible.
-const MOBILE_MEDIA_QUERY = '(max-width: 640px)';
 
 const BUS_CHIP_COLOR = '#DA291C'; // London bus red
 const SHIP_CHIP_COLOR = '#2E86DE';
@@ -88,7 +86,9 @@ function chipColor(row: LeaderboardRow, colorByLine: ReadonlyMap<string, string>
   return FALLBACK_CHIP_COLOR;
 }
 
+/** Build the leaderboard view into `container` (a control-panel section). */
 export function addLeaderboard(
+  container: HTMLElement,
   map: MaplibreMap,
   colorByLine: ReadonlyMap<string, string>,
   locator: VehicleLocator,
@@ -142,17 +142,6 @@ export function addLeaderboard(
     }
   }
 
-  const panel = document.createElement('div');
-  panel.className = 'legend leaderboard';
-  const header = document.createElement('div');
-  header.className = 'legend-header';
-  header.textContent = '🏆 LEADERBOARD';
-  header.addEventListener('click', () => {
-    panel.classList.toggle('collapsed');
-  });
-
-  if (window.matchMedia(MOBILE_MEDIA_QUERY).matches) panel.classList.add('collapsed');
-
   const tabs = document.createElement('div');
   tabs.className = 'lb-tabs';
   const tabByPeriod = new Map<Period, HTMLElement>();
@@ -191,7 +180,7 @@ export function addLeaderboard(
 
   const body = document.createElement('div');
   body.className = 'legend-body lb-body';
-  panel.append(header, tabs, modeTabs, body);
+  container.append(tabs, modeTabs, body);
 
   function render(data: LeaderboardResponse): void {
     body.replaceChildren();
@@ -246,6 +235,4 @@ export function addLeaderboard(
 
   void refresh();
   window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
-
-  map.getContainer().append(panel);
 }

@@ -91,8 +91,57 @@
       .legend-row.off .legend-swatch { background: #444 !important; }
       .legend-swatch { width: 14px; height: 5px; border-radius: 2px; flex: none; }
 
-      /* ── leaderboard panel (reuses legend styling, docks top-left) ── */
-      .leaderboard { left: 10px; right: auto; top: 10px; width: 216px; }
+      /* ── merged control panel (one panel, docks top-left) ──
+         Board / Filter / Lines tabs live here; top-right stays free for the
+         MapLibre zoom + geolocate controls. */
+      .control-panel {
+        left: 10px; right: auto; top: 10px; width: 224px;
+        max-height: calc(100vh - 40px);
+      }
+      .cp-tabs { display: flex; border-bottom: 1px solid #222; }
+      .legend.collapsed .cp-tabs { display: none; }
+      .cp-tab {
+        flex: 1; text-align: center; padding: 6px 0; cursor: pointer; color: #777;
+        font-size: 11px; white-space: nowrap;
+      }
+      .cp-tab:hover { color: #ccc; background: rgba(255,255,255,.05); }
+      .cp-tab.active { color: #fff; box-shadow: inset 0 -2px 0 #6ea8fe; }
+      /* Body is a flex column; only the active section shows and it owns the
+         internal scroll so the shell never grows past its max-height. */
+      .cp-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+      .legend.collapsed .cp-body { display: none; }
+      .cp-section { flex: 1 1 auto; min-height: 0; display: none; flex-direction: column; overflow: hidden; }
+      .cp-section.active { display: flex; }
+      .cp-section .legend-body { flex: 1 1 auto; min-height: 0; }
+
+      /* ── bus line filter (Filter tab) ── */
+      .bf-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 7px; }
+      .bf-hint { color: #888; font-size: 10px; line-height: 1.4; }
+      .bf-input {
+        width: 100%; box-sizing: border-box; background: #101216; color: #ddd;
+        border: 1px solid #333; border-radius: 4px; padding: 5px 7px;
+        font: 12px/1.4 system-ui, sans-serif;
+      }
+      .bf-input:focus { outline: none; border-color: #6ea8fe; }
+      .bf-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+      .bf-chip {
+        display: inline-flex; align-items: center; gap: 4px; background: rgba(218,44,67,.16);
+        border: 1px solid #DA2C43; color: #f2c3c9; border-radius: 10px; padding: 1px 4px 1px 8px;
+        font-size: 11px; font-weight: 600;
+      }
+      .bf-chip-x {
+        background: none; border: none; color: #f2c3c9; cursor: pointer;
+        font-size: 13px; line-height: 1; padding: 0 2px;
+      }
+      .bf-chip-x:hover { color: #fff; }
+      .bf-feedback { color: #9c9; font-size: 10px; font-variant-numeric: tabular-nums; }
+      .bf-clear {
+        align-self: flex-start; background: none; border: 1px solid #333; color: #aaa;
+        border-radius: 4px; padding: 3px 9px; cursor: pointer; font: 10px/1 system-ui, sans-serif;
+      }
+      .bf-clear:hover:not(:disabled) { color: #fff; border-color: #555; }
+      .bf-clear:disabled { opacity: .4; cursor: default; }
+
       .lb-tabs { display: flex; border-bottom: 1px solid #222; }
       .legend.collapsed .lb-tabs { display: none; }
       .lb-tab {
@@ -126,25 +175,22 @@
       }
 
       /* ── phones (portrait) ──
-         Panels start collapsed (see legend.ts / leaderboard.ts) so the map is
-         visible; even when expanded they are capped so they never fully cover
-         the map, and their bodies scroll internally. */
+         The single merged panel starts collapsed (see control-panel.ts) so the
+         map is visible; even when expanded it is capped so it never fully covers
+         the map, and its active section scrolls internally. */
       @media (max-width: 640px) {
-        .legend, .leaderboard {
+        .control-panel {
           max-width: 72vw;
           max-height: 70vh;
           box-sizing: border-box;
         }
-        /* comfortable touch target for the collapsed header bars */
+        /* comfortable touch target for the collapsed header bar */
         .legend-header {
           min-height: 40px;
           display: flex;
           align-items: center;
           box-sizing: border-box;
         }
-        /* keep the top-right legend clear of the geolocate control on phones too */
-        .legend { top: 150px; }
-        .leaderboard { top: 10px; }
         /* Popups are NOT internally scrolled on mobile: with drag-to-pan the
            whole card is reachable by panning the map. Let them size to content
            (no max-height/overflow-y clip); keep a generous width for reading. */
