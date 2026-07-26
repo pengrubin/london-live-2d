@@ -114,6 +114,15 @@
       .cp-section.active { display: flex; }
       .cp-section .legend-body { flex: 1 1 auto; min-height: 0; }
 
+      /* Select all / Unselect all, pinned atop the Lines tab */
+      .legend-actions { display: flex; gap: 6px; padding: 6px 10px; border-bottom: 1px solid #222; flex: none; }
+      .legend-action {
+        flex: 1; background: rgba(255,255,255,.06); color: #bbb;
+        border: 1px solid #333; border-radius: 4px; padding: 3px 0;
+        font: inherit; font-size: 11px; cursor: pointer;
+      }
+      .legend-action:hover { background: rgba(255,255,255,.12); color: #fff; }
+
       /* ── bus line filter (Filter tab) ── */
       .bf-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 7px; }
       .bf-hint { color: #888; font-size: 10px; line-height: 1.4; }

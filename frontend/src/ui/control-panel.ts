@@ -71,10 +71,11 @@ export function addControlPanel(
   }
 
   // Mount each view into its own section. Order is irrelevant to visibility
-  // (tabs drive that) but matches the tab order for readability.
+  // (tabs drive that), but the legend is built before the filter so the filter
+  // can borrow its handle to re-enable the Buses overlay when a filter is set.
   addLeaderboard(sectionByKey.get('board')!, map, colorByLine, locator);
-  addBusFilter(sectionByKey.get('filter')!, map);
-  addLegend(sectionByKey.get('lines')!, map, lines, overlays);
+  const legend = addLegend(sectionByKey.get('lines')!, map, lines, overlays);
+  addBusFilter(sectionByKey.get('filter')!, map, () => legend.ensureOverlayOn('buses'));
 
   activate(DEFAULT_TAB);
   if (window.matchMedia(MOBILE_MEDIA_QUERY).matches) panel.classList.add('collapsed');

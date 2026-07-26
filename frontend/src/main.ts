@@ -175,7 +175,7 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
     // One merged panel (top-left): Board / Filter / Lines tabs. Leaving the
     // top-right corner free for MapLibre's zoom + geolocate controls.
     const overlays = [
-      { label: 'Buses', layerIds: [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID] },
+      { label: 'Buses', layerIds: [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID], key: 'buses' },
       { label: 'National Rail', layerIds: [NR_TRAINS_LAYER_ID] },
       { label: 'Aircraft', layerIds: [AIRCRAFT_LAYER_ID] },
       { label: 'Ships', layerIds: [VESSELS_LAYER_ID] },
