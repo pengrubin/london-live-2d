@@ -4,6 +4,7 @@
 // panel (control-panel.ts) — it no longer owns its own floating panel/header.
 
 import type { Map as MaplibreMap, FilterSpecification } from 'maplibre-gl';
+import { isMobile, isPowerSaver, onPowerSaverChange, setPowerSaver } from '../util/lifecycle';
 
 const FILTERED_LAYERS = ['transit-lines-casing', 'transit-lines-line', 'trains-dots'];
 
@@ -165,4 +166,47 @@ export function addLegend(
       overlayRows.push(entry);
     }
   }
+
+  addBatterySaver(body);
+}
+
+/**
+ * Battery-saver preference row (bottom of the Lines tab). Distinct from the
+ * line/overlay toggles above — it doesn't touch any layer, it flips the
+ * power-saver lifecycle: pause polling while the map is hidden, and (on phones)
+ * ease the animation cadence. Defaults on for mobile, off for desktop.
+ */
+function addBatterySaver(body: HTMLElement): void {
+  const wrap = document.createElement('div');
+  wrap.className = 'legend-saver';
+
+  const row = document.createElement('div');
+  row.className = 'legend-row legend-saver-row';
+
+  const label = document.createElement('span');
+  label.className = 'legend-saver-label';
+  label.textContent = '🔋 Battery saver';
+
+  const state = document.createElement('span');
+  state.className = 'legend-saver-state';
+
+  const hint = document.createElement('div');
+  hint.className = 'legend-saver-hint';
+  hint.textContent = isMobile
+    ? 'Pauses updates when the map is hidden, and eases the animation to save power.'
+    : 'Pauses updates when this tab is hidden. (Off by default on desktop.)';
+
+  function paint(): void {
+    const on = isPowerSaver();
+    row.classList.toggle('off', !on);
+    state.textContent = on ? 'On' : 'Off';
+  }
+
+  row.addEventListener('click', () => setPowerSaver(!isPowerSaver()));
+  onPowerSaverChange(paint);
+  paint();
+
+  row.append(label, state);
+  wrap.append(row, hint);
+  body.append(wrap);
 }

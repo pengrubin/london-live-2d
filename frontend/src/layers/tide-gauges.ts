@@ -8,6 +8,7 @@ import {
   type Map as MaplibreMap,
   type MapLayerMouseEvent,
 } from 'maplibre-gl';
+import { registerPoll } from '../util/lifecycle';
 
 const DOTS_LAYER_ID = 'tide-gauges-dots';
 const ARROWS_LAYER_ID = 'tide-gauges-arrows';
@@ -187,5 +188,5 @@ export async function startTideGauges(map: MaplibreMap): Promise<void> {
   });
 
   await poll();
-  window.setInterval(() => void poll(), POLL_INTERVAL_MS);
+  registerPoll(() => void poll(), POLL_INTERVAL_MS);
 }

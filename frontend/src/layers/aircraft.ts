@@ -7,7 +7,8 @@ import {
   type Map as MaplibreMap,
   type MapLayerMouseEvent,
 } from 'maplibre-gl';
-import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
+import { isLayerShown, makeRenderGate } from '../util/render-gate';
+import { registerPoll, symbolTierIntervalMs } from '../util/lifecycle';
 import { injectPopupStyles } from '../ui/station-popup';
 import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
 
@@ -391,7 +392,7 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
     }
   }
 
-  const renderGate = makeRenderGate(SYMBOL_TIER_INTERVAL_MS);
+  const renderGate = makeRenderGate(symbolTierIntervalMs);
   let lastWasEmpty = false;
   // Current displayed [lon,lat] per aircraft hex — rebuilt each render so the
   // selected aircraft's detail popup can follow it between the 5 s polls.
@@ -513,6 +514,6 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
   });
 
   await poll();
-  window.setInterval(() => void poll(), POLL_INTERVAL_MS);
+  registerPoll(() => void poll(), POLL_INTERVAL_MS);
   requestAnimationFrame(render);
 }

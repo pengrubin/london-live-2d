@@ -6,7 +6,8 @@ import type { LineBranches, Prediction, Train } from './types';
 import { inferTrains } from './position-inference';
 import { TrainInterpolator } from './interpolator';
 import { VehiclePopup } from '../ui/vehicle-popup';
-import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
+import { isLayerShown, makeRenderGate } from '../util/render-gate';
+import { registerPoll, symbolTierIntervalMs } from '../util/lifecycle';
 
 const POLL_INTERVAL_MS = 10_000;
 const SOURCE_ID = 'trains';
@@ -184,7 +185,7 @@ export async function startTrains(map: MaplibreMap): Promise<TrainsHandle> {
     }
   }
 
-  const renderGate = makeRenderGate(SYMBOL_TIER_INTERVAL_MS);
+  const renderGate = makeRenderGate(symbolTierIntervalMs);
   let lastFrame = performance.now();
   function frame(now: number): void {
     if (stopped) return;
@@ -204,7 +205,8 @@ export async function startTrains(map: MaplibreMap): Promise<TrainsHandle> {
   }
 
   await poll();
-  pollTimer = window.setInterval(() => void poll(), POLL_INTERVAL_MS);
+  // Poller is managed by the battery-saver lifecycle (pauses while hidden).
+  registerPoll(() => void poll(), POLL_INTERVAL_MS);
   rafId = requestAnimationFrame(frame);
 
   return {

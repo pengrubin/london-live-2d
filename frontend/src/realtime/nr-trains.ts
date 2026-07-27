@@ -10,7 +10,8 @@ import {
   type MapLayerMouseEvent,
 } from 'maplibre-gl';
 import { pointAtFraction, polylineLength, type LngLat } from './geometry';
-import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
+import { isLayerShown, makeRenderGate } from '../util/render-gate';
+import { registerPoll, symbolTierIntervalMs } from '../util/lifecycle';
 import { appendRankLine } from '../ui/rank-line';
 import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
 
@@ -389,7 +390,7 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
     }
   }
 
-  const renderGate = makeRenderGate(SYMBOL_TIER_INTERVAL_MS);
+  const renderGate = makeRenderGate(symbolTierIntervalMs);
   let lastWasEmpty = false;
   function render(frameNow: number): void {
     if (!renderGate(frameNow) || !isLayerShown(map, NR_TRAINS_LAYER_ID)) {
@@ -487,7 +488,7 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
   });
 
   await pollNextBoard();
-  window.setInterval(() => {
+  registerPoll(() => {
     if (!boardsUnavailable || hubIndex === 0) void pollNextBoard();
   }, BOARD_STAGGER_MS);
   requestAnimationFrame(render);

@@ -14,11 +14,18 @@ export const LOW_ZOOM_TIER_INTERVAL_MS = 1_000;
 /**
  * Returns a gate that opens at most once per `minIntervalMs`.
  * Call it with the current time (rAF timestamp or Date.now(), consistently).
+ *
+ * `minIntervalMs` may be a getter so callers can vary the cadence at runtime
+ * (e.g. the mobile power-saver drops the symbol tiers to ~3 Hz) — it is read
+ * on every check.
  */
-export function makeRenderGate(minIntervalMs: number): (now: number) => boolean {
+export function makeRenderGate(
+  minIntervalMs: number | (() => number),
+): (now: number) => boolean {
+  const getMin = typeof minIntervalMs === 'function' ? minIntervalMs : (): number => minIntervalMs;
   let lastOpenedAt = -Infinity;
   return (now: number): boolean => {
-    if (now - lastOpenedAt < minIntervalMs) return false;
+    if (now - lastOpenedAt < getMin()) return false;
     lastOpenedAt = now;
     return true;
   };

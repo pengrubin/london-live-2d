@@ -10,6 +10,7 @@ import {
 } from 'maplibre-gl';
 import { metersBetween, type LngLat } from '../realtime/geometry';
 import { isLayerShown } from '../util/render-gate';
+import { registerPoll } from '../util/lifecycle';
 import { appendRankLine } from '../ui/rank-line';
 import { dimensionsLine, fetchShipPhoto, flagLine } from '../ui/ship-info';
 import { injectPopupStyles } from '../ui/station-popup';
@@ -332,7 +333,7 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
   });
 
   await poll();
-  window.setInterval(() => void poll(), POLL_INTERVAL_MS);
+  registerPoll(() => void poll(), POLL_INTERVAL_MS);
   requestAnimationFrame(render);
 }
 

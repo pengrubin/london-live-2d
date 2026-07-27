@@ -4,6 +4,7 @@
 // lands. Defaults to hidden so the map isn't washed out on dry days.
 
 import type { Map as MaplibreMap, RasterTileSource } from 'maplibre-gl';
+import { registerPoll } from '../util/lifecycle';
 
 export const RAIN_RADAR_LAYER_ID = 'rain-radar';
 const SOURCE_ID = 'rain-radar';
@@ -76,5 +77,5 @@ export async function startRainRadar(map: MaplibreMap): Promise<void> {
     }
   }
 
-  window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
+  registerPoll(() => void refresh(), REFRESH_INTERVAL_MS);
 }

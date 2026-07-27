@@ -30,7 +30,8 @@ import {
   type Map as MaplibreMap,
   type MapLayerMouseEvent,
 } from 'maplibre-gl';
-import { isLayerShown, makeRenderGate, SYMBOL_TIER_INTERVAL_MS } from '../util/render-gate';
+import { isLayerShown, makeRenderGate } from '../util/render-gate';
+import { registerPoll, symbolTierIntervalMs } from '../util/lifecycle';
 import { appendRankLine } from '../ui/rank-line';
 import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
 
@@ -734,7 +735,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
   }
 
   /** Symbol tier: viewport subset only, tracker-eased, capped at ~15 Hz. */
-  const iconsGate = makeRenderGate(SYMBOL_TIER_INTERVAL_MS);
+  const iconsGate = makeRenderGate(symbolTierIntervalMs);
   let iconsWereEmpty = true;
   function renderIcons(frameNow: number): void {
     if (!iconsGate(frameNow) || !isLayerShown(map, BUSES_ICONS_LAYER_ID)) {
@@ -840,7 +841,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
   void loadRouteIndex(); // fire-and-forget: snapping activates when it lands
   await poll();
   renderDots();
-  window.setInterval(() => void poll(), POLL_INTERVAL_MS);
-  window.setInterval(renderDots, DOTS_REFRESH_MS);
+  registerPoll(() => void poll(), POLL_INTERVAL_MS);
+  registerPoll(renderDots, DOTS_REFRESH_MS);
   requestAnimationFrame(renderIcons);
 }

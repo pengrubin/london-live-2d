@@ -8,6 +8,7 @@ import {
   type Map as MaplibreMap,
   type MapLayerMouseEvent,
 } from 'maplibre-gl';
+import { registerPoll } from '../util/lifecycle';
 
 export const ROAD_DISRUPTIONS_FILL_LAYER_ID = 'road-disruptions-fill';
 export const ROAD_DISRUPTIONS_OUTLINE_LAYER_ID = 'road-disruptions-outline';
@@ -246,5 +247,5 @@ export async function startRoadDisruptions(map: MaplibreMap): Promise<void> {
   wireInteractions(map, ROAD_DISRUPTIONS_FILL_LAYER_ID);
 
   await poll();
-  window.setInterval(() => void poll(), POLL_INTERVAL_MS);
+  registerPoll(() => void poll(), POLL_INTERVAL_MS);
 }

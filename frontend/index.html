@@ -91,6 +91,15 @@
       .legend-row.off .legend-swatch { background: #444 !important; }
       .legend-swatch { width: 14px; height: 5px; border-radius: 2px; flex: none; }
 
+      /* Battery-saver preference row, pinned to the bottom of the Lines tab */
+      .legend-saver { border-top: 1px solid #222; margin-top: 5px; padding-top: 3px; }
+      .legend-saver-row { justify-content: space-between; }
+      .legend-saver-row.off { opacity: 1; } /* keep readable when Off, unlike line rows */
+      .legend-saver-label { color: #cfd3d8; }
+      .legend-saver-state { font-size: 11px; color: #7fd18b; font-weight: 600; }
+      .legend-saver-row.off .legend-saver-state { color: #777; font-weight: 400; }
+      .legend-saver-hint { padding: 1px 10px 6px; color: #777; font-size: 10px; line-height: 1.35; white-space: normal; }
+
       /* ── merged control panel (one panel, docks top-left) ──
          Board / Filter / Lines tabs live here; top-right stays free for the
          MapLibre zoom + geolocate controls. */
