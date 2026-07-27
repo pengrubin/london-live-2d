@@ -17,9 +17,13 @@ Greater-London scale. Author: **PENG**.
 | 🚆 National Rail (431 stations) | Darwin via Rail Data Marketplace | Inferred from departure boards + calling points, pathed over a baked station-to-station rail graph |
 | 🚌 Buses (~6,700 live) | DfT Bus Open Data (SIRI-VM) | Real GPS + per-vehicle α-β-style tracker; **self-learning route geometry** snaps buses to their true paths (auto-retrains daily from collected traces) |
 | ⛴ Riverboats (RB1/RB4/RB6/Woolwich Ferry) | TfL | Countdown inference along the OSM Thames centreline, with curved pier approaches |
+| 🚡 Cable Car · 🚊 Tram | TfL Unified API | Same countdown inference as the rail modes, animated along real OSM geometry |
 | ⚓ Ships | AIS (aisstream.io) | Real positions; typed icons (cargo/tanker/passenger/tug); detail cards show dimensions, flag and a photo — ship photographs courtesy of [VesselFinder](https://www.vesselfinder.com), fetched per-MMSI |
 | ✈️ Aircraft & helicopters | ADS-B (airplanes.live) | Real positions, dead-reckoned between polls; click for route lookup and an airframe photo via [Planespotters.net](https://www.planespotters.net) (with photographer attribution) |
 | 📷 JamCams (878 traffic cameras) | TfL | Click for a live still, auto-refreshing |
+| 🚧 Roadworks | TfL road disruptions | Live roadworks, closures and collisions as impact polygons + markers, refreshed every 2 min |
+| 🌊 Tide gauges | Environment Agency | Live water levels along the tidal Thames (Teddington → Tilbury) |
+| 🌧 Rain radar | RainViewer | Latest observed rainfall radar frame as a raster overlay |
 
 Train detail cards also show a representative photo of the line's rolling stock,
 bundled from [Wikimedia Commons](https://commons.wikimedia.org) (CC-licensed —
@@ -27,14 +31,37 @@ sources, licenses and authors in [docs/PHOTO_CREDITS.md](docs/PHOTO_CREDITS.md))
 
 ![Click a train for its calling pattern, platform and delay status](docs/images/train-detail.png)
 
-## Interactions
+## Using the map
 
-- **Hover** any vehicle, station or line for a quick tooltip (shared corridors list every line).
-- **Click** vehicles for detail cards that follow them: destination, next stop countdown,
-  calling pattern, platform, delay reason, vessel name/speed for boats.
-- **Click** stations for live departure boards + zone, facilities, crowding, lift alerts
-  and nearby cycle-hire docks.
-- **Legend** toggles every line and overlay.
+**Control panel** (top-left, three tabs):
+
+- **🏆 Board** — a live leaderboard ranking vehicles by cumulative distance travelled, over
+  **Day / Week / Month**, with separate **Trains / Buses / Ships** boards. Double-click any row
+  to fly to that vehicle (if it's currently running).
+- **🚌 Filter** — type a bus route number (e.g. `24`) to spotlight it: matching buses stay
+  **red** while every other bus **greys out but stays on the map and clickable**. Add several
+  routes as chips. With the Buses overlay switched **off**, the filter instead shows *only* the
+  matched routes and hides the rest.
+- **🗺 Lines** — toggle any line or overlay on/off; **Select all / Unselect all** flips them
+  all at once. Cable Car and Tram sit last (rarely used).
+
+On phones the panel starts collapsed — tap the header to open it, and tapping the map collapses
+it again so you can see the map.
+
+**Hover** any vehicle, station or line for a quick tooltip (shared corridors list every line).
+**Click** a vehicle for a detail card that follows it (destination, next-stop countdown, calling
+pattern, platform, delay reason; name/speed for boats). **Click** a station for its live
+departure board, zone, facilities, crowding, lift alerts and nearby cycle-hire docks.
+
+## Icons at a glance
+
+- **Trains** — a dot in the line's official colour (Central red, Victoria light-blue, …).
+- **Buses** — a red route bullet oriented to its heading; **black** = parked; **grey** = greyed
+  out by an active route filter.
+- **Ships** — a hull icon coloured by AIS vessel type: 🔵 passenger · 🟡 cargo · 🔴 tanker ·
+  🟢 fishing · 🟣 pleasure craft · ⚪ tug / pilot / SAR / unknown.
+- **Aircraft** — a plane (helicopters too), pointing along its track.
+- **📷 JamCam** cameras · **🚧 roadworks** · **🌊 tide gauges** — click any marker for details.
 
 ![Oriented bus bullets on street geometry](docs/images/buses.png)
 ![AIS ships and traffic cameras along the Thames](docs/images/ships-cams.png)
