@@ -141,6 +141,13 @@
         font: 12px/1.4 system-ui, sans-serif;
       }
       .bf-input:focus { outline: none; border-color: #6ea8fe; }
+      /* 16px is WebKit's threshold: focusing an input below it auto-zooms the
+         page, and the zoom is unrecoverable here because MapLibre swallows the
+         pinch gesture that would undo it. Touch pointers only — desktop has no
+         auto-zoom, and 12px keeps the input in scale with the rest of the panel. */
+      @media (pointer: coarse) {
+        .bf-input { font-size: 16px; }
+      }
       .bf-chips { display: flex; flex-wrap: wrap; gap: 5px; }
       .bf-chip {
         display: inline-flex; align-items: center; gap: 4px; background: rgba(218,44,67,.16);
