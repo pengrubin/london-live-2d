@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { constants as zlibConstants } from 'node:zlib';
+import compress from '@fastify/compress';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -50,6 +52,25 @@ const SCRIPTS_DIR = join(REPO_ROOT, 'scripts');
 /** Builds the Fastify app with all plugins and routes; exported for tests (inject()). */
 export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
+
+  // Registered first so it covers every route AND the static roots. Railway
+  // bills egress by the byte and these payloads are pure JSON: /api/arrivals is
+  // ~7.4 MB raw vs ~300 KB gzipped (24x), /api/buses ~840 KB raw. Cloudflare
+  // already compresses CDN→browser, so this buys nothing for the user — it is
+  // purely the origin→CDN leg, which was 86% of the bill while uncompressed.
+  //
+  // Brotli quality 4 rather than zlib's default 11: q11 burns seconds of CPU on
+  // a multi-MB body, and this re-runs on every cache miss. Measured on a 4.97 MB
+  // /api/arrivals body — br q4: 154 KB in 15 ms, gzip: 210 KB in 22 ms — so q4
+  // is both smaller and faster than gzip here; the CPU worry only applies to q11.
+  // Only mime-db "compressible" types are touched, so the pmtiles basemap
+  // (application/octet-stream, already compressed internally and served by range
+  // request) is left alone.
+  const BROTLI_QUALITY = 4;
+  await app.register(compress, {
+    encodings: ['br', 'gzip', 'deflate'],
+    brotliOptions: { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } },
+  });
 
   // CORS_ORIGIN may be a single origin or a comma-separated list.
   const corsOrigins = config.corsOrigin
