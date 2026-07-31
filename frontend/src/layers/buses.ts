@@ -12,11 +12,17 @@
 // short capped drift — is what keeps buses visibly moving between 15 s polls.
 // Route snapping: learned route polylines (backend learner, keyed by
 // operator:line:direction) are lazy-loaded from /api/bus-routes-index +
-// /bus-routes/learned/<key>.json. A bus with a learned route renders at its
-// projection onto the polyline while the raw eased position stays within
-// SNAP_ON_M (released past SNAP_OFF_M — hysteresis, per-bus state), and its
-// icon follows the polyline tangent. The raw motion model is untouched —
-// snapping is a pure display transform; buses without routes render as before.
+// /bus-routes/learned/<key>.json. Snap engagement is hysteresis on the RAW
+// eased position (within SNAP_ON_M, released past SNAP_OFF_M — per-bus state);
+// while snapped, the displayed pose comes from a 1-D Kalman filter running in
+// arc-length space along the polyline (realtime/bus-kalman.ts): fixes are
+// projected to an arc length and folded in weighted by per-route measurement
+// noise (quality.meanResidualM baked by the learner), so one drifted fix can
+// no longer hijack speed or heading, and between fixes the bus advances ALONG
+// the route instead of straight-line overshooting corners. The raw motion
+// model is untouched and keeps running — it still decides snap on/off, seeds
+// the filter, and renders every bus without a learned route exactly as
+// before. Full design + parameters: docs/BUS_KALMAN.md.
 // Parked indicator: each tracker keeps lastMovedAt, refreshed whenever the bus
 // drifts > 60 m from its movement anchor; > 20 min without that (lenient — a
 // worst-case jam stays red) flags parked:1 and both tiers recolor the bus
@@ -32,6 +38,17 @@ import {
 } from 'maplibre-gl';
 import { isLayerShown, makeRenderGate } from '../util/render-gate';
 import { registerPoll, symbolTierIntervalMs } from '../util/lifecycle';
+import {
+  type ArcPoint,
+  type BusKfState,
+  cumulativeLengthsM,
+  kfInit,
+  kfStep,
+  kfTargetS,
+  measurementVariance,
+  pointAtArclen,
+  tangentSpeedMs,
+} from '../realtime/bus-kalman';
 import { appendRankLine } from '../ui/rank-line';
 import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
 
@@ -155,6 +172,10 @@ interface BusWire {
 interface LearnedRoute {
   xs: Float64Array;
   ys: Float64Array;
+  /** Cumulative arc length at each vertex, m — the filter's 1-D coordinate. */
+  cum: Float64Array;
+  /** Kalman measurement variance R, m² — from the learner's meanResidualM. */
+  measVar: number;
 }
 
 interface RouteProjection {
@@ -212,6 +233,16 @@ interface BusTracker {
   snapX: number;
   snapY: number;
   snapBearing: number;
+  /** Arc-length Kalman filter — non-null only while snapped with a fix that
+   * projects onto the route (docs/BUS_KALMAN.md). */
+  kf: BusKfState | null;
+  /** Eased displayed arc length, m — the 1-D analogue of `disp`. */
+  kfDispS: number;
+  /** Segment the display last landed on — pointAtArclen walk hint. */
+  kfSeg: number;
+  /** lastFix.t of a failed seed attempt — initFilter's full-polyline scan is
+   * pointless until a NEW fix arrives, so don't repeat it per tick. */
+  kfSeedFixT: number;
 }
 
 const esc = (s: string): string =>
@@ -355,16 +386,31 @@ function requestRoute(fileKey: string): void {
     try {
       const res = await fetch(`/bus-routes/learned/${fileKey}.json`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { poly?: [number, number][] };
+      const body = (await res.json()) as {
+        poly?: [number, number][];
+        quality?: { meanResidualM?: number };
+      };
       const poly = body.poly;
       if (!Array.isArray(poly) || poly.length < 2) throw new Error('bad poly');
       const xs = new Float64Array(poly.length);
       const ys = new Float64Array(poly.length);
       for (let i = 0; i < poly.length; i += 1) {
-        xs[i] = poly[i][0] * M_PER_DEG_LON;
-        ys[i] = poly[i][1] * M_PER_DEG_LAT;
+        const lon = poly[i][0];
+        const lat = poly[i][1];
+        // Reject the whole route on one bad vertex: a single NaN would poison
+        // the cumulative arc-length sum from that vertex on, and NaN defeats
+        // the filter's gate comparisons (every NaN compare is false) — far
+        // worse than simply rendering this route's buses unsnapped.
+        if (!Number.isFinite(lon) || !Number.isFinite(lat)) throw new Error('bad vertex');
+        xs[i] = lon * M_PER_DEG_LON;
+        ys[i] = lat * M_PER_DEG_LAT;
       }
-      routeCache.set(fileKey, { xs, ys });
+      routeCache.set(fileKey, {
+        xs,
+        ys,
+        cum: cumulativeLengthsM(xs, ys),
+        measVar: measurementVariance(body.quality?.meanResidualM),
+      });
     } catch {
       routeCache.set(fileKey, 'absent');
     }
@@ -399,6 +445,11 @@ function projectRange(
     }
   }
   return best;
+}
+
+/** Arc length (m) of a projection: vertex cumulative + distance along its segment. */
+function arclenAt(route: LearnedRoute, proj: RouteProjection): number {
+  return route.cum[proj.seg] + Math.hypot(proj.x - route.xs[proj.seg], proj.y - route.ys[proj.seg]);
 }
 
 /** Velocity along reported bearing at the fallback speed; zero when no bearing. */
@@ -560,6 +611,10 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
         snapX: 0,
         snapY: 0,
         snapBearing: 0,
+        kf: null,
+        kfDispS: 0,
+        kfSeg: 0,
+        kfSeedFixT: 0,
       });
       return;
     }
@@ -574,6 +629,8 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       existing.route = null;
       existing.snapped = false;
       existing.snapSeg = -1;
+      existing.kf = null; // the filter's s-space died with the old polyline
+      existing.kfSeedFixT = 0; // new polyline: the same fix may now seed fine
     }
     if (bus.t !== existing.lastFix.t) {
       existing.prevFix = existing.lastFix;
@@ -587,6 +644,43 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
         existing.lastMovedAt = now;
         existing.moveRef.x = bus.x;
         existing.moveRef.y = bus.y;
+      }
+      // Kalman measurement update: project the new fix (not the eased display)
+      // onto the route and fold its arc length into the filter. Off-route
+      // fixes are simply not folded in — if the bus is genuinely leaving the
+      // route, the raw-position hysteresis releases the snap shortly after.
+      const route = existing.route;
+      if (existing.kf !== null && route !== null) {
+        const fx = bus.x * M_PER_DEG_LON;
+        const fy = bus.y * M_PER_DEG_LAT;
+        let proj = projectRange(
+          route,
+          fx,
+          fy,
+          existing.kfSeg - SNAP_LOCAL_WINDOW,
+          existing.kfSeg + SNAP_LOCAL_WINDOW,
+        );
+        if (proj === null || proj.dist > SNAP_OFF_M) {
+          proj = projectRange(route, fx, fy, 0, route.xs.length);
+        }
+        if (proj !== null && proj.dist <= SNAP_OFF_M) {
+          const zS = arclenAt(route, proj);
+          if (kfStep(existing.kf, zS, bus.t, route.measVar) === 'reset') {
+            // Persistent disagreement is a real relocation, not noise —
+            // re-seed at the fix. Speed comes from the RAW two-fix model
+            // (its fix pair is post-relocation by now, so it is fresh), NOT
+            // the filter's own v, which is the estimate that just produced
+            // the consecutive rejections.
+            const v0 = tangentSpeedMs(
+              route.xs,
+              route.ys,
+              proj.seg,
+              existing.velLon * M_PER_DEG_LON,
+              existing.velLat * M_PER_DEG_LAT,
+            );
+            existing.kf = kfInit(zS, v0, bus.t);
+          }
+        }
       }
     }
     // Without a track-derived velocity the reported Bearing is the best
@@ -629,7 +723,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       tr.rotRef.x = tr.disp.x;
       tr.rotRef.y = tr.disp.y;
     }
-    updateSnap(tr, now);
+    updateSnap(tr, now, dtS);
   }
 
   /** Attach a learned route to the tracker once index + geometry are ready. */
@@ -643,16 +737,52 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
     if (cached !== 'pending' && cached !== 'absent') tr.route = cached;
   }
 
+  /** Scratch for pointAtArclen — per-tick path, keep it allocation-free. */
+  const arcScratch: ArcPoint = { x: 0, y: 0, seg: 0, bearing: 0 };
+
   /**
-   * Display-only route snapping with hysteresis: project the raw eased
-   * position onto the learned polyline (local window around the last hit,
-   * periodic full re-search), snap under SNAP_ON_M, release past SNAP_OFF_M.
+   * Seed the arc-length filter from the last real fix (state time = fix time,
+   * matching kfStep's time base — never the eased display position, which
+   * lags and would bake easing artefacts into the state).
    */
-  function updateSnap(tr: BusTracker, now: number): void {
+  function initFilter(tr: BusTracker, route: LearnedRoute, now: number): void {
+    const fx = tr.lastFix.x * M_PER_DEG_LON;
+    const fy = tr.lastFix.y * M_PER_DEG_LAT;
+    const proj = projectRange(route, fx, fy, 0, route.xs.length);
+    if (proj === null || proj.dist > SNAP_OFF_M) return; // fix off-route: stay legacy
+    const s0 = arclenAt(route, proj);
+    // Signed seed speed: the raw model's velocity projected onto the local
+    // tangent — negative when the polyline happens to oppose travel direction.
+    const v0 = tangentSpeedMs(
+      route.xs,
+      route.ys,
+      proj.seg,
+      tr.velLon * M_PER_DEG_LON,
+      tr.velLat * M_PER_DEG_LAT,
+    );
+    tr.kf = kfInit(s0, v0, tr.lastFix.t);
+    // Start the displayed arc length at the extrapolated target so a freshly
+    // snapped bus doesn't glide in — mirrors how ingest() seeds `disp`.
+    const total = route.cum[route.cum.length - 1];
+    tr.kfDispS = Math.max(0, Math.min(total, kfTargetS(tr.kf, now, MAX_EXTRAPOLATION_S)));
+    tr.kfSeg = proj.seg;
+  }
+
+  /**
+   * Display-only route snapping. Hysteresis is unchanged from the pre-filter
+   * design and still judged on the RAW eased position (local window around the
+   * last hit, periodic full re-search; snap under SNAP_ON_M, release past
+   * SNAP_OFF_M) — the filter never gets to vote on its own engagement.
+   * While snapped, the displayed pose comes from the arc-length Kalman filter:
+   * ease the displayed arc length toward the extrapolated state (same feel as
+   * the raw model's ease-toward-target), then resolve it to a point + tangent.
+   */
+  function updateSnap(tr: BusTracker, now: number, dtS: number): void {
     resolveRoute(tr);
     const route = tr.route;
     if (route === null) {
       tr.snapped = false;
+      tr.kf = null;
       return;
     }
     const px = tr.disp.x * M_PER_DEG_LON;
@@ -668,18 +798,51 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
     }
     if (proj === null) {
       tr.snapped = false;
+      tr.kf = null;
       return;
     }
     tr.snapSeg = proj.seg;
     if (!tr.snapped && proj.dist < SNAP_ON_M) tr.snapped = true;
     else if (tr.snapped && proj.dist > SNAP_OFF_M) tr.snapped = false;
-    if (!tr.snapped) return;
-    tr.snapX = proj.x / M_PER_DEG_LON;
-    tr.snapY = proj.y / M_PER_DEG_LAT;
+    if (!tr.snapped) {
+      tr.kf = null;
+      return;
+    }
+    // Seeding does a full-polyline scan of lastFix — memoize failures on the
+    // fix timestamp so the scan reruns only when a NEW fix could change it.
+    if (tr.kf === null && tr.lastFix.t !== tr.kfSeedFixT) {
+      initFilter(tr, route, now);
+      if (tr.kf === null) tr.kfSeedFixT = tr.lastFix.t;
+    }
+    const kf = tr.kf;
+    if (kf === null) {
+      // Filter couldn't seed (fix projects off-route while the eased position
+      // is on it — rare, transient): legacy behaviour, snap to the projection.
+      tr.snapX = proj.x / M_PER_DEG_LON;
+      tr.snapY = proj.y / M_PER_DEG_LAT;
+      const diff = Math.abs(((proj.bearing - tr.bearingDisp + 540) % 360) - 180);
+      tr.snapBearing = diff > 90 ? (proj.bearing + 180) % 360 : proj.bearing;
+      return;
+    }
+    const total = route.cum[route.cum.length - 1];
+    const target = Math.max(0, Math.min(total, kfTargetS(kf, now, MAX_EXTRAPOLATION_S)));
+    const gap = target - tr.kfDispS;
+    if (Math.abs(gap) > SNAP_DISTANCE_M) {
+      tr.kfDispS = target; // too far to glide — jump, like the raw model
+    } else {
+      const alpha = 1 - Math.exp(-dtS / EASE_TAU_S);
+      const step = gap * alpha;
+      const maxStep = MAX_CATCHUP_SPEED_MS * dtS;
+      tr.kfDispS += Math.abs(step) > maxStep ? Math.sign(gap) * maxStep : step;
+    }
+    pointAtArclen(route.xs, route.ys, route.cum, tr.kfDispS, tr.kfSeg, arcScratch);
+    tr.kfSeg = arcScratch.seg;
+    tr.snapX = arcScratch.x / M_PER_DEG_LON;
+    tr.snapY = arcScratch.y / M_PER_DEG_LAT;
     // The polyline tangent is bidirectional — keep the half-plane that agrees
     // with the motion-derived heading so buses never render nose-backwards.
-    const diff = Math.abs(((proj.bearing - tr.bearingDisp + 540) % 360) - 180);
-    tr.snapBearing = diff > 90 ? (proj.bearing + 180) % 360 : proj.bearing;
+    const diff = Math.abs(((arcScratch.bearing - tr.bearingDisp + 540) % 360) - 180);
+    tr.snapBearing = diff > 90 ? (arcScratch.bearing + 180) % 360 : arcScratch.bearing;
   }
 
   /** parked flag for feature properties: 1 after PARKED_AFTER_MS without movement. */
