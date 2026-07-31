@@ -22,11 +22,22 @@
 
 /**
  * Process noise spectral density q, m²/s³ (continuous white-noise acceleration
- * model). Calibrated so that after a typical 80 s fix gap the filter admits
- * σ_v ≈ √(q·80) ≈ 4 m/s of speed change — a bus caught by a red light or
- * released from a stop. Larger q = trust fixes more; smaller = trust motion.
+ * model). London buses are stop-and-go — a stop every 300-400 m means speed
+ * swings the FULL 0↔8-13 m/s range within a single 20-30 s fix gap, so that
+ * swing must be statistically unsurprising: σ_v(25 s) = √(q·25) ≈ 7 m/s ⇒
+ * q ≈ 2. Larger q = trust fixes more; smaller = trust motion more.
+ *
+ * Field revision 2026-07-31: the initial 0.2 (derived as σ_v(80 s) ≈ 4 m/s,
+ * i.e. a smooth-cruising model over the AVERAGE fix cadence) made the 3σ gate
+ * reject honest braking/departure fixes — simulated stop-and-go showed 20-36%
+ * of fixes gated, and in production every bus stop triggered gate→reset
+ * cycles that displayed as fleet-wide surge-and-stall (buses sailing past
+ * stops on stale speed, snapping back on reset, then sprinting to catch up).
+ * At q = 2 the same simulations gate zero honest fixes, at 8 AND 13 m/s
+ * cruise speeds. The lost smoothing is acceptable: the filter's real jobs
+ * (along-route motion, tangent heading, teleport gating) don't depend on it.
  */
-export const KF_PROCESS_NOISE_M2_S3 = 0.2;
+export const KF_PROCESS_NOISE_M2_S3 = 2;
 /** Innovation gate, in σ of the innovation variance: reject beyond 3σ (~99.7%). */
 export const KF_GATE_SIGMA = 3;
 /** Consecutive gated fixes before the caller should re-seed the filter — the
