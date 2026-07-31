@@ -100,8 +100,8 @@ All in `bus-kalman.ts`, each with the derivation in a comment:
 
 | Parameter | Value | Why this value |
 |---|---|---|
-| `KF_PROCESS_NOISE_M2_S3` (q) | 0.2 m²/s³ | Continuous white-noise-acceleration model. Calibrated so a typical 80 s fix gap admits σ_v = √(q·80) ≈ 4 m/s of speed change — a bus caught by / released from a red light. Raise to trust fixes more, lower to trust motion more. |
-| `KF_GATE_SIGMA` | 3 | Standard 3σ innovation gate (~99.7% of honest fixes pass). The gate widens with elapsed time automatically — measured on a settled filter (R = 15²): half-width ≈ 140 m after a 20 s gap, ≈ 1.2 km after 120 s. Long gaps legitimately admit more, so only genuine teleports get gated. |
+| `KF_PROCESS_NOISE_M2_S3` (q) | 2 m²/s³ | Continuous white-noise-acceleration model. London buses are stop-and-go (a stop every 300–400 m): speed swings the full 0↔8–13 m/s within one 20–30 s fix gap, so σ_v(25 s) = √(q·25) ≈ 7 m/s ⇒ q ≈ 2. **Field-revised 2026-07-31** from 0.2 (a smooth-cruising derivation over the average 80 s cadence): the tight model made the 3σ gate reject 20–36% of honest braking/departure fixes in stop-and-go simulation, which in production showed as fleet-wide surge-and-stall — buses sailing past stops on stale speed, snapping back on reset, then sprinting to catch up. |
+| `KF_GATE_SIGMA` | 3 | Standard 3σ innovation gate (~99.7% of honest fixes pass). The gate widens with elapsed time automatically; at q = 2 a settled filter's half-width is roughly 250 m after a 20 s gap and grows steeply with longer gaps, so only genuine teleports get gated. Note the gate also widens after each *rejected* fix (gated predicts inflate the covariance) — moderate persistent offsets get wide-gated back in within a fix or two, which is reset-in-all-but-name; the explicit reset path is the backstop for cross-town relocations. |
 | `KF_MAX_REJECTS` | 3 | Consecutive gated fixes before re-seeding. 1 would let a single glitch reset the filter; 3 costs ≤ ~4 min of frozen progress in the worst case while being robust to glitch pairs. |
 | `KF_INIT_SIGMA_S_M` | 30 m | Initial position σ — matches the learner's corridor start: a fresh snap knows the bus about this well. |
 | `KF_INIT_SIGMA_V_MS` | 3 m/s | Initial speed σ — the seed comes from the raw two-fix model, so keep healthy doubt. |
@@ -135,6 +135,7 @@ Reused display constants (unchanged values, same meaning in 1-D):
 
 | Symptom | Knob |
 |---|---|
+| Fleet-wide surge-and-stall rhythm (buses sprint, then crawl, in sync) | q too LOW for the stop-and-go dynamics — honest braking/departure fixes are being gated. This exact symptom occurred in production on 2026-07-31 with q = 0.2; verify with the stop-and-go simulation before touching anything else. |
 | Snapped buses lag behind reality | raise q (trust fixes more) |
 | Snapped buses jitter along the route | lower q, or check the route's `meanResidualM` is honest |
 | Buses stick when drivers genuinely divert | lower `KF_MAX_REJECTS` to 2 |

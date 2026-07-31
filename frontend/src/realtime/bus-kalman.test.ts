@@ -143,8 +143,12 @@ describe('kfStep — gating', () => {
     const st = settled();
     const results: string[] = [];
     for (let i = 1; i <= KF_MAX_REJECTS; i += 1) {
-      // Fixes consistently ~500 m ahead — the bus genuinely is elsewhere.
-      results.push(kfStep(st, st.s + 8 * 20 + 500, st.t + 20_000, R_TYPICAL));
+      // Fixes consistently ~5 km ahead — a cross-town relocation (vehicle
+      // reassigned). It must stay OUTSIDE the gate for all three fixes: each
+      // gated predict widens the gate (that's by design — moderate offsets
+      // get wide-gated back in, which is reset-in-all-but-name), so only a
+      // disagreement that outruns the widening exercises the reset path.
+      results.push(kfStep(st, st.s + 8 * 20 + 5_000, st.t + 20_000, R_TYPICAL));
     }
     expect(results.slice(0, -1).every((r) => r === 'gated')).toBe(true);
     expect(results[results.length - 1]).toBe('reset');
