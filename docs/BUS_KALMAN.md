@@ -34,12 +34,14 @@ Both are addressed by filtering **along the learned route polyline**:
 
 ## What deliberately did NOT change
 
-- **The raw motion model is untouched and keeps running for every bus.** It
-  still decides snap engagement/release (hysteresis on the raw eased position,
-  SNAP_ON_M 50 / SNAP_OFF_M 80), seeds the filter, and renders the ~0.2% of
-  buses without a learned route exactly as before. The filter never votes on
-  its own engagement — that would let a confidently-wrong filter keep itself
-  alive.
+- **The raw motion model keeps running for every bus.** It still decides
+  snap engagement/release (hysteresis on the raw eased position, SNAP_ON_M
+  50 / SNAP_OFF_M 80), seeds the filter, and renders buses without a learned
+  route. The filter never votes on its own engagement — that would let a
+  confidently-wrong filter keep itself alive. (One deliberate 2026-08-01
+  exception to "untouched": the raw model's linear 45 s extrapolation horizon
+  was replaced by the same decaying coast the filter uses — see
+  "Extrapolation policy".)
 - **No uncertainty visualisation.** The filter's position variance could
   drive icon opacity ("less sure = more transparent"); this was explicitly
   deferred — a different presentation is planned for a future version.
@@ -59,13 +61,48 @@ from RecordedAtTime.
 ```
 poll ingest (new fix)                      render tick (≤15 Hz)
 ────────────────────                       ────────────────────
-project fix → arc length z                 target = s + v·(now − t)   [cap 45 s]
-PREDICT state to fix time:                 ease kfDispS toward target (τ 2.5 s)
-  s += v·dt;  P grows by Q(dt)             pointAtArclen(kfDispS) → x, y, tangent
-GATE:  |z − s| > 3σ → reject               → snapX / snapY / snapBearing
-UPDATE: K = pS/(pS+R)
-  s += K·(z−s);  v += Kv·(z−s);  P shrinks
+project fix → arc length z                 target = s + v·τ·(1−e^(−Δt/τ))
+PREDICT state to fix time:                   [decaying coast, bound v·τ]
+  s += v·dt;  P grows by Q(dt)             ease kfDispS toward target (τ 2.5 s,
+GATE:  |z − s| > 3σ → reject                 forward-only, catch-up ≤ 25 m/s)
+UPDATE: K = pS/(pS+R)                      pointAtArclen(kfDispS) → x, y, tangent
+  s += K·(z−s);  v += Kv·(z−s);  P shrinks → snapX / snapY / snapBearing
 ```
+
+### Extrapolation policy — asymmetric loss (field-revised 2026-08-01)
+
+The display objective is NOT "as close to the true position as possible" —
+it is "**as close as possible while staying behind it**". Showing a bus
+behind reality is cheap: the correction is a forward glide that reads as
+driving. Showing it ahead is expensive: fabricated progress (a bus sailing
+past its stop, or off the map's plausibility entirely), and the correction
+reads as a bus reversing — the single most jarring artefact. The initial
+release extrapolated at constant filtered speed with a 45 s freeze horizon
+(inherited from the raw model), and buses whose fixes stopped — urban
+canyon, dwell — kept driving at cruise speed for 45 s. Three rules replace
+that:
+
+1. **Decaying coast** (`kfCoastS`): between fixes the display advances by
+   ∫v·e^(−u/τ) = v·τ·(1−e^(−Δt/τ)). A silent bus decelerates smoothly and
+   halts within v·τ (≈ 96 m at 8 m/s) — the longer the silence, the less
+   credible "still cruising" is, and the budget spends itself accordingly.
+   The **raw x/y model coasts with the same decay** (`coastSeconds`), for two
+   reasons: unsnapped buses deserve the same honesty, and the two models must
+   stay co-located during silence or hysteresis release would yank a halted
+   bus onto a runaway linear extrapolation.
+2. **Forward-only display**: corrections landing behind the displayed
+   position hold the bus still until the state catches up — it never backs
+   up. The clamp direction follows the *established* travel direction
+   (±1 m/s lock threshold), not the instantaneous sign of v, so speed jitter
+   at a stand can't ratchet the display backwards. Genuine relocations stay
+   representable: the reset path re-seeds the displayed arc directly, and
+   corrections beyond `KF_JUMP_DISTANCE_M` (1.2 km — larger than any honest
+   coast backlog) jump as a safety valve.
+3. **Bus-plausible catch-up**: forward glides are capped at 25 m/s (~3×
+   cruise) so banked backlog reads as a fast bus, not a teleport. At sparse
+   fix cadences (60–120 s gaps) the resulting rhythm is inherently
+   drive → slow → halt → fast forward glide; that is the chosen loss
+   ordering (never ahead > low latency > smoothness), not a defect.
 
 Design choices worth knowing when debugging:
 
@@ -116,10 +153,15 @@ already downloads. Central-London canyon routes get a large R (their fixes are
 trusted less); open suburban routes get a small one. This is the main reason
 the filter needed no new data: the learner had been measuring R all along.
 
+| `KF_COAST_TAU_S` | 12 s | Coast decay constant. Total silent-coast distance is hard-bounded by v·τ (≈ 96 m at 8 m/s — under one stop spacing). The first ~2–3 s stay within ~10% of linear extrapolation; by 10 s the coasted advance is about two-thirds of linear. Worst case ahead-of-truth: the full v·τ budget (bus brakes to a stop right after a fix) until the next accepted fix pulls the state back. Shared by the raw model via `coastSeconds`. |
+| `KF_CATCHUP_SPEED_MS` | 25 m/s | Forward-glide cap (~3× cruise): clears a 300 m coast backlog in ~12 s, always outruns a real bus (so the glide converges), and reads as a fast bus rather than a teleport. |
+| `KF_JUMP_DISTANCE_M` | 1200 m | Displayed-arc jump threshold — safety valve only. Must exceed the worst *honest* coast backlog (13 m/s × 90 s gap ≈ 1000 m) so routine catch-ups always glide; genuine relocations are made visible by the reset path re-seeding the display, not by this branch. |
+
 Reused display constants (unchanged values, same meaning in 1-D):
-`MAX_EXTRAPOLATION_S` 45 s (freeze-don't-run-away horizon), `EASE_TAU_S` 2.5 s
-(display easing), `SNAP_DISTANCE_M` 400 m (jump instead of glide),
-`MAX_CATCHUP_SPEED_MS` 120 m/s (glide cap).
+`EASE_TAU_S` 2.5 s (display easing). `SNAP_DISTANCE_M` (400 m) and
+`MAX_CATCHUP_SPEED_MS` (120 m/s) now apply only to the raw x/y model's own
+ease; the old `MAX_EXTRAPOLATION_S` linear horizon is gone — both models
+coast with the same decay.
 
 ## Behaviour you should expect on the map
 
@@ -127,15 +169,22 @@ Reused display constants (unchanged values, same meaning in 1-D):
   them; heading comes from the polyline tangent.
 - A single teleporting fix visibly does ~nothing (gated); the bus keeps
   rolling at its filtered speed.
-- After long gaps (>45 s) buses freeze rather than run away — same as before.
-- Buses without learned routes, and buses outside the snap corridor, behave
-  **exactly** as before this change.
+- When a bus's fixes stop arriving (urban canyon, dwell), it decelerates
+  smoothly and halts within ~v·τ ≈ 100 m — it never sails onward at cruise
+  speed, and it never moves backwards along the route. When fixes resume,
+  it catches up as a forward glide capped at 25 m/s.
+- Buses without learned routes, and buses outside the snap corridor, keep
+  the raw x/y model — with one deliberate change: their fix-silence
+  extrapolation now decays the same way instead of running 45 s linear.
 
 ## Tuning guide (if the map looks wrong)
 
 | Symptom | Knob |
 |---|---|
 | Fleet-wide surge-and-stall rhythm (buses sprint, then crawl, in sync) | q too LOW for the stop-and-go dynamics — honest braking/departure fixes are being gated. This exact symptom occurred in production on 2026-07-31 with q = 0.2; verify with the stop-and-go simulation before touching anything else. |
+| Buses coast too far past stops when fixes pause | lower `KF_COAST_TAU_S` (tighter coast budget) |
+| Buses feel laggy on fast open corridors between fixes | raise `KF_COAST_TAU_S` (more linear extrapolation) |
+| Catch-up glides look like teleports / take too long | tune `KF_CATCHUP_SPEED_MS` (down / up respectively) |
 | Snapped buses lag behind reality | raise q (trust fixes more) |
 | Snapped buses jitter along the route | lower q, or check the route's `meanResidualM` is honest |
 | Buses stick when drivers genuinely divert | lower `KF_MAX_REJECTS` to 2 |
@@ -143,14 +192,15 @@ Reused display constants (unchanged values, same meaning in 1-D):
 
 ## Testing
 
-`frontend/src/realtime/bus-kalman.test.ts` — 21 deterministic behavioural
+`frontend/src/realtime/bus-kalman.test.ts` — 24 deterministic behavioural
 tests (no RNG): convergence on constant speed, stability under crafted noise,
 reversed-polyline (negative v) tracking, speed clamping, outlier gating,
 reject-counter reset, reset-after-persistent-disagreement, gate widening with
 fix gaps, out-of-order timestamps, covariance health (positive, Cauchy–Schwarz
-consistent) over a 200-step mixed run, extrapolation capping, signed
-tangent-speed seeding, and the arc-length geometry (cumulative lengths,
-interpolation, end clamping, hint walks).
+consistent) over a 200-step mixed run, decaying-coast behaviour (near-linear
+when fresh, decelerating, hard v·τ bound, backwards for reversed polylines),
+signed tangent-speed seeding, and the arc-length geometry (cumulative
+lengths, interpolation, end clamping, hint walks).
 Run: `cd frontend && npx vitest run src/realtime/bus-kalman.test.ts`.
 
 Known coverage gap, accepted deliberately: the buses.ts integration glue

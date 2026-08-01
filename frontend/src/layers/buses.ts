@@ -5,11 +5,13 @@
 //   • at/above 12.5 — symbol layer with oriented bus bullets, rebuilt per frame
 //     ONLY from the viewport subset (+20 % margin).
 // Motion model: a per-bus tracker (kept across polls) derives a velocity vector
-// from the last two distinct fixes, extrapolates the newest fix forward (capped
-// at 45 s), and eases the displayed position toward that target with an
-// exponential approach (tau ≈ 2.5 s). BODS fixes are often already 10–30 s old
-// on arrival, so extrapolating from RecordedAtTime with a real velocity — not a
-// short capped drift — is what keeps buses visibly moving between 15 s polls.
+// from the last two distinct fixes, coasts the newest fix forward with an
+// exponentially DECAYING speed (silence budget v·τ ≈ 100 m — see coastSeconds),
+// and eases the displayed position toward that target with an exponential
+// approach (tau ≈ 2.5 s). BODS fixes are often already 10–30 s old on arrival,
+// so coasting from RecordedAtTime with a real velocity is what keeps buses
+// visibly moving between 15 s polls — while a bus whose fixes stop glides to a
+// halt instead of sailing on at cruise speed.
 // Route snapping: learned route polylines (backend learner, keyed by
 // operator:line:direction) are lazy-loaded from /api/bus-routes-index +
 // /bus-routes/learned/<key>.json. Snap engagement is hysteresis on the RAW
@@ -41,10 +43,13 @@ import { registerPoll, symbolTierIntervalMs } from '../util/lifecycle';
 import {
   type ArcPoint,
   type BusKfState,
+  KF_CATCHUP_SPEED_MS,
+  KF_COAST_TAU_S,
+  KF_JUMP_DISTANCE_M,
   cumulativeLengthsM,
+  kfCoastS,
   kfInit,
   kfStep,
-  kfTargetS,
   measurementVariance,
   pointAtArclen,
   tangentSpeedMs,
@@ -68,10 +73,21 @@ const VELOCITY_MIN_DT_S = 3;
 const VELOCITY_MAX_DT_S = 120;
 /** Implied speeds above this are GPS glitches — fall back to Bearing. */
 const MAX_IMPLIED_SPEED_MS = 20;
-/** Never extrapolate a track-derived velocity further than this. */
-const MAX_EXTRAPOLATION_S = 45;
-/** Bearing-fallback velocity is low confidence — extrapolate it less. */
-const MAX_FALLBACK_EXTRAPOLATION_S = 20;
+/**
+ * Decayed extrapolation seconds for a fix `ageS` old: ∫e^(−u/τ)du. Both the
+ * raw model and the filter display coast with the SAME decay so their
+ * positions stay co-located during fix silence — if the raw model kept the
+ * old linear 45 s horizon it would run ~260 m ahead of the halted coast,
+ * yanking the bus onto the runaway raw position whenever hysteresis released.
+ * This also means unsnapped buses stop sailing on at cruise speed when their
+ * fixes pause — the same asymmetric loss, applied fleet-wide.
+ */
+const coastSeconds = (ageS: number): number =>
+  KF_COAST_TAU_S * (1 - Math.exp(-Math.max(ageS, 0) / KF_COAST_TAU_S));
+/** Direction lock threshold, m/s: |v| must exceed this to flip the display's
+ * forward-only clamp direction — v jittering around 0 at a stand must not
+ * ratchet the display backwards. */
+const DIRECTION_LOCK_SPEED_MS = 1;
 /** Exponential-approach time constant for displayed positions, seconds. */
 const EASE_TAU_S = 2.5;
 /** Displayed position snaps (no easing) when this far from its target. */
@@ -243,6 +259,10 @@ interface BusTracker {
   /** lastFix.t of a failed seed attempt — initFilter's full-polyline scan is
    * pointless until a NEW fix arrives, so don't repeat it per tick. */
   kfSeedFixT: number;
+  /** Established travel direction along the polyline (+1/−1). The display's
+   * forward-only clamp follows THIS, not the instantaneous sign of kf.v —
+   * a v jittering around 0 at a stand must not ratchet the display back. */
+  kfDir: 1 | -1;
 }
 
 const esc = (s: string): string =>
@@ -584,8 +604,8 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       const fix: Fix = { x: bus.x, y: bus.y, t: bus.t };
       const fb = fallbackVelocity(bus.b);
       // Fixes are often already 10-30 s old on arrival: start the displayed
-      // position at the extrapolated target so new buses don't glide on entry.
-      const staleS = Math.min(Math.max((now - bus.t) / 1000, 0), MAX_FALLBACK_EXTRAPOLATION_S);
+      // position at the coasted target so new buses don't glide on entry.
+      const staleS = coastSeconds((now - bus.t) / 1000);
       trackers.set(bus.i, {
         prevFix: fix,
         lastFix: fix,
@@ -615,6 +635,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
         kfDispS: 0,
         kfSeg: 0,
         kfSeedFixT: 0,
+        kfDir: 1,
       });
       return;
     }
@@ -679,6 +700,12 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
               existing.velLat * M_PER_DEG_LAT,
             );
             existing.kf = kfInit(zS, v0, bus.t);
+            // Relocations must be visible immediately: re-seed the displayed
+            // arc as well — the forward-only clamp would otherwise hold a
+            // backward relocation at its old position indefinitely.
+            const total = route.cum[route.cum.length - 1];
+            existing.kfDispS = Math.max(0, Math.min(total, kfCoastS(existing.kf, now)));
+            existing.kfSeg = proj.seg;
           }
         }
       }
@@ -694,8 +721,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
    * icon by the actual displayed movement once it accumulates.
    */
   function advance(tr: BusTracker, now: number): void {
-    const horizonS = tr.hasTrackVelocity ? MAX_EXTRAPOLATION_S : MAX_FALLBACK_EXTRAPOLATION_S;
-    const extraS = Math.min(Math.max((now - tr.lastFix.t) / 1000, 0), horizonS);
+    const extraS = coastSeconds((now - tr.lastFix.t) / 1000);
     const targetX = tr.lastFix.x + tr.velLon * extraS;
     const targetY = tr.lastFix.y + tr.velLat * extraS;
     const dtS = Math.max((now - tr.dispT) / 1000, 0);
@@ -761,10 +787,10 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       tr.velLat * M_PER_DEG_LAT,
     );
     tr.kf = kfInit(s0, v0, tr.lastFix.t);
-    // Start the displayed arc length at the extrapolated target so a freshly
+    // Start the displayed arc length at the coasted target so a freshly
     // snapped bus doesn't glide in — mirrors how ingest() seeds `disp`.
     const total = route.cum[route.cum.length - 1];
-    tr.kfDispS = Math.max(0, Math.min(total, kfTargetS(tr.kf, now, MAX_EXTRAPOLATION_S)));
+    tr.kfDispS = Math.max(0, Math.min(total, kfCoastS(tr.kf, now)));
     tr.kfSeg = proj.seg;
   }
 
@@ -824,16 +850,25 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
       tr.snapBearing = diff > 90 ? (proj.bearing + 180) % 360 : proj.bearing;
       return;
     }
+    if (kf.v > DIRECTION_LOCK_SPEED_MS) tr.kfDir = 1;
+    else if (kf.v < -DIRECTION_LOCK_SPEED_MS) tr.kfDir = -1;
     const total = route.cum[route.cum.length - 1];
-    const target = Math.max(0, Math.min(total, kfTargetS(kf, now, MAX_EXTRAPOLATION_S)));
+    const target = Math.max(0, Math.min(total, kfCoastS(kf, now)));
     const gap = target - tr.kfDispS;
-    if (Math.abs(gap) > SNAP_DISTANCE_M) {
-      tr.kfDispS = target; // too far to glide — jump, like the raw model
+    if (Math.abs(gap) > KF_JUMP_DISTANCE_M) {
+      tr.kfDispS = target; // beyond any honest backlog — safety-valve jump
     } else {
       const alpha = 1 - Math.exp(-dtS / EASE_TAU_S);
       const step = gap * alpha;
-      const maxStep = MAX_CATCHUP_SPEED_MS * dtS;
-      tr.kfDispS += Math.abs(step) > maxStep ? Math.sign(gap) * maxStep : step;
+      const maxStep = KF_CATCHUP_SPEED_MS * dtS;
+      let next = tr.kfDispS + (Math.abs(step) > maxStep ? Math.sign(gap) * maxStep : step);
+      // Never reverse along the route: when a correction lands BEHIND the
+      // displayed position, hold still and let the state catch up — waiting
+      // reads fine, a bus backing up does not (asymmetric loss). Genuine
+      // relocations bypass this via the reset path's display re-seed and the
+      // jump branch above.
+      next = tr.kfDir > 0 ? Math.max(tr.kfDispS, next) : Math.min(tr.kfDispS, next);
+      tr.kfDispS = next;
     }
     pointAtArclen(route.xs, route.ys, route.cum, tr.kfDispS, tr.kfSeg, arcScratch);
     tr.kfSeg = arcScratch.seg;

@@ -16,9 +16,10 @@
 // scalar — no matrix library, ~5 floats per bus.
 //
 // Time base: state time `t` is the FIX timestamp (BODS RecordedAtTime), never
-// wall clock — fixes arrive 10-30 s stale and display code extrapolates the
-// state forward to `now` (kfTargetS), exactly like the raw model extrapolates
-// from RecordedAtTime. Full design + parameter derivations: docs/BUS_KALMAN.md.
+// wall clock — fixes arrive 10-30 s stale and display code coasts the state
+// forward to `now` (kfCoastS) with exponentially decaying speed, so staleness
+// is compensated but a silent bus glides to a halt instead of running away.
+// Full design + parameter derivations: docs/BUS_KALMAN.md.
 
 /**
  * Process noise spectral density q, m²/s³ (continuous white-noise acceleration
@@ -63,6 +64,43 @@ export const KF_MAX_SPEED_MS = 20;
 /** Mean-absolute-deviation → σ for a zero-mean Gaussian: σ = E|x|·√(π/2) ≈
  * 1.25·E|x|. The learner's meanResidualM is a MAD, not a σ. */
 const MAD_TO_SIGMA = 1.25;
+/**
+ * Coast decay time constant τ, s. Between fixes the display advances with an
+ * exponentially decaying speed v·e^(−Δt/τ) — total silent-coast distance is
+ * hard-bounded by v·τ (8 m/s ⇒ ≈ 96 m, under one stop spacing), so a bus
+ * whose fixes stop (urban canyon, dwell) glides to a halt instead of sailing
+ * onwards at cruise speed. The value encodes an asymmetric loss: showing a
+ * bus BEHIND its true position is cheap (it catches up forwards, which reads
+ * as driving), showing it AHEAD is expensive (fabricated progress, and the
+ * correction would read as reversing). At τ = 12 the first ~2-3 s stay within
+ * ~10% of linear extrapolation; by 10 s the coasted advance is about
+ * two-thirds of linear. Worst case ahead-of-truth: the full v·τ budget (bus
+ * brakes to a stop immediately after its last fix) until the next accepted
+ * fix pulls the state back.
+ */
+export const KF_COAST_TAU_S = 12;
+/**
+ * Catch-up glide cap, m/s, for the eased displayed arc length. Conservative
+ * coasting banks a forward backlog whenever the bus actually kept cruising;
+ * the catch-up must read as "a fast bus", not a teleport. ~3× cruise clears a
+ * 300 m backlog in ~12 s and still outruns any real bus, so the glide always
+ * converges. At sparse fix cadences (60-120 s gaps) the resulting rhythm is
+ * inherently drive → slow → halt → fast forward glide — that is the CHOSEN
+ * loss ordering (never ahead > low latency > smoothness), not a defect.
+ * (The raw x/y model keeps its own larger MAX_CATCHUP_SPEED_MS.)
+ */
+export const KF_CATCHUP_SPEED_MS = 25;
+/**
+ * Displayed-arc jump threshold, m: corrections larger than this skip the
+ * glide and jump in one frame. Must exceed the worst HONEST coast backlog so
+ * routine catch-ups always glide — at 13 m/s cruise and a 90 s fix gap the
+ * backlog is ≈ 13·(90−12) ≈ 1000 m, hence 1200. Genuine relocations are
+ * handled by the reset path re-seeding the display directly; this branch is
+ * only the safety valve. (Deliberately NOT the raw model's SNAP_DISTANCE_M
+ * (400 m): the coast policy banks far larger honest backlogs than the raw
+ * model's linear extrapolation ever did.)
+ */
+export const KF_JUMP_DISTANCE_M = 1200;
 
 /** Filter state for one snapped bus. Mutated in place by kfStep — these live
  * in per-bus trackers updated from poll ingest (~110 updates/s fleet-wide). */
@@ -167,13 +205,18 @@ export function kfStep(st: BusKfState, zS: number, zTMs: number, rVar: number): 
 }
 
 /**
- * Display target: the state extrapolated from its fix time to `nowMs`, capped
- * at `horizonS` — the same "freeze rather than run away" behaviour the raw
- * model gets from MAX_EXTRAPOLATION_S. Clock skew never extrapolates backwards.
+ * Display target: the state coasted from its fix time to `nowMs` with
+ * exponentially decaying speed — ∫v·e^(−u/τ)du = v·τ·(1−e^(−Δt/τ)). Fresh
+ * fixes get near-linear extrapolation (staleness compensation, no perceived
+ * lag); a silent bus decelerates smoothly and halts within v·τ meters. See
+ * KF_COAST_TAU_S for why decay, not a hard horizon: the longer the silence,
+ * the less credible "still cruising" is, and the asymmetric loss prefers
+ * falling behind over fabricating progress. Clock skew never coasts backwards
+ * in time.
  */
-export function kfTargetS(st: BusKfState, nowMs: number, horizonS: number): number {
-  const extraS = Math.min(Math.max((nowMs - st.t) / 1000, 0), horizonS);
-  return st.s + st.v * extraS;
+export function kfCoastS(st: BusKfState, nowMs: number): number {
+  const dtS = Math.max((nowMs - st.t) / 1000, 0);
+  return st.s + st.v * KF_COAST_TAU_S * (1 - Math.exp(-dtS / KF_COAST_TAU_S));
 }
 
 /**

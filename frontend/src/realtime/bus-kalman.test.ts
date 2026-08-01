@@ -5,14 +5,15 @@
 
 import { describe, expect, test } from 'vitest';
 import {
+  KF_COAST_TAU_S,
   KF_MAX_REJECTS,
   KF_MAX_SPEED_MS,
   KF_MEAS_SIGMA_FLOOR_M,
   KF_DEFAULT_MEAS_SIGMA_M,
   type BusKfState,
+  kfCoastS,
   kfInit,
   kfStep,
-  kfTargetS,
   measurementVariance,
   cumulativeLengthsM,
   pointAtArclen,
@@ -190,14 +191,43 @@ describe('kfStep — robustness', () => {
   });
 });
 
-describe('kfTargetS', () => {
-  test('extrapolates from the last fix time and caps at the horizon', () => {
-    const st = kfInit(1000, 10, 0);
-    expect(kfTargetS(st, 20_000, 45)).toBeCloseTo(1200, 6);
-    // 100 s stale but horizon 45 s — freeze at the cap, like the raw model.
-    expect(kfTargetS(st, 100_000, 45)).toBeCloseTo(1450, 6);
-    // Clock skew / same-ms render: never extrapolate backwards.
-    expect(kfTargetS(st, -5_000, 45)).toBeCloseTo(1000, 6);
+describe('kfCoastS — decaying coast', () => {
+  const st = kfInit(1000, 10, 0);
+
+  test('matches plain extrapolation for the first seconds after a fix', () => {
+    // Fresh fixes deserve near-full trust in v: within 2 s the decayed
+    // advance must be within ~10% of linear v·Δt.
+    const coasted = kfCoastS(st, 2_000) - 1000;
+    expect(coasted).toBeGreaterThan(10 * 2 * 0.9);
+    expect(coasted).toBeLessThanOrEqual(10 * 2);
+  });
+
+  test('slows monotonically and never exceeds the v·τ coast budget', () => {
+    let prev = kfCoastS(st, 0);
+    let prevT = 0;
+    let prevSpeed = Infinity;
+    for (const t of [5, 10, 20, 40, 80, 160, 320]) {
+      const cur = kfCoastS(st, t * 1000);
+      const speed = (cur - prev) / (t - prevT); // mean speed over the window
+      expect(cur).toBeGreaterThanOrEqual(prev); // keeps creeping forward…
+      expect(speed).toBeLessThan(prevSpeed); // …but ever slower (decelerating)
+      prev = cur;
+      prevT = t;
+      prevSpeed = speed;
+    }
+    // Hard bound: a silent bus can never coast further than v·τ.
+    expect(kfCoastS(st, 3_600_000)).toBeLessThanOrEqual(1000 + 10 * KF_COAST_TAU_S);
+    expect(kfCoastS(st, 3_600_000)).toBeCloseTo(1000 + 10 * KF_COAST_TAU_S, 1);
+  });
+
+  test('a reversed-polyline bus coasts backwards toward its own bound', () => {
+    const rev = kfInit(5000, -8, 0);
+    expect(kfCoastS(rev, 3_600_000)).toBeCloseTo(5000 - 8 * KF_COAST_TAU_S, 1);
+  });
+
+  test('clock skew / same-ms render never extrapolates backwards in time', () => {
+    expect(kfCoastS(st, -5_000)).toBeCloseTo(1000, 6);
+    expect(kfCoastS(st, 0)).toBeCloseTo(1000, 6);
   });
 });
 
