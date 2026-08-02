@@ -6,8 +6,15 @@ import { defineConfig } from 'vite';
 // otherwise Vite would copy all of data/ (136 MB pmtiles + hundreds of MB of
 // bus-traces/osm-cache) into dist/. In production the backend serves data/
 // directly and the pmtiles comes from R2 (VITE_PMTILES_URL).
+
+// Dev mirror of the backend's baked-data root. Must follow REGION_DATA_DIR or
+// local runs would serve one region's manifest against another's backend.
+const dataDir = process.env.REGION_DATA_DIR
+  ? `../${process.env.REGION_DATA_DIR.replace(/^\.?\//, '')}`
+  : '../data';
+
 export default defineConfig(({ command }) => ({
-  publicDir: command === 'build' ? false : '../data',
+  publicDir: command === 'build' ? false : dataDir,
   server: {
     port: 5173,
     // Forward API calls to the Fastify backend so frontend code can use

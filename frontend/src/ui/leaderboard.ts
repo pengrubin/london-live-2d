@@ -33,9 +33,11 @@ const MODE_LABEL: Record<Mode, string> = {
  * yet."
  */
 const MODE_REQUIRES: Record<Mode, readonly string[]> = {
-  train: ['tube', 'nationalRail'],
+  train: ['trainPositions', 'nationalRail'],
   bus: ['buses'],
-  ship: ['vessels', 'tube'],
+  // TfL river boats are ranked as ships and come from the train pipeline, so
+  // either an AIS feed or live train positions justifies this tab.
+  ship: ['vessels', 'trainPositions'],
 };
 
 function availableModes(): readonly Mode[] {

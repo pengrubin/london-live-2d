@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_CORS_ORIGIN, DEFAULT_PORT } from './constants';
 import { loadRegion, type RegionConfig } from './region';
@@ -32,8 +32,24 @@ export interface AppConfig {
 
 const ENV_FILE_PATH = fileURLToPath(new URL('../.env', import.meta.url));
 
-/** Repo data/ directory (sits beside backend/) — the fallback persist root. */
-const DATA_DIR = fileURLToPath(new URL('../../data', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+/**
+ * Fallback root for runtime-WRITTEN state (leaderboard standings, bus traces,
+ * learned routes) when PERSIST_DIR is unset.
+ *
+ * Scoped to the region so two deployments sharing one filesystem — which is
+ * exactly what local development is — do not share one another's standings.
+ * Without this, a second region opens showing the first region's leaderboard,
+ * complete with its vehicles. Production sets PERSIST_DIR per service and never
+ * reaches this path; a deployment that sets no REGION_DATA_DIR (London) keeps
+ * the byte-identical `data/` location it has always used.
+ */
+const DATA_DIR = (() => {
+  const regionDir = process.env['REGION_DATA_DIR']?.trim();
+  if (!regionDir) return join(REPO_ROOT, 'data');
+  return isAbsolute(regionDir) ? regionDir : join(REPO_ROOT, regionDir);
+})();
 
 /**
  * Legacy on-disk locations (relative to data/) for runtime-written files whose

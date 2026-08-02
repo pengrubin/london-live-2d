@@ -43,7 +43,8 @@ const LONDON_FALLBACK: Capabilities = {
   // an over-generous guess costs a few failed fetches; an under-generous one
   // would silently hide working layers.
   layers: {
-    tube: true,
+    transitLines: true,
+    trainPositions: true,
     lineStatus: true,
     stopArrivals: true,
     jamCams: true,

@@ -9,6 +9,8 @@
 // that is on — never from a city name. Adding a region therefore never means
 // touching this file.
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { AppConfig } from '../config';
 
@@ -26,9 +28,21 @@ export interface Capabilities {
   readonly layers: Readonly<Record<string, boolean>>;
 }
 
-export function buildCapabilities(config: AppConfig): Capabilities {
+export function buildCapabilities(config: AppConfig, bakedDataDir: string): Capabilities {
   const { region } = config;
   const hasTfl = config.tflAppKey !== undefined;
+
+  // Line geometry and station points come from baked data on disk, NOT from a
+  // credential — a region can have a drawn network with no operator API at all
+  // (Dubai's comes from OpenStreetMap). Conflating the two was wrong: it made
+  // "can I draw the network" depend on holding one particular company's key.
+  const hasTransitLines = existsSync(join(bakedDataDir, 'manifest.json'));
+
+  // Live train dots are the part that genuinely needs the operator feed. Kept a
+  // strict subset of transitLines so a deployment can never render moving
+  // vehicles with no track beneath them.
+  const hasTrainPositions = hasTfl && hasTransitLines;
+
   return {
     region: {
       name: region.name,
@@ -41,8 +55,11 @@ export function buildCapabilities(config: AppConfig): Capabilities {
       ...(region.pmtilesUrl === undefined ? {} : { pmtilesUrl: region.pmtilesUrl }),
     },
     layers: {
-      // TfL Unified API — tube/DLR/Overground/Elizabeth line and friends.
-      tube: hasTfl,
+      // Static network geometry — baked data, no credential required.
+      transitLines: hasTransitLines,
+      // Live vehicle dots inferred from operator arrival predictions.
+      trainPositions: hasTrainPositions,
+      // TfL Unified API extras.
       lineStatus: hasTfl,
       stopArrivals: hasTfl,
       jamCams: hasTfl,
@@ -61,7 +78,11 @@ export function buildCapabilities(config: AppConfig): Capabilities {
 }
 
 /** GET /api/capabilities — no params, no secrets, safe to cache briefly. */
-export function registerCapabilitiesRoute(app: FastifyInstance, config: AppConfig): void {
-  const payload = buildCapabilities(config);
+export function registerCapabilitiesRoute(
+  app: FastifyInstance,
+  config: AppConfig,
+  bakedDataDir: string,
+): void {
+  const payload = buildCapabilities(config, bakedDataDir);
   app.get('/api/capabilities', () => payload);
 }

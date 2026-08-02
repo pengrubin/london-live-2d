@@ -45,7 +45,11 @@ function vehicleTipHtml(p: VehicleHoverProps): string {
   </div>`;
 }
 
-function stationTipHtml(p: StationHoverProps, colorByLine: ReadonlyMap<string, string>): string {
+function stationTipHtml(
+  p: StationHoverProps,
+  colorByLine: ReadonlyMap<string, string>,
+  clickable: boolean,
+): string {
   const chips = p.lineIds
     .split(',')
     .filter(Boolean)
@@ -54,9 +58,11 @@ function stationTipHtml(p: StationHoverProps, colorByLine: ReadonlyMap<string, s
         `<span class="sp-chip" style="background:${esc(colorByLine.get(id) ?? '#666')}"></span>`,
     )
     .join('');
+  // Only promise departures where there is an arrivals feed to serve them.
+  const hint = clickable ? '<div class="vp-dim">click for live departures</div>' : '';
   return `<div class="vp">
     <b>${esc(p.name)}</b> <span class="tip-chips">${chips}</span>
-    <div class="vp-dim">click for live departures</div>
+    ${hint}
   </div>`;
 }
 
@@ -81,6 +87,8 @@ export function setupHoverTooltips(
   colorByLine: ReadonlyMap<string, string>,
   nameByLine: ReadonlyMap<string, string>,
   isVehicleSelected: (key: string) => boolean,
+  /** False where stations have no arrivals endpoint behind them. */
+  stationsClickable = true,
 ): void {
   const tip = new Popup({
     closeButton: false,
@@ -127,7 +135,7 @@ export function setupHoverTooltips(
     const id = `s:${props.name}`;
     if (shownFor !== id) {
       shownFor = id;
-      tip.setHTML(stationTipHtml(props, colorByLine));
+      tip.setHTML(stationTipHtml(props, colorByLine, stationsClickable));
     }
     if (!tip.isOpen()) tip.addTo(map);
   });

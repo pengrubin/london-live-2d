@@ -204,15 +204,20 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
   let manifestLines: Awaited<ReturnType<typeof addTransitLineLayers>> = [];
   let trains: TrainsHandle | null = null;
 
-  if (hasLayer('tube')) {
+  // Static network geometry: baked data only, no operator credential involved.
+  if (hasLayer('transitLines')) {
     try {
       manifestLines = await addTransitLineLayers(target);
       await addStationLayers(target, manifestLines.map((line) => line.id));
     } catch (error) {
       console.error('[transit-lines]', error);
     }
-    // Separate try: the train pipeline re-fetches the manifest itself, so it
-    // can fail (or succeed) independently of the line geometry above.
+  }
+  // Live vehicle dots are a separate capability: a region can have a drawn
+  // network with no arrivals feed to move anything along it. Separate try too,
+  // because the train pipeline re-fetches the manifest itself and can fail
+  // independently of the geometry above.
+  if (hasLayer('trainPositions')) {
     try {
       trains = await startTrains(target);
     } catch (error) {
@@ -308,15 +313,23 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
     findBus,
     findVessel,
   });
+  // Station departure boards need an arrivals feed; without one a click would
+  // open a card that can only ever say "unavailable", plus five doomed
+  // requests. Hover tooltips need none of that — their colours and names come
+  // from the manifest — so they run wherever there is a network drawn.
   if (trains) {
     window.__trains = trains;
     setupStationPopups(target, trains.colorByLine, trains.closeVehiclePopup);
+  }
+  if (manifestLines.length > 0) {
+    const colorByLine = new Map(manifestLines.map((line) => [line.id, line.color]));
     const nameByLine = new Map(manifestLines.map((line) => [line.id, line.name]));
     setupHoverTooltips(
       target,
-      trains.colorByLine,
+      trains?.colorByLine ?? colorByLine,
       nameByLine,
-      (key) => trains.selectedVehicleKey() === key,
+      (key) => trains?.selectedVehicleKey() === key,
+      trains !== null,
     );
   }
 }

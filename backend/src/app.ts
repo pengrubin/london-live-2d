@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { constants as zlibConstants } from 'node:zlib';
 import compress from '@fastify/compress';
@@ -47,8 +47,25 @@ import { registerShipPhotoRoute } from './routes/ship-photo';
 
 /** Repo layout anchors — data/ and scripts/ sit beside backend/. */
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const DATA_DIR = join(REPO_ROOT, 'data');
 const SCRIPTS_DIR = join(REPO_ROOT, 'scripts');
+
+/**
+ * Baked, git-committed, read-only data for THIS region: manifest, line
+ * geometry, station points, and (where a live train pipeline exists) branches.
+ * Served at the same root-relative URLs in every deployment, so a second region
+ * points this elsewhere and the frontend needs no change at all.
+ *
+ * Deliberately NOT the same thing as config.ts's DATA_DIR, which is the
+ * fallback root for runtime-WRITTEN state (leaderboard standings, bus traces,
+ * learned routes). That is already isolated per deployment by PERSIST_DIR and
+ * must not follow this switch.
+ */
+function resolveBakedDataDir(): string {
+  const configured = process.env['REGION_DATA_DIR']?.trim();
+  if (!configured) return join(REPO_ROOT, 'data');
+  return isAbsolute(configured) ? configured : join(REPO_ROOT, configured);
+}
+const DATA_DIR = resolveBakedDataDir();
 
 /** Builds the Fastify app with all plugins and routes; exported for tests (inject()). */
 export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
@@ -146,7 +163,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
 
   registerHealthRoute(app);
-  registerCapabilitiesRoute(app, config);
+  registerCapabilitiesRoute(app, config, DATA_DIR);
   registerArrivalsRoute(app, { config, cache: arrivalsCache, budget: tflBudget });
   registerStopArrivalsRoute(app, { config, cache: stopArrivalsCache, budget: tflBudget });
   registerVehicleArrivalsRoute(app, { config, cache: vehicleArrivalsCache, budget: tflBudget });
