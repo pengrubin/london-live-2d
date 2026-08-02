@@ -220,57 +220,84 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
     }
   }
 
-  const starts: Array<Promise<unknown>> = [];
-  const overlays: OverlayToggle[] = [];
-  const enable = (
-    name: string,
-    start: () => Promise<unknown>,
-    overlay: OverlayToggle,
-  ): void => {
-    if (!hasLayer(name)) return;
-    starts.push(start());
-    overlays.push(overlay);
-  };
+  // TWO ORDERS, deliberately different — collapsing them into one silently
+  // restacks the map.
+  //
+  // `start` order IS the z-order: layers sharing a beforeId are spliced in at
+  // the same index, so whichever is added last ends up highest. Ships must go
+  // in before buses and National Rail to stay beneath them, as vessels.ts asks
+  // ("beneath TfL vehicles so bullets stay readable").
+  //
+  // `row` is only where the toggle sits in the Lines tab, which reads best
+  // with the everyday modes first. Both sequences reproduce what shipped
+  // before capability gating.
+  const LAYERS: ReadonlyArray<{
+    readonly name: string;
+    readonly row: number;
+    readonly start: () => Promise<unknown>;
+    readonly overlay: OverlayToggle;
+  }> = [
+    {
+      name: 'jamCams',
+      row: 5,
+      start: () => addJamCams(target),
+      overlay: { label: 'JamCams', layerIds: [JAMCAMS_LAYER_ID] },
+    },
+    {
+      name: 'vessels',
+      row: 4,
+      start: () => startVessels(target),
+      overlay: { label: 'Ships', layerIds: [VESSELS_LAYER_ID] },
+    },
+    {
+      name: 'aircraft',
+      row: 3,
+      start: () => startAircraft(target),
+      overlay: { label: 'Aircraft', layerIds: [AIRCRAFT_LAYER_ID] },
+    },
+    {
+      name: 'nationalRail',
+      row: 2,
+      start: () => startNrTrains(target),
+      overlay: { label: 'National Rail', layerIds: [NR_TRAINS_LAYER_ID] },
+    },
+    {
+      name: 'buses',
+      row: 1,
+      start: () => startBuses(target),
+      overlay: {
+        label: 'Buses',
+        layerIds: [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID],
+        // Buses visibility is resolved against the line filter (see buses.ts),
+        // not a plain show/hide — route the toggle through the coordinator.
+        onToggle: (visible: boolean) => setBusesOverlayVisible(target, visible),
+      },
+    },
+    {
+      name: 'roadDisruptions',
+      row: 6,
+      start: () => startRoadDisruptions(target),
+      overlay: { label: 'Roadworks', layerIds: ROAD_DISRUPTIONS_LAYER_IDS },
+    },
+    {
+      name: 'tideGauges',
+      row: 7,
+      start: () => startTideGauges(target),
+      overlay: { label: 'Tide gauges', layerIds: TIDE_GAUGES_LAYER_IDS },
+    },
+    {
+      name: 'rainRadar',
+      row: 8,
+      start: () => startRainRadar(target),
+      overlay: { label: 'Rain radar', layerIds: [RAIN_RADAR_LAYER_ID], startOff: true },
+    },
+  ];
 
-  // Order here is the order of the overlay rows in the Lines tab.
-  enable('buses', () => startBuses(target), {
-    label: 'Buses',
-    layerIds: [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID],
-    // Buses visibility is resolved against the line filter (see buses.ts),
-    // not a plain show/hide — route the toggle through the coordinator.
-    onToggle: (visible: boolean) => setBusesOverlayVisible(target, visible),
-  });
-  enable('nationalRail', () => startNrTrains(target), {
-    label: 'National Rail',
-    layerIds: [NR_TRAINS_LAYER_ID],
-  });
-  enable('aircraft', () => startAircraft(target), {
-    label: 'Aircraft',
-    layerIds: [AIRCRAFT_LAYER_ID],
-  });
-  enable('vessels', () => startVessels(target), {
-    label: 'Ships',
-    layerIds: [VESSELS_LAYER_ID],
-  });
-  enable('jamCams', () => addJamCams(target), {
-    label: 'JamCams',
-    layerIds: [JAMCAMS_LAYER_ID],
-  });
-  enable('roadDisruptions', () => startRoadDisruptions(target), {
-    label: 'Roadworks',
-    layerIds: ROAD_DISRUPTIONS_LAYER_IDS,
-  });
-  enable('tideGauges', () => startTideGauges(target), {
-    label: 'Tide gauges',
-    layerIds: TIDE_GAUGES_LAYER_IDS,
-  });
-  enable('rainRadar', () => startRainRadar(target), {
-    label: 'Rain radar',
-    layerIds: [RAIN_RADAR_LAYER_ID],
-    startOff: true,
-  });
-
-  await Promise.allSettled(starts);
+  const available = LAYERS.filter((layer) => hasLayer(layer.name));
+  await Promise.allSettled(available.map((layer) => layer.start()));
+  const overlays: OverlayToggle[] = [...available]
+    .sort((a, b) => a.row - b.row)
+    .map((layer) => layer.overlay);
 
   // One merged panel (top-left): Board / Filter / Lines tabs. Leaving the
   // top-right corner free for MapLibre's zoom + geolocate controls.
