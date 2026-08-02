@@ -21,6 +21,12 @@ export interface AppConfig {
   /** BODS (data.bus-data.dft.gov.uk) key for live buses; feature is off when absent. */
   readonly bodsApiKey: string | undefined;
   /**
+   * GBFS discovery document (gbfs.json) for docked bike share. An open
+   * standard, so any city with a GBFS system gets the layer by setting this;
+   * absent means no bike layer.
+   */
+  readonly gbfsUrl: string | undefined;
+  /**
    * Directory for runtime-mutable state (leaderboard standings, learner marker).
    * Set in production to a mounted volume (e.g. Railway Volume at /data) so this
    * state survives redeploys; unset locally, where state stays under data/.
@@ -174,8 +180,19 @@ export function loadConfig(): AppConfig {
   const aisApiKey = readEnv('AIS_API_KEY');
   const darwinToken = readEnv('DARWIN_TOKEN');
   const bodsApiKey = readEnv('BODS_API_KEY');
+  const gbfsUrl = readEnv('GBFS_URL');
   const persistDir = readEnv('PERSIST_DIR');
   const region = loadRegion(readEnv);
 
-  return { tflAppKey, port, corsOrigin, aisApiKey, darwinToken, bodsApiKey, persistDir, region };
+  return {
+    tflAppKey,
+    port,
+    corsOrigin,
+    aisApiKey,
+    darwinToken,
+    bodsApiKey,
+    gbfsUrl,
+    persistDir,
+    region,
+  };
 }

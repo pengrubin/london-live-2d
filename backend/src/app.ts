@@ -8,6 +8,7 @@ import fastifyStatic from '@fastify/static';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { AisClient } from './ais-client';
 import { BodsClient } from './bods-client';
+import { GbfsClient } from './gbfs-client';
 import { TtlCache } from './cache';
 import { type AppConfig, resolveBusDataDir } from './config';
 import { ARRIVALS_CACHE_TTL_MS, TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS } from './constants';
@@ -145,6 +146,17 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     app.get('/api/buses', () => []);
   }
   registerBusRoutesRoute(app, join(busDataDir, 'bus-routes', 'learned'));
+
+  // Docked bike share (optional feature — needs a GBFS discovery URL). GBFS is
+  // an open standard, so this is not specific to any city or operator.
+  if (config.gbfsUrl) {
+    const gbfs = new GbfsClient(config.gbfsUrl, config.region.bbox, (msg) => app.log.info(msg));
+    gbfs.start();
+    app.addHook('onClose', () => gbfs.stop());
+    app.get('/api/bikes', () => gbfs.list());
+  } else {
+    app.get('/api/bikes', () => []);
+  }
 
   const LINE_STATUS_TTL_MS = 60_000; // status changes slowly; poll gently
   const STOP_DETAIL_TTL_MS = 600_000; // facilities/zones are near-static

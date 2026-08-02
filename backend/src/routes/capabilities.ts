@@ -68,6 +68,7 @@ export function buildCapabilities(config: AppConfig, bakedDataDir: string): Capa
       // Independent feeds, each gated by its own credential or flag.
       buses: config.bodsApiKey !== undefined,
       nationalRail: config.darwinToken !== undefined,
+      bikeStations: config.gbfsUrl !== undefined,
       vessels: config.aisApiKey !== undefined,
       tideGauges: region.tideGauges,
       // Global upstreams, available to every region.

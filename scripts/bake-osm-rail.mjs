@@ -352,11 +352,21 @@ async function main() {
       })),
     });
 
-    manifestLines.push({ id: line.id, name: line.name, mode: line.mode, color: line.color });
+    manifestLines.push({
+      id: line.id,
+      name: line.name,
+      mode: line.mode,
+      color: line.color,
+      // Passed through so the frontend can derive simulated services from the
+      // data rather than from a build-time flag. Absent for regions that do
+      // not declare them.
+      ...(line.sim ? { sim: line.sim } : {}),
+    });
   }
 
   writeJson(join(outDir, 'manifest.json'), {
     generatedAt: new Date().toISOString(),
+    ...(config.service ? { service: config.service } : {}),
     lines: manifestLines,
   });
   console.log(`\nWrote manifest with ${manifestLines.length} lines to ${outDir}`);

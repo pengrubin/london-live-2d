@@ -3,15 +3,29 @@
 export interface LineManifestEntry {
   id: string;
   name: string;
-  mode: 'tube' | 'dlr' | 'elizabeth-line' | 'overground';
-  /** Official TfL line colour (e.g. Northern is #000000). */
+  /** London's TfL modes, plus whatever an OSM-baked region declares. */
+  mode: 'tube' | 'dlr' | 'elizabeth-line' | 'overground' | string;
+  /** Official line colour (e.g. Northern is #000000). */
   color: string;
   /** Render-friendly override where the official colour is unreadable on a dark map. */
   displayColor?: string;
+  /**
+   * Published timetable parameters, present only where the operator publishes
+   * no live positions and the region has opted into SIMULATED services.
+   */
+  sim?: { speedKmh: number; headwayPeakS: number; headwayOffPeakS: number };
+}
+
+/** Present only where a region declares simulated services. */
+export interface ServiceManifest {
+  utcOffsetHours: number;
+  hours: Array<{ open: number; close: number }>;
+  peakHours: Array<[number, number]>;
 }
 
 export interface LineManifest {
   generatedAt: string;
+  service?: ServiceManifest;
   lines: LineManifestEntry[];
 }
 

@@ -10,6 +10,31 @@
 
 export default {
   name: 'Dubai',
+
+  /**
+   * Published service parameters, used to SIMULATE trains where no operator
+   * publishes live positions. Every number here is public and sourced; nothing
+   * is invented. A region that omits this block simply has no simulated
+   * trains — the frontend derives the layer from the data, not from a flag.
+   *
+   * Local time is UTC+4 year-round (no daylight saving).
+   * Hours: 05:00-24:00 Mon-Thu and Sat, to 01:00 Fri, from 08:00 Sun.
+   */
+  service: {
+    utcOffsetHours: 4,
+    // Index 0 = Sunday, matching Date#getUTCDay.
+    hours: [
+      { open: 8, close: 24 }, // Sun
+      { open: 5, close: 24 }, // Mon
+      { open: 5, close: 24 }, // Tue
+      { open: 5, close: 24 }, // Wed
+      { open: 5, close: 24 }, // Thu
+      { open: 5, close: 25 }, // Fri — 01:00 next day
+      { open: 5, close: 24 }, // Sat
+    ],
+    /** Local hours counted as peak, when the shorter headway applies. */
+    peakHours: [[7, 10], [17, 21]],
+  },
   /** Sanity bound: every baked coordinate must fall inside this. */
   bbox: { minLon: 54.8, minLat: 24.7, maxLon: 55.7, maxLat: 25.5 },
 
@@ -30,6 +55,8 @@ export default {
       //
       // Order matters: the first relation is stitched whole, later ones
       // contribute only the ways the earlier ones did not use.
+      // 52.5 km main section end to end in ~70 min → 45 km/h including dwells.
+      sim: { speedKmh: 45, headwayPeakS: 180, headwayOffPeakS: 360 },
       relations: [
         { id: 420297, note: 'Red1 forward: Centrepoint → Expo City Dubai' },
         { id: 12820285, note: 'Red2 reverse: Centrepoint → UAE Exchange' },
@@ -40,6 +67,7 @@ export default {
       name: 'Green Line',
       mode: 'subway',
       color: '#00CC00',
+      sim: { speedKmh: 45, headwayPeakS: 180, headwayOffPeakS: 300 },
       relations: [{ id: 2767663, note: 'Green forward: Etisalat → Creek' }],
     },
     {
@@ -49,6 +77,8 @@ export default {
       // OSM's route_master says colour=#000000, which is a placeholder rather
       // than a brand colour and is invisible on a dark basemap. Chosen here.
       color: '#E8A33D',
+      // 5.1 km in about 11 min; runs far less often than the metro.
+      sim: { speedKmh: 28, headwayPeakS: 900, headwayOffPeakS: 1200 },
       relations: [{ id: 7825237, note: 'Palm Jumeirah Monorail' }],
     },
     {
@@ -63,6 +93,8 @@ export default {
       // `backward` splices in a 30 m dead-end stub that is the only genuine
       // gap in the whole dataset.
       wayRoles: ['forward'],
+      // 12.6 km of baked geometry in the published ~40 min → 19 km/h.
+      sim: { speedKmh: 19, headwayPeakS: 240, headwayOffPeakS: 420 },
       relations: [{ id: 7826083, note: 'Dubai Tram (out-and-back loop)' }],
     },
   ],

@@ -32,3 +32,12 @@ original photo page, as the API terms require.
 
 Ship photographs are courtesy of [VesselFinder](https://www.vesselfinder.com),
 fetched per-MMSI via the backend proxy (see `backend/src/routes/ship-photo.ts`).
+
+### Dubai (simulated services)
+
+| File | Used for | Commons page | License | Author |
+|---|---|---|---|---|
+| `dubai-metro-red.jpg` | Red Line | [Dubai Metro train.jpg](https://commons.wikimedia.org/wiki/File%3ADubai_Metro_train.jpg) | CC BY-SA 3.0 | Nepenthes |
+| `dubai-metro-green.jpg` | Green Line | [Dubai metro green line.jpg](https://commons.wikimedia.org/wiki/File%3ADubai_metro_green_line.jpg) | CC BY-SA 4.0 | Outlander07 |
+| `dubai-tram.jpg` | Dubai Tram | [Dubai Alstom Citadis 402.jpg](https://commons.wikimedia.org/wiki/File%3ADubai_Alstom_Citadis_402.jpg) | CC0 | Maurits90 |
+| `dubai-monorail.jpg` | Palm Jumeirah Monorail | [Palm Jumeirah Monorail second train.JPG](https://commons.wikimedia.org/wiki/File%3APalm_Jumeirah_Monorail_second_train.JPG) | CC0 | Maurits90 |

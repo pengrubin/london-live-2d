@@ -8,52 +8,13 @@ import { TrainInterpolator } from './interpolator';
 import { VehiclePopup } from '../ui/vehicle-popup';
 import { isLayerShown, makeRenderGate } from '../util/render-gate';
 import { registerPoll, symbolTierIntervalMs } from '../util/lifecycle';
+import { makeBulletIcon } from '../util/bullet-icon';
 
 const POLL_INTERVAL_MS = 10_000;
 const SOURCE_ID = 'trains';
 const LAYER_ID = 'trains-dots';
 
 // ── bullet-nose vehicle icon, drawn pointing north; MapLibre rotates it ──
-const ICON_PX = 36; // canvas width  (drawn at 2x, rendered at pixelRatio 2)
-const ICON_PY = 64; // canvas height
-const ICON_OUTLINE = '#ffffff';
-
-function makeBulletIcon(color: string): ImageData {
-  const canvas = document.createElement('canvas');
-  canvas.width = ICON_PX;
-  canvas.height = ICON_PY;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('2d canvas unavailable');
-  const w = ICON_PX;
-  const h = ICON_PY;
-  const inset = 4; // room for the outline stroke
-  const left = inset;
-  const right = w - inset;
-  const bottom = h - inset;
-  const noseTip = inset;
-  const shoulder = h * 0.38; // where the straight body curves into the nose
-  const rearR = (right - left) / 2.6; // rounded tail corners
-
-  ctx.beginPath();
-  ctx.moveTo(left, shoulder);
-  // nose: two symmetric curves meeting at the tip
-  ctx.quadraticCurveTo(left, noseTip + (shoulder - noseTip) * 0.25, w / 2, noseTip);
-  ctx.quadraticCurveTo(right, noseTip + (shoulder - noseTip) * 0.25, right, shoulder);
-  // body sides + rounded tail
-  ctx.lineTo(right, bottom - rearR);
-  ctx.quadraticCurveTo(right, bottom, right - rearR, bottom);
-  ctx.lineTo(left + rearR, bottom);
-  ctx.quadraticCurveTo(left, bottom, left, bottom - rearR);
-  ctx.closePath();
-
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.strokeStyle = ICON_OUTLINE;
-  ctx.lineWidth = 3;
-  ctx.stroke();
-  return ctx.getImageData(0, 0, w, h);
-}
-
 function addVehicleIcons(map: MaplibreMap, colorByLine: Map<string, string>): void {
   for (const [lineId, color] of colorByLine) {
     const name = `train-${lineId}`;

@@ -29,6 +29,8 @@ import {
 import { startRoadDisruptions, ROAD_DISRUPTIONS_LAYER_IDS } from './layers/road-disruptions';
 import { startTideGauges, TIDE_GAUGES_LAYER_IDS } from './layers/tide-gauges';
 import { startRainRadar, RAIN_RADAR_LAYER_ID } from './layers/rain-radar';
+import { startBikeStations, BIKE_STATIONS_LAYER_ID } from './layers/bike-stations';
+import { startSimulatedTrains, SIMULATED_TRAINS_LAYER_ID } from './layers/simulated-trains';
 import { hasLayer, loadCapabilities } from './region';
 
 const TOAST_DISMISS_MS = 4000;
@@ -243,8 +245,23 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
     readonly overlay: OverlayToggle;
   }> = [
     {
-      name: 'jamCams',
+      name: 'transitLines',
+      row: 0,
+      start: () => startSimulatedTrains(target),
+      overlay: {
+        label: 'Metro (simulated)',
+        layerIds: [SIMULATED_TRAINS_LAYER_ID],
+      },
+    },
+    {
+      name: 'bikeStations',
       row: 5,
+      start: () => startBikeStations(target),
+      overlay: { label: 'Bike stations', layerIds: [BIKE_STATIONS_LAYER_ID] },
+    },
+    {
+      name: 'jamCams',
+      row: 6,
       start: () => addJamCams(target),
       overlay: { label: 'JamCams', layerIds: [JAMCAMS_LAYER_ID] },
     },
@@ -280,19 +297,19 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
     },
     {
       name: 'roadDisruptions',
-      row: 6,
+      row: 7,
       start: () => startRoadDisruptions(target),
       overlay: { label: 'Roadworks', layerIds: ROAD_DISRUPTIONS_LAYER_IDS },
     },
     {
       name: 'tideGauges',
-      row: 7,
+      row: 8,
       start: () => startTideGauges(target),
       overlay: { label: 'Tide gauges', layerIds: TIDE_GAUGES_LAYER_IDS },
     },
     {
       name: 'rainRadar',
-      row: 8,
+      row: 9,
       start: () => startRainRadar(target),
       overlay: { label: 'Rain radar', layerIds: [RAIN_RADAR_LAYER_ID], startOff: true },
     },
@@ -300,7 +317,14 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
 
   const available = LAYERS.filter((layer) => hasLayer(layer.name));
   await Promise.allSettled(available.map((layer) => layer.start()));
+
+  // Offer a toggle only for layers that actually exist. A capability being on
+  // is not the same as a layer having been created: a start can decline (the
+  // simulated services need timetable parameters the region may not publish)
+  // or fail outright, and a switch that controls nothing is worse than no
+  // switch — it advertises data the map does not have.
   const overlays: OverlayToggle[] = [...available]
+    .filter((layer) => layer.overlay.layerIds.some((id) => target.getLayer(id)))
     .sort((a, b) => a.row - b.row)
     .map((layer) => layer.overlay);
 
