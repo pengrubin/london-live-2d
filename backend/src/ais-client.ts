@@ -3,14 +3,8 @@
 // real vessel name to each TfL river-bus marker.
 
 import { flagFromMmsi } from './mid-flags';
+import type { Bbox } from './region';
 
-/** Thames through Greater London (two boxes: central river + estuary approach). */
-const THAMES_BOUNDING_BOXES = [
-  [
-    [51.3, -0.55],
-    [51.62, 0.45],
-  ],
-];
 const RECONNECT_DELAY_MS = 15_000;
 const STALE_AFTER_MS = 10 * 60_000;
 const PRUNE_INTERVAL_MS = 60_000;
@@ -78,9 +72,17 @@ export class AisClient {
   private stopped = false;
   private readonly apiKey: string;
   private readonly log: (msg: string) => void;
+  /** aisstream wants [[minLat, minLon], [maxLat, maxLon]] — lat before lon. */
+  private readonly boundingBoxes: readonly (readonly (readonly number[])[])[];
 
-  constructor(apiKey: string, log: (msg: string) => void) {
+  constructor(apiKey: string, bbox: Bbox, log: (msg: string) => void) {
     this.apiKey = apiKey;
+    this.boundingBoxes = [
+      [
+        [bbox.minLat, bbox.minLon],
+        [bbox.maxLat, bbox.maxLon],
+      ],
+    ];
     this.log = log;
     setInterval(() => this.prune(), PRUNE_INTERVAL_MS).unref();
   }
@@ -99,7 +101,7 @@ export class AisClient {
       this.socket?.send(
         JSON.stringify({
           APIKey: this.apiKey,
-          BoundingBoxes: THAMES_BOUNDING_BOXES,
+          BoundingBoxes: this.boundingBoxes,
           FilterMessageTypes: ['PositionReport', 'ShipStaticData'],
         }),
       );

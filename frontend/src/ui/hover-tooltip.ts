@@ -45,7 +45,11 @@ function vehicleTipHtml(p: VehicleHoverProps): string {
   </div>`;
 }
 
-function stationTipHtml(p: StationHoverProps, colorByLine: ReadonlyMap<string, string>): string {
+function stationTipHtml(
+  p: StationHoverProps,
+  colorByLine: ReadonlyMap<string, string>,
+  clickable: boolean,
+): string {
   const chips = p.lineIds
     .split(',')
     .filter(Boolean)
@@ -54,9 +58,11 @@ function stationTipHtml(p: StationHoverProps, colorByLine: ReadonlyMap<string, s
         `<span class="sp-chip" style="background:${esc(colorByLine.get(id) ?? '#666')}"></span>`,
     )
     .join('');
+  // Only promise departures where there is an arrivals feed to serve them.
+  const hint = clickable ? '<div class="vp-dim">click for live departures</div>' : '';
   return `<div class="vp">
     <b>${esc(p.name)}</b> <span class="tip-chips">${chips}</span>
-    <div class="vp-dim">click for live departures</div>
+    ${hint}
   </div>`;
 }
 
@@ -76,11 +82,35 @@ function linesTipHtml(
   return `<div class="vp">${rows}</div>`;
 }
 
+/**
+ * queryRenderedFeatures aborts the whole query on the first layer id the style
+ * does not contain: it fires a map error and returns an empty array. A region
+ * without a live train pipeline has no vehicles layer, so asking for it would
+ * both spam the console on every hover and make "is something on top of this?"
+ * answer no — letting the line tooltip overwrite the station tooltip. Filtering
+ * to layers that exist is the same guard legend.ts already applies.
+ */
+function presentLayers(map: MaplibreMap, ids: readonly string[]): string[] {
+  return ids.filter((id) => map.getLayer(id));
+}
+
+/** Features under the cursor among whichever of `ids` the style actually has. */
+function queryPresent(
+  map: MaplibreMap,
+  point: MapLayerMouseEvent['point'],
+  ids: readonly string[],
+): unknown[] {
+  const layers = presentLayers(map, ids);
+  return layers.length === 0 ? [] : map.queryRenderedFeatures(point, { layers });
+}
+
 export function setupHoverTooltips(
   map: MaplibreMap,
   colorByLine: ReadonlyMap<string, string>,
   nameByLine: ReadonlyMap<string, string>,
   isVehicleSelected: (key: string) => boolean,
+  /** False where stations have no arrivals endpoint behind them. */
+  stationsClickable = true,
 ): void {
   const tip = new Popup({
     closeButton: false,
@@ -119,7 +149,7 @@ export function setupHoverTooltips(
 
   map.on('mousemove', STATIONS_LAYER_ID, (e: MapLayerMouseEvent) => {
     // vehicles drawn on top own the hover when overlapping
-    if (map.queryRenderedFeatures(e.point, { layers: [VEHICLES_LAYER_ID] }).length > 0) return;
+    if (queryPresent(map, e.point, [VEHICLES_LAYER_ID]).length > 0) return;
     const props = e.features?.[0]?.properties as StationHoverProps | undefined;
     if (!props) return;
     map.getCanvas().style.cursor = 'pointer';
@@ -127,7 +157,7 @@ export function setupHoverTooltips(
     const id = `s:${props.name}`;
     if (shownFor !== id) {
       shownFor = id;
-      tip.setHTML(stationTipHtml(props, colorByLine));
+      tip.setHTML(stationTipHtml(props, colorByLine, stationsClickable));
     }
     if (!tip.isOpen()) tip.addTo(map);
   });
@@ -138,10 +168,7 @@ export function setupHoverTooltips(
 
   map.on('mousemove', LINES_LAYER_ID, (e: MapLayerMouseEvent) => {
     // vehicles and stations own the hover when overlapping the line
-    const busy = map.queryRenderedFeatures(e.point, {
-      layers: [VEHICLES_LAYER_ID, STATIONS_LAYER_ID],
-    });
-    if (busy.length > 0) return;
+    if (queryPresent(map, e.point, [VEHICLES_LAYER_ID, STATIONS_LAYER_ID]).length > 0) return;
     // shared corridors: list every line under the cursor, not just the top one
     const lineIds = [
       ...new Set(

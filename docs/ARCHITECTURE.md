@@ -71,6 +71,15 @@ london-live-2d/
 
 ## ⚙️ Backend
 
+### Region and capabilities
+
+Geography is configuration, not constants: every bounding box, centre point and
+credential comes from the environment and defaults to London, so one codebase can
+serve more than one city. A deployment declares **what it has**, never which city
+it is, and `GET /api/capabilities` reports the resulting layer set. Every feed —
+TfL included — is optional; an absent key means an absent layer, not a failure to
+start. See [REGION_CONFIG.md](REGION_CONFIG.md) and `backend/.env.example`.
+
 ### Framework choice: Fastify
 
 Fastify over Express because: first-class TypeScript support, JSON-schema request/response

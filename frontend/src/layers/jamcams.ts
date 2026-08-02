@@ -2,6 +2,7 @@
 // the live still, refreshed every 10 s while the popup stays open.
 
 import { Popup, type Map as MaplibreMap, type MapLayerMouseEvent } from 'maplibre-gl';
+import { below } from '../util/layer-order';
 
 export const JAMCAMS_LAYER_ID = 'jamcams-dots';
 const SOURCE_ID = 'jamcams';
@@ -61,7 +62,7 @@ export async function addJamCams(map: MaplibreMap): Promise<void> {
         'circle-opacity': 0.85,
       },
     },
-    'stations-circle', // cameras sit beneath station dots and vehicles
+    below(map, 'stations-circle'), // cameras sit beneath station dots and vehicles
   );
 
   const tip = new Popup({ closeButton: false, closeOnClick: false, offset: 10, className: 'hover-tip' });

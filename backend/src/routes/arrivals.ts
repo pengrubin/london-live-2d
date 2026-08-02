@@ -48,6 +48,17 @@ function sendCached(reply: FastifyReply, cacheState: 'hit' | 'stale', body: unkn
 export function registerArrivalsRoute(app: FastifyInstance, deps: ArrivalsDeps): void {
   const { config, cache, budget } = deps;
 
+  // No TfL key → no tube network to report on. Answering 503 with the reason
+  // beats a silent empty array: a frontend that reads /api/capabilities never
+  // calls this, so anyone who does reach it is debugging and wants the cause.
+  const appKey = config.tflAppKey;
+  if (appKey === undefined) {
+    app.get('/api/arrivals', async (_request, reply) =>
+      reply.code(503).send({ error: 'TFL_APP_KEY not configured' }),
+    );
+    return;
+  }
+
   app.get<{ Querystring: ArrivalsQuery }>('/api/arrivals', async (request, reply) => {
     const parsed = parseLinesParam(request.query.lines);
     if (!parsed.ok) {
@@ -72,7 +83,7 @@ export function registerArrivalsRoute(app: FastifyInstance, deps: ArrivalsDeps):
     }
 
     try {
-      const upstream = await fetchArrivals(parsed.ids, config.tflAppKey);
+      const upstream = await fetchArrivals(parsed.ids, appKey);
       if (Array.isArray(upstream.body)) {
         cache.set(cacheKey, upstream.body);
         return reply.header('x-cache', 'miss').send(upstream.body);
@@ -80,7 +91,7 @@ export function registerArrivalsRoute(app: FastifyInstance, deps: ArrivalsDeps):
       // TfL error object (e.g. unknown line id): pass through, do not cache.
       // TfL echoes the request URI (including app_key) in error bodies, so
       // redact the secret before it can reach the browser.
-      const sanitized = JSON.stringify(upstream.body).replaceAll(config.tflAppKey, '<redacted>');
+      const sanitized = JSON.stringify(upstream.body).replaceAll(appKey, '<redacted>');
       return reply
         .code(upstream.status)
         .header('x-cache', 'miss')

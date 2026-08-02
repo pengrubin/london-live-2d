@@ -5,17 +5,20 @@
 import type { FastifyInstance } from 'fastify';
 import type { TflResponse } from '../tfl-client';
 import { UPSTREAM_TIMEOUT_MS, TFL_BASE_URL } from '../constants';
+import type { Bbox, CirclePoint } from '../region';
 import { registerProxyRoute, singleParamKey, type ProxyDeps } from './proxy-route';
 
-/** London centre-point radius query, in nautical miles. */
-const ADSB_LAT = 51.5;
-const ADSB_LON = -0.12;
-const ADSB_RADIUS_NM = 30;
-/** Primary carries aircraft descriptions inline; fallback is the same network. */
-const ADSB_PRIMARY = `https://api.airplanes.live/v2/point/${ADSB_LAT}/${ADSB_LON}/${ADSB_RADIUS_NM}`;
-const ADSB_FALLBACK = `https://api.adsb.lol/v2/point/${ADSB_LAT}/${ADSB_LON}/${ADSB_RADIUS_NM}`;
-
 const CALLSIGN_PATTERN = /^[A-Za-z0-9-]{2,10}$/;
+
+/** Both ADS-B networks take the same /point/{lat}/{lon}/{radiusNm} path shape. */
+function adsbUrls(point: CirclePoint): { primary: string; fallback: string } {
+  const path = `v2/point/${point.lat}/${point.lon}/${point.radiusNm}`;
+  return {
+    // Primary carries aircraft descriptions inline; fallback is the same network.
+    primary: `https://api.airplanes.live/${path}`,
+    fallback: `https://api.adsb.lol/${path}`,
+  };
+}
 
 async function fetchJson(url: string): Promise<TflResponse> {
   const response = await fetch(url, {
@@ -26,21 +29,23 @@ async function fetchJson(url: string): Promise<TflResponse> {
   return { status: response.status, body };
 }
 
-async function fetchAircraft(): Promise<TflResponse> {
+async function fetchAircraft(point: CirclePoint): Promise<TflResponse> {
+  const { primary: primaryUrl, fallback } = adsbUrls(point);
   try {
-    const primary = await fetchJson(ADSB_PRIMARY);
+    const primary = await fetchJson(primaryUrl);
     if (primary.status === 200) return primary;
   } catch {
     // fall through to the mirror
   }
-  return fetchJson(ADSB_FALLBACK);
+  return fetchJson(fallback);
 }
 
-/** Live aircraft over London: GET /api/aircraft (no params). */
+/** Live aircraft over the region's centre point: GET /api/aircraft (no params). */
 export function registerAircraftRoute(app: FastifyInstance, deps: ProxyDeps): void {
+  const { adsb } = deps.config.region;
   registerProxyRoute(app, deps, {
     path: '/api/aircraft',
-    fetchUpstream: () => fetchAircraft(),
+    fetchUpstream: () => fetchAircraft(adsb),
   });
 }
 
@@ -79,7 +84,7 @@ export function registerNrBoardRoute(app: FastifyInstance, deps: ProxyDeps): voi
 export function registerJamCamsRoute(app: FastifyInstance, deps: ProxyDeps): void {
   registerProxyRoute(app, deps, {
     path: '/api/jamcams',
-    fetchUpstream: (_value, appKey) => {
+    fetchTfl: (_value, appKey) => {
       const url = new URL('/Place/Type/JamCam', TFL_BASE_URL);
       url.searchParams.set('app_key', appKey);
       return fetchJson(url.toString());
@@ -87,14 +92,22 @@ export function registerJamCamsRoute(app: FastifyInstance, deps: ProxyDeps): voi
   });
 }
 
-/** Thames tide gauges (Environment Agency): GET /api/tide-gauges (no params).
- * Returns [{ref,label,lat,lon,levelM,readingAt,trend}] — see ea-tides.ts. */
+/** Tide gauges (Environment Agency): GET /api/tide-gauges (no params).
+ * Returns [{ref,label,lat,lon,levelM,readingAt,trend}] — see ea-tides.ts.
+ * The EA publishes English stations only, so a region outside England serves an
+ * empty list rather than calling an upstream that can have nothing for it. */
 export function registerTideGaugesRoute(app: FastifyInstance, deps: ProxyDeps): void {
+  const { region } = deps.config;
+  if (!region.tideGauges) {
+    app.get('/api/tide-gauges', () => []);
+    return;
+  }
+  const bbox: Bbox = region.bbox;
   registerProxyRoute(app, deps, {
     path: '/api/tide-gauges',
     fetchUpstream: async () => {
       const { fetchTideGauges } = await import('../ea-tides');
-      return { status: 200, body: await fetchTideGauges() };
+      return { status: 200, body: await fetchTideGauges(bbox) };
     },
   });
 }
@@ -104,7 +117,7 @@ export function registerTideGaugesRoute(app: FastifyInstance, deps: ProxyDeps): 
 export function registerRoadDisruptionsRoute(app: FastifyInstance, deps: ProxyDeps): void {
   registerProxyRoute(app, deps, {
     path: '/api/road-disruptions',
-    fetchUpstream: (_value, appKey) => {
+    fetchTfl: (_value, appKey) => {
       const url = new URL('/Road/all/Disruption', TFL_BASE_URL);
       url.searchParams.set('stripContent', 'false');
       url.searchParams.set('app_key', appKey);

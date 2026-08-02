@@ -9,6 +9,7 @@ import {
   type MapLayerMouseEvent,
 } from 'maplibre-gl';
 import { registerPoll } from '../util/lifecycle';
+import { below } from '../util/layer-order';
 
 const DOTS_LAYER_ID = 'tide-gauges-dots';
 const ARROWS_LAYER_ID = 'tide-gauges-arrows';
@@ -111,7 +112,7 @@ export async function startTideGauges(map: MaplibreMap): Promise<void> {
         'circle-opacity': 0.9,
       },
     },
-    'stations-circle', // gauges sit beneath station dots and vehicles
+    below(map, 'stations-circle'), // gauges sit beneath station dots and vehicles
   );
   map.addLayer(
     {
@@ -128,7 +129,7 @@ export async function startTideGauges(map: MaplibreMap): Promise<void> {
         'icon-ignore-placement': true,
       },
     },
-    'stations-circle',
+    below(map, 'stations-circle'),
   );
 
   async function poll(): Promise<void> {

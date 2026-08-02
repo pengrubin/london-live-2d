@@ -15,13 +15,13 @@ import { appendRankLine } from '../ui/rank-line';
 import { dimensionsLine, fetchShipPhoto, flagLine } from '../ui/ship-info';
 import { injectPopupStyles } from '../ui/station-popup';
 import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
+import { M_PER_DEG_LAT, metersPerDegLon } from '../region';
+import { below } from '../util/layer-order';
 
 export const VESSELS_LAYER_ID = 'vessels-icons';
 const SOURCE_ID = 'vessels';
 const POLL_INTERVAL_MS = 10_000;
 const KN_TO_MS = 0.514444;
-const M_PER_DEG_LAT = 110540;
-const M_PER_DEG_LON = 111320 * Math.cos((51.5 * Math.PI) / 180);
 /** An AIS ship this close to a TfL boat marker IS that boat. */
 const TFL_DEDUPE_M = 200;
 /** Below this age a vessel is fully live: full size, full opacity. */
@@ -184,7 +184,7 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
         'icon-opacity': ['get', 'opacity'],
       },
     },
-    'trains-dots', // beneath TfL vehicles so bullets stay readable
+    below(map, 'trains-dots'), // beneath TfL vehicles so bullets stay readable
   );
 
   async function poll(): Promise<void> {
@@ -218,6 +218,7 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
     const nowMs = Date.now();
     const boats = tflBoatPositions(map);
     const features = [];
+    const mPerDegLon = metersPerDegLon();
     for (const [mmsi, t] of tracked) {
       const age = nowMs - t.lastListedAt;
       if (age >= GONE_MS) {
@@ -233,7 +234,7 @@ export async function startVessels(map: MaplibreMap): Promise<void> {
         const rad = ((v.cog ?? 0) * Math.PI) / 180;
         const dtS = Math.min(Math.max(0, (nowMs - v.lastSeen) / 1000), 120);
         lngLat = [
-          v.lon + (speedMs * dtS * Math.sin(rad)) / M_PER_DEG_LON,
+          v.lon + (speedMs * dtS * Math.sin(rad)) / mPerDegLon,
           v.lat + (speedMs * dtS * Math.cos(rad)) / M_PER_DEG_LAT,
         ];
       } else {

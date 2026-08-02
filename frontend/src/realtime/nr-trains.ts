@@ -14,6 +14,7 @@ import { isLayerShown, makeRenderGate } from '../util/render-gate';
 import { registerPoll, symbolTierIntervalMs } from '../util/lifecycle';
 import { appendRankLine } from '../ui/rank-line';
 import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
+import { below } from '../util/layer-order';
 
 export const NR_TRAINS_LAYER_ID = 'nr-trains-dots';
 const SOURCE_ID = 'nr-trains';
@@ -325,7 +326,7 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
         'icon-ignore-placement': true,
       },
     },
-    'trains-dots',
+    below(map, 'trains-dots'),
   );
 
   // ── board polling (round-robin, deduped by rid) ──

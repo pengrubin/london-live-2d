@@ -9,6 +9,7 @@ import { enablePopupDragToPan, isPopupTextInteracting } from './popup-drag';
 import { fetchRank, rankLineText } from './rank-line';
 import { dimensionsLine, fetchShipPhoto, flagLine } from './ship-info';
 import { stockPhotoUrl } from './stock-photos';
+import { M_PER_DEG_LAT, metersPerDegLon } from '../region';
 
 const CONTENT_REFRESH_MS = 1000;
 const MAX_CALLING_STOPS = 5;
@@ -59,14 +60,13 @@ interface AisVessel {
 
 /** A TfL boat and an AIS ship within this range are the same physical vessel. */
 const VESSEL_MATCH_M = 500;
-const M_PER_DEG_LAT = 110540;
-const M_PER_DEG_LON = 111320 * Math.cos((51.5 * Math.PI) / 180);
 
 function nearestVessel(vessels: AisVessel[], lngLat: readonly [number, number]): MatchedVessel | null {
   let best: { vessel: AisVessel; d: number } | null = null;
+  const mPerDegLon = metersPerDegLon();
   for (const v of vessels) {
     if (!v.name) continue;
-    const dx = (v.lon - lngLat[0]) * M_PER_DEG_LON;
+    const dx = (v.lon - lngLat[0]) * mPerDegLon;
     const dy = (v.lat - lngLat[1]) * M_PER_DEG_LAT;
     const d = Math.hypot(dx, dy);
     if (d <= VESSEL_MATCH_M && (!best || d < best.d)) best = { vessel: v, d };

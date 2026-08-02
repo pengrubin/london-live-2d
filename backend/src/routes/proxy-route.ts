@@ -15,15 +15,34 @@ export type ParsedKey = { readonly key: string } | { readonly error: string };
 
 type QueryString = Record<string, string | undefined>;
 
-interface ProxyRouteSpec {
+interface ProxyRouteBase {
   readonly path: string;
   /**
-   * Derives the cache key (also passed to fetchUpstream) from the query string.
+   * Derives the cache key (also passed to the fetcher) from the query string.
    * Omit for routes with no query parameters — those use a fixed cache key.
    */
   readonly parseKey?: (query: QueryString) => ParsedKey;
-  readonly fetchUpstream: (value: string, appKey: string) => Promise<TflResponse>;
 }
+
+/**
+ * A spec supplies exactly one fetcher, and which one it is *is* the declaration
+ * of whether the route needs the TfL key. Expressed as a union rather than a
+ * boolean flag so a TfL upstream cannot be registered without the key being
+ * threaded to it — the compiler enforces what a flag would leave to memory.
+ */
+type ProxyRouteSpec = ProxyRouteBase &
+  (
+    | {
+        /** Upstream needing no TfL key (ADS-B, adsbdb, Environment Agency …). */
+        readonly fetchUpstream: (value: string) => Promise<TflResponse>;
+        readonly fetchTfl?: never;
+      }
+    | {
+        /** TfL upstream; the route degrades to 503 when TFL_APP_KEY is unset. */
+        readonly fetchTfl: (value: string, appKey: string) => Promise<TflResponse>;
+        readonly fetchUpstream?: never;
+      }
+  );
 
 /** Cache key for routes without query parameters. */
 const FIXED_KEY = '';
@@ -56,6 +75,26 @@ export function registerProxyRoute(
 ): void {
   const { config, cache, budget } = deps;
 
+  // Resolve the fetcher once, at registration: a TfL upstream with no key
+  // configured never becomes a live route at all. Mirrors how /api/nr-board
+  // behaves without DARWIN_TOKEN, and is what lets a deployment outside London
+  // start with the TfL layers simply absent rather than failing.
+  const appKey = config.tflAppKey;
+  let fetchUpstream: (value: string) => Promise<TflResponse>;
+  if (spec.fetchTfl !== undefined) {
+    if (appKey === undefined) {
+      app.get(spec.path, async (_request, reply) =>
+        reply.code(503).send({ error: 'TFL_APP_KEY not configured' }),
+      );
+      return;
+    }
+    const { fetchTfl } = spec;
+    const tflKey = appKey;
+    fetchUpstream = (value) => fetchTfl(value, tflKey);
+  } else {
+    fetchUpstream = spec.fetchUpstream;
+  }
+
   app.get<{ Querystring: QueryString }>(spec.path, async (request, reply) => {
     const parsed = spec.parseKey ? spec.parseKey(request.query) : { key: FIXED_KEY };
     if ('error' in parsed) {
@@ -75,13 +114,15 @@ export function registerProxyRoute(
     }
 
     try {
-      const upstream = await spec.fetchUpstream(key, config.tflAppKey);
+      const upstream = await fetchUpstream(key);
       if (upstream.status === HTTP_OK) {
         cache.set(key, upstream.body);
         return reply.header('x-cache', 'miss').send(upstream.body);
       }
       // TfL error bodies echo the request URI incl. app_key — redact the secret.
-      const sanitized = JSON.stringify(upstream.body).replaceAll(config.tflAppKey, '<redacted>');
+      // Non-TfL upstreams have no key to leak, so there is nothing to redact.
+      const raw = JSON.stringify(upstream.body);
+      const sanitized = appKey === undefined ? raw : raw.replaceAll(appKey, '<redacted>');
       return reply
         .code(upstream.status)
         .header('x-cache', 'miss')

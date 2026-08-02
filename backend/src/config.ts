@@ -1,10 +1,17 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_CORS_ORIGIN, DEFAULT_PORT } from './constants';
+import { loadRegion, type RegionConfig } from './region';
 
 export interface AppConfig {
-  readonly tflAppKey: string;
+  /**
+   * TfL Unified API key. OPTIONAL: every TfL-derived layer (tube, arrivals,
+   * line status, jam cams, road disruptions, bike points) is simply absent when
+   * it is unset, the same way AIS/BODS/Darwin features already behave. That is
+   * what lets a deployment outside London start at all.
+   */
+  readonly tflAppKey: string | undefined;
   readonly port: number;
   readonly corsOrigin: string;
   /** aisstream.io key for live vessel names; feature is off when absent. */
@@ -14,17 +21,41 @@ export interface AppConfig {
   /** BODS (data.bus-data.dft.gov.uk) key for live buses; feature is off when absent. */
   readonly bodsApiKey: string | undefined;
   /**
+   * GBFS discovery document (gbfs.json) for docked bike share. An open
+   * standard, so any city with a GBFS system gets the layer by setting this;
+   * absent means no bike layer.
+   */
+  readonly gbfsUrl: string | undefined;
+  /**
    * Directory for runtime-mutable state (leaderboard standings, learner marker).
    * Set in production to a mounted volume (e.g. Railway Volume at /data) so this
    * state survives redeploys; unset locally, where state stays under data/.
    */
   readonly persistDir: string | undefined;
+  /** The geography this deployment serves — London unless REGION_* overrides it. */
+  readonly region: RegionConfig;
 }
 
 const ENV_FILE_PATH = fileURLToPath(new URL('../.env', import.meta.url));
 
-/** Repo data/ directory (sits beside backend/) — the fallback persist root. */
-const DATA_DIR = fileURLToPath(new URL('../../data', import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+/**
+ * Fallback root for runtime-WRITTEN state (leaderboard standings, bus traces,
+ * learned routes) when PERSIST_DIR is unset.
+ *
+ * Scoped to the region so two deployments sharing one filesystem — which is
+ * exactly what local development is — do not share one another's standings.
+ * Without this, a second region opens showing the first region's leaderboard,
+ * complete with its vehicles. Production sets PERSIST_DIR per service and never
+ * reaches this path; a deployment that sets no REGION_DATA_DIR (London) keeps
+ * the byte-identical `data/` location it has always used.
+ */
+const DATA_DIR = (() => {
+  const regionDir = process.env['REGION_DATA_DIR']?.trim();
+  if (!regionDir) return join(REPO_ROOT, 'data');
+  return isAbsolute(regionDir) ? regionDir : join(REPO_ROOT, regionDir);
+})();
 
 /**
  * Legacy on-disk locations (relative to data/) for runtime-written files whose
@@ -133,13 +164,11 @@ function readEnv(name: string): string | undefined {
 
 /** Loads and validates configuration; throws with a clear message on failure. */
 export function loadConfig(): AppConfig {
-  const tflAppKey = readEnv('TFL_APP_KEY');
-  if (tflAppKey === undefined || tflAppKey === '') {
-    throw new Error(
-      'TFL_APP_KEY is not set. Add it to backend/.env (see backend/.env.example) ' +
-        'or export it in the environment before starting the server.',
-    );
-  }
+  // Absent rather than fatal: a deployment outside London has no TfL key and
+  // must still start, serving only the layers it does have. The startup log
+  // reports the resulting layer set, so a key missing by accident is visible.
+  const rawTflAppKey = readEnv('TFL_APP_KEY');
+  const tflAppKey = rawTflAppKey === '' ? undefined : rawTflAppKey;
 
   const rawPort = readEnv('PORT');
   const port = rawPort === undefined ? DEFAULT_PORT : Number.parseInt(rawPort, 10);
@@ -151,7 +180,19 @@ export function loadConfig(): AppConfig {
   const aisApiKey = readEnv('AIS_API_KEY');
   const darwinToken = readEnv('DARWIN_TOKEN');
   const bodsApiKey = readEnv('BODS_API_KEY');
+  const gbfsUrl = readEnv('GBFS_URL');
   const persistDir = readEnv('PERSIST_DIR');
+  const region = loadRegion(readEnv);
 
-  return { tflAppKey, port, corsOrigin, aisApiKey, darwinToken, bodsApiKey, persistDir };
+  return {
+    tflAppKey,
+    port,
+    corsOrigin,
+    aisApiKey,
+    darwinToken,
+    bodsApiKey,
+    gbfsUrl,
+    persistDir,
+    region,
+  };
 }
