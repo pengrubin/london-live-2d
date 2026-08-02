@@ -321,7 +321,12 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
     window.__trains = trains;
     setupStationPopups(target, trains.colorByLine, trains.closeVehiclePopup);
   }
-  if (manifestLines.length > 0) {
+  // Either source justifies tooltips: vehicles need only the train handle,
+  // stations and lines need only the manifest. Gating on the manifest alone
+  // would drop vehicle hover in the state where line geometry failed to load
+  // but the train pipeline started — which is what the old `if (trains)` gate
+  // covered.
+  if (trains !== null || manifestLines.length > 0) {
     const colorByLine = new Map(manifestLines.map((line) => [line.id, line.color]));
     const nameByLine = new Map(manifestLines.map((line) => [line.id, line.name]));
     setupHoverTooltips(
