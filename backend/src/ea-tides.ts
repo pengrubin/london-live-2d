@@ -5,12 +5,10 @@
 // rising/falling trend. The EA publishes new readings every 15 minutes.
 
 import { UPSTREAM_TIMEOUT_MS } from './constants';
+import { contains, type Bbox } from './region';
 
 const EA_BASE = 'https://environment.data.gov.uk/flood-monitoring';
 const TIDAL_QUERY = 'parameter=level&qualifier=Tidal%20Level';
-
-/** Same bbox as the frontend map bounds (tidal Thames, Teddington to Tilbury). */
-const BBOX = { minLat: 51.25, maxLat: 51.72, minLon: -0.55, maxLon: 0.35 };
 
 /** How far back to look when deciding whether the tide is rising or falling. */
 const TREND_WINDOW_MS = 50 * 60_000;
@@ -76,15 +74,13 @@ function firstLabel(label: string | readonly string[] | undefined): string {
   return typeof label === 'string' ? label : 'Tide gauge';
 }
 
-function toCandidate(station: EaStation): CandidateStation | undefined {
+function toCandidate(station: EaStation, bbox: Bbox): CandidateStation | undefined {
   const { stationReference: ref, lat, long: lon } = station;
   if (typeof ref !== 'string' || ref === '') return undefined;
   // DIFF_* entries are synthetic gauge-to-gauge difference series, not places.
   if (ref.startsWith('DIFF')) return undefined;
   if (typeof lat !== 'number' || typeof lon !== 'number') return undefined;
-  if (lat < BBOX.minLat || lat > BBOX.maxLat || lon < BBOX.minLon || lon > BBOX.maxLon) {
-    return undefined;
-  }
+  if (!contains(bbox, lon, lat)) return undefined;
   const measures = (station.measures ?? []).flatMap((m) =>
     typeof m['@id'] === 'string' ? [{ id: m['@id'], period: m.period ?? 0 }] : [],
   );
@@ -95,16 +91,27 @@ function toCandidate(station: EaStation): CandidateStation | undefined {
   return { ref, label: firstLabel(station.label), lat, lon, measureIds };
 }
 
-let stationsCache: { readonly at: number; readonly stations: readonly CandidateStation[] } | undefined;
+/** Cached station list. Keyed by bbox too, so a different region can never be
+ * served a list filtered for the previous one. */
+let stationsCache:
+  | { readonly at: number; readonly bbox: Bbox; readonly stations: readonly CandidateStation[] }
+  | undefined;
 
-async function fetchStations(now: number): Promise<readonly CandidateStation[]> {
-  if (stationsCache && now - stationsCache.at < STATIONS_TTL_MS) return stationsCache.stations;
+async function fetchStations(now: number, bbox: Bbox): Promise<readonly CandidateStation[]> {
+  const isFresh =
+    stationsCache !== undefined &&
+    now - stationsCache.at < STATIONS_TTL_MS &&
+    stationsCache.bbox.minLon === bbox.minLon &&
+    stationsCache.bbox.minLat === bbox.minLat &&
+    stationsCache.bbox.maxLon === bbox.maxLon &&
+    stationsCache.bbox.maxLat === bbox.maxLat;
+  if (isFresh && stationsCache) return stationsCache.stations;
   const items = await eaFetchItems<EaStation>(`${EA_BASE}/id/stations?${TIDAL_QUERY}`);
   const stations = items.flatMap((s) => {
-    const candidate = toCandidate(s);
+    const candidate = toCandidate(s, bbox);
     return candidate ? [candidate] : [];
   });
-  stationsCache = { at: now, stations };
+  stationsCache = { at: now, bbox, stations };
   return stations;
 }
 
@@ -155,9 +162,12 @@ function dedupeByCoordinate(
 }
 
 /** Full pipeline: stations → latest levels → dedupe → per-station trends. */
-export async function fetchTideGauges(now: number = Date.now()): Promise<readonly TideGauge[]> {
+export async function fetchTideGauges(
+  bbox: Bbox,
+  now: number = Date.now(),
+): Promise<readonly TideGauge[]> {
   const [stations, latestByMeasure] = await Promise.all([
-    fetchStations(now),
+    fetchStations(now, bbox),
     fetchLatestByMeasure(),
   ]);
 

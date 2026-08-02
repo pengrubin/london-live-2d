@@ -224,8 +224,11 @@ export interface ArrivalsFetcherDeps {
 export function makeCachedArrivalsFetcher(deps: ArrivalsFetcherDeps): () => Promise<Prediction[] | null> {
   const { config, cache, budget, lineIds, log } = deps;
   const cacheKey = lineIds.join(',');
+  const appKey = config.tflAppKey;
   return async (): Promise<Prediction[] | null> => {
-    if (lineIds.length === 0) return null;
+    // No TfL key → no tube predictions; the leaderboard still ranks the modes
+    // whose feeds this deployment does have (buses, vessels, National Rail).
+    if (appKey === undefined || lineIds.length === 0) return null;
     const fresh = cache.getFresh(cacheKey);
     if (Array.isArray(fresh)) return fresh as Prediction[];
     if (!budget.tryConsume()) {
@@ -233,7 +236,7 @@ export function makeCachedArrivalsFetcher(deps: ArrivalsFetcherDeps): () => Prom
       return Array.isArray(stale) ? (stale as Prediction[]) : null;
     }
     try {
-      const upstream = await fetchArrivals(lineIds, config.tflAppKey);
+      const upstream = await fetchArrivals(lineIds, appKey);
       if (Array.isArray(upstream.body)) {
         cache.set(cacheKey, upstream.body);
         return upstream.body as Prediction[];

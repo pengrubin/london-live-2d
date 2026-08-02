@@ -22,6 +22,7 @@ import { loadNrGraph, makeCachedNrBoardFetcher, NrSampler } from './nr-sampler';
 import { RateBudget } from './rate-budget';
 import { TraceWriter } from './trace-writer';
 import { registerArrivalsRoute } from './routes/arrivals';
+import { registerCapabilitiesRoute } from './routes/capabilities';
 import { registerHealthRoute } from './routes/health';
 import {
   registerBikePointsRoute,
@@ -84,7 +85,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   // Live vessel names (optional feature — needs an aisstream.io key in .env)
   let aisClient: AisClient | null = null;
   if (config.aisApiKey) {
-    const ais = new AisClient(config.aisApiKey, (msg) => app.log.info(msg));
+    const ais = new AisClient(config.aisApiKey, config.region.aisBbox, (msg) => app.log.info(msg));
     ais.start();
     app.addHook('onClose', () => ais.stop());
     app.get('/api/vessels', () => ais.list());
@@ -109,6 +110,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     traces.start();
     const bods = new BodsClient(
       config.bodsApiKey,
+      config.region.bbox,
       (msg) => app.log.info(msg),
       (buses, now) => traces.record(buses, now),
     );
@@ -144,6 +146,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
 
   registerHealthRoute(app);
+  registerCapabilitiesRoute(app, config);
   registerArrivalsRoute(app, { config, cache: arrivalsCache, budget: tflBudget });
   registerStopArrivalsRoute(app, { config, cache: stopArrivalsCache, budget: tflBudget });
   registerVehicleArrivalsRoute(app, { config, cache: vehicleArrivalsCache, budget: tflBudget });

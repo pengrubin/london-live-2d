@@ -1,11 +1,11 @@
-// Live all-London bus positions from the DfT Bus Open Data Service (BODS)
-// SIRI-VM datafeed. Polls the London bounding box every 15 s (~7.5 MB XML,
-// ~8-9k vehicles), parses it with a fast string scan (no DOM), and keeps an
+// Live bus positions from the DfT Bus Open Data Service (BODS) SIRI-VM
+// datafeed. Polls the configured bounding box every 15 s (all-London is ~7.5 MB
+// XML, ~8-9k vehicles), parses it with a fast string scan (no DOM), and keeps an
 // in-memory vehicle table the /api/buses route serves as a compact array.
 
+import { bboxToString, type Bbox } from './region';
+
 const BODS_BASE_URL = 'https://data.bus-data.dft.gov.uk/api/v1/datafeed/';
-/** Greater London box, matching the basemap extract. */
-const LONDON_BBOX = '-0.55,51.25,0.35,51.72';
 const POLL_INTERVAL_MS = 15_000;
 /** The feed is big; give the download room to breathe. */
 const FETCH_TIMEOUT_MS = 30_000;
@@ -112,15 +112,18 @@ export class BodsClient {
   private polling = false;
   private readonly apiKey: string;
   private readonly log: (msg: string) => void;
+  private readonly boundingBox: string;
   /** Optional trace sink — receives every poll's fixes for route learning. */
   private readonly traceSink: ((buses: readonly Bus[], now: number) => void) | undefined;
 
   constructor(
     apiKey: string,
+    bbox: Bbox,
     log: (msg: string) => void,
     traceSink?: (buses: readonly Bus[], now: number) => void,
   ) {
     this.apiKey = apiKey;
+    this.boundingBox = bboxToString(bbox);
     this.log = log;
     this.traceSink = traceSink;
   }
@@ -145,7 +148,7 @@ export class BodsClient {
     if (this.polling) return; // a slow download must not stack requests
     this.polling = true;
     try {
-      const url = `${BODS_BASE_URL}?boundingBox=${LONDON_BBOX}&api_key=${this.apiKey}`;
+      const url = `${BODS_BASE_URL}?boundingBox=${this.boundingBox}&api_key=${this.apiKey}`;
       // note: no accept header — BODS answers 406 to `accept: application/xml`
       const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!response.ok) {
