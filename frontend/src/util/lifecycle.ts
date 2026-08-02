@@ -1,13 +1,21 @@
-// Battery-saver lifecycle. A single user-facing switch — "power saver" —
-// defaulting ON for touch/mobile devices and OFF for desktop, drives two
-// measures:
+// Page lifecycle, driving two independent measures:
 //   (A) pause every realtime poller while the page is hidden (tab switched
-//       away, screen locked), resuming — with an immediate refresh — on return;
+//       away, window minimised), resuming — with an immediate refresh — on
+//       return. This is UNCONDITIONAL and not part of the power-saver switch:
+//       a hidden page renders nothing, so every byte it polls is wasted, and
+//       the origin is billed per byte for it. Browsers only throttle
+//       background timers (Chrome settles around one tick a minute); stopping
+//       them outright takes that to zero.
 //   (D) throttle the symbol-tier render loops on mobile so the GPU isn't
-//       redrawing moving vehicles at ~15 Hz when battery matters.
+//       redrawing moving vehicles at ~15 Hz when battery matters. This one IS
+//       the user-facing "power saver" switch — ON by default for touch/mobile
+//       devices, OFF for desktop.
 // Layers register their pollers here (registerPoll) instead of calling
-// setInterval directly, so all pausing/resuming happens in one place. Desktop
-// with the switch OFF behaves exactly as before — pollers never pause.
+// setInterval directly, so all pausing/resuming happens in one place.
+//
+// A visible window on a second monitor is NOT hidden, so leaving the map up as
+// a dashboard keeps polling at full rate — only genuinely backgrounded pages
+// stop.
 
 import { SYMBOL_TIER_INTERVAL_MS } from './render-gate';
 
@@ -31,9 +39,9 @@ const changeListeners = new Set<(on: boolean) => void>();
 // Default: save on mobile, run full-speed on desktop.
 let powerSaverOn = isMobile;
 
-/** Pollers run unless the saver is on AND the page is currently hidden. */
+/** Pollers run whenever the page is visible, saver or not. */
 function pollShouldRun(): boolean {
-  return !(powerSaverOn && document.hidden);
+  return !document.hidden;
 }
 
 function startPolls(): void {
@@ -78,11 +86,14 @@ export function symbolTierIntervalMs(): number {
   return isMobile && powerSaverOn ? POWER_SAVE_SYMBOL_INTERVAL_MS : SYMBOL_TIER_INTERVAL_MS;
 }
 
-/** Flip the power-saver preference (driven by the Lines-tab toggle). */
+/**
+ * Flip the power-saver preference (driven by the Lines-tab toggle). No sync()
+ * here: the saver no longer gates polling, only the render cadence, which the
+ * gates read live via symbolTierIntervalMs.
+ */
 export function setPowerSaver(on: boolean): void {
   if (on === powerSaverOn) return;
   powerSaverOn = on;
-  sync();
   for (const cb of changeListeners) cb(on);
 }
 

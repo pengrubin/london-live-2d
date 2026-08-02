@@ -275,6 +275,9 @@ const sanitizeKey = (key: string): string => key.replace(/[^A-Za-z0-9_.-]/g, '_'
 /** Live tracker map of the running buses layer — set by startBuses. */
 let activeTrackers: ReadonlyMap<string, BusTracker> | null = null;
 
+/** Forces an out-of-band /api/buses fetch — set by startBuses. */
+let refreshBuses: (() => void) | null = null;
+
 /**
  * Displayed [lng, lat] of a live bus by operator-qualified vehicle id
  * ("OPERATOR:VehicleRef"), or null when it isn't currently tracked.
@@ -298,10 +301,23 @@ export function findBus(id: string): [number, number] | null {
 let busesOverlayOn = true; // buses ship visible (no startOff on the overlay)
 let filterLines: readonly string[] = []; // snapshot of the active filter set
 
+/**
+ * Whether either layer is currently on screen — the resolved output of the
+ * truth table above, kept as state because poll() reads it. /api/buses is by
+ * far the heaviest feed the page pulls (~60 KB brotli every 15 s, ~64% of all
+ * origin egress), so while nothing is drawn we don't fetch it at all.
+ */
+let busesVisible = true;
+
 /** Recompute layer visibility + hard filter + colouring from the two inputs. */
 function applyBusDisplay(map: MaplibreMap): void {
   const filterActive = filterLines.length > 0;
   const visible = busesOverlayOn || filterActive;
+  // Coming back on, the trackers hold whatever was true when we stopped
+  // fetching, so refresh out of band rather than showing a stale picture until
+  // the next tick.
+  const resumed = visible && !busesVisible;
+  busesVisible = visible;
   // Hard-filter to matching buses ONLY when the overlay is off but a filter is
   // set — that's the "hide the grey ones, keep just the spotlighted line" case.
   // In every other case there's no setFilter, so non-matching buses stay on the
@@ -334,6 +350,8 @@ function applyBusDisplay(map: MaplibreMap): void {
     }
     if (hasIcons) map.setLayoutProperty(BUSES_ICONS_LAYER_ID, 'icon-image', iconImageNormal());
   }
+
+  if (resumed) refreshBuses?.();
 }
 
 /**
@@ -920,6 +938,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
   }
 
   async function poll(): Promise<void> {
+    if (!busesVisible) return; // nothing drawn — don't pay for the feed
     try {
       const res = await fetch('/api/buses');
       if (!res.ok) return;
@@ -1038,6 +1057,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
   });
 
   void loadRouteIndex(); // fire-and-forget: snapping activates when it lands
+  refreshBuses = () => void poll(); // lets applyBusDisplay refetch on resume
   await poll();
   renderDots();
   registerPoll(() => void poll(), POLL_INTERVAL_MS);
