@@ -59,6 +59,8 @@ echo "→ $REGION — backend/.env stashed, restored on exit · http://localhost
   env AIS_API_KEY="$AIS_KEY" \
       REGION_DATA_DIR="data/$REGION" \
       REGION_PMTILES_URL="/$REGION.pmtiles" \
+      `# deliberately overrides the region file: locally the basemap is served` \
+      `# from data/<region>/ so dev does not hammer R2 on every reload` \
       npm run dev
 ) &
 ( cd "$ROOT/frontend" && env REGION_DATA_DIR="data/$REGION" npm run dev ) &
