@@ -20,6 +20,8 @@ export interface Capabilities {
     readonly zoom: number;
     /** [[west, south], [east, north]] — MapLibre's `maxBounds` shape. */
     readonly maxBounds: readonly [readonly [number, number], readonly [number, number]];
+    /** Basemap for this region; omitted leaves the frontend on its default. */
+    readonly pmtilesUrl?: string;
   };
   readonly layers: Readonly<Record<string, boolean>>;
 }
@@ -36,6 +38,7 @@ export function buildCapabilities(config: AppConfig): Capabilities {
         [region.viewBounds.minLon, region.viewBounds.minLat],
         [region.viewBounds.maxLon, region.viewBounds.maxLat],
       ],
+      ...(region.pmtilesUrl === undefined ? {} : { pmtilesUrl: region.pmtilesUrl }),
     },
     layers: {
       // TfL Unified API — tube/DLR/Overground/Elizabeth line and friends.

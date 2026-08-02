@@ -6,9 +6,10 @@ dist/
 .DS_Store
 *.log
 
-# Large basemap binary — regenerate with:
-#   pmtiles extract https://build.protomaps.com/<build>.pmtiles data/london.pmtiles --bbox=-0.55,51.25,0.35,51.72
-data/london.pmtiles
+# Large basemap binaries, one per region — regenerate with:
+#   pmtiles extract https://build.protomaps.com/<build>.pmtiles data/<region>.pmtiles --bbox=<minLon,minLat,maxLon,maxLat>
+# London: --bbox=-0.55,51.25,0.35,51.72
+data/*.pmtiles
 data/bus-traces/
 data/osm-cache/
 data/bus-routes/

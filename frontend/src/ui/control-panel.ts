@@ -11,18 +11,18 @@ import type { Map as MaplibreMap } from 'maplibre-gl';
 import { addLeaderboard, type VehicleLocator } from './leaderboard';
 import { addBusFilter } from './bus-filter';
 import { addLegend, type LegendLine, type OverlayToggle } from './legend';
+import { hasLayer } from '../region';
 
 // Phones (portrait) start the panel collapsed so the map stays visible; tapping
 // the header expands it.
 const MOBILE_MEDIA_QUERY = '(max-width: 640px)';
 
 type TabKey = 'board' | 'filter' | 'lines';
-const TABS: { key: TabKey; label: string }[] = [
+const ALL_TABS: { key: TabKey; label: string }[] = [
   { key: 'board', label: '🏆 Board' },
   { key: 'filter', label: '🚌 Filter' },
   { key: 'lines', label: '🗺 Lines' },
 ];
-const DEFAULT_TAB: TabKey = 'board';
 
 export function addControlPanel(
   map: MaplibreMap,
@@ -31,6 +31,13 @@ export function addControlPanel(
   colorByLine: ReadonlyMap<string, string>,
   locator: VehicleLocator,
 ): void {
+  // The bus route filter is meaningless without buses — a working-looking
+  // "type a route number" box in a city that has none is worse than no tab.
+  // Lines always stays: it also hosts the overlay toggles, which every
+  // deployment has at least some of.
+  const tabs = ALL_TABS.filter((tab) => tab.key !== 'filter' || hasLayer('buses'));
+  const defaultTab: TabKey = tabs[0]?.key ?? 'lines';
+
   const panel = document.createElement('div');
   panel.className = 'legend control-panel';
 
@@ -52,11 +59,11 @@ export function addControlPanel(
   function activate(key: TabKey): void {
     for (const [k, tab] of tabByKey) tab.classList.toggle('active', k === key);
     for (const [k, section] of sectionByKey) section.classList.toggle('active', k === key);
-    const active = TABS.find((t) => t.key === key);
+    const active = tabs.find((t) => t.key === key);
     if (active) header.textContent = active.label;
   }
 
-  for (const { key, label } of TABS) {
+  for (const { key, label } of tabs) {
     const tab = document.createElement('div');
     tab.className = 'cp-tab';
     tab.textContent = label;
@@ -72,11 +79,14 @@ export function addControlPanel(
 
   // Mount each view into its own section. Order is irrelevant to visibility
   // (tabs drive that) but matches the tab order for readability.
-  addLeaderboard(sectionByKey.get('board')!, map, colorByLine, locator);
-  addBusFilter(sectionByKey.get('filter')!, map);
-  addLegend(sectionByKey.get('lines')!, map, lines, overlays);
+  const boardSection = sectionByKey.get('board');
+  if (boardSection) addLeaderboard(boardSection, map, colorByLine, locator);
+  const filterSection = sectionByKey.get('filter');
+  if (filterSection) addBusFilter(filterSection, map);
+  const linesSection = sectionByKey.get('lines');
+  if (linesSection) addLegend(linesSection, map, lines, overlays);
 
-  activate(DEFAULT_TAB);
+  activate(defaultTab);
   if (window.matchMedia(MOBILE_MEDIA_QUERY).matches) panel.classList.add('collapsed');
 
   // On phones, tapping the map (which only fires for the canvas, never for taps

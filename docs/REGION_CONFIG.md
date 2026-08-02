@@ -1,7 +1,6 @@
 # Region configuration
 
-*Added 2026-08-02. Backend half; the frontend still hard-codes its own copy of
-the map geography — see [Not done yet](#not-done-yet).*
+*Added 2026-08-02. Backend and frontend.*
 
 ## Why
 
@@ -111,26 +110,84 @@ Expected: the server starts (it would previously have thrown on the missing key)
 answers 503 with `{"error":"TFL_APP_KEY not configured"}`, and `/api/aircraft`
 returns real traffic over the configured point.
 
-## Not done yet
+## The frontend half
 
-**The frontend still hard-codes London.** `main.ts` holds `LONDON_CENTER`,
-`LONDON_BOUNDS` and `INITIAL_ZOOM`, and builds its layer list unconditionally, so
-today a non-London deployment would centre on London and show toggles for layers
-its backend does not have. `/api/capabilities` exists to be consumed; nothing
-consumes it yet.
+`frontend/src/region.ts` fetches `/api/capabilities` once, before the map is
+created, and exposes three things: the region geography, `hasLayer(name)`, and
+`metersPerDegLon()`.
 
-**`M_PER_DEG_LON` is baked at London's latitude in five places** —
-`backend/src/shared/geometry.ts`, `frontend/src/realtime/geometry.ts`,
-`frontend/src/layers/vessels.ts`, `frontend/src/layers/aircraft.ts` and
-`frontend/src/ui/vehicle-popup.ts` — as `111320 × cos(51.5°)`.
+**Bootstrap became async**, because centre, zoom, bounds and basemap all arrive
+from that fetch. Everything that used to run at module scope in `main.ts` now
+runs inside `bootstrap()`. `loadCapabilities()` never rejects — on any failure
+it logs and falls back to London with every layer assumed present. That keeps
+the property the app had before: the map renders even when the API does not
+answer. Assuming *more* than exists is the safe direction, because each layer
+already fails independently; assuming less would silently hide working ones.
 
-This one is not cosmetic. `vessels.ts` uses it to dead-reckon a ship between
-fixes: `lon + (speed × dt × sin θ) / M_PER_DEG_LON`. At 25°N the true value is
-about 100,700 m/° against London's 69,300, so dividing by the London constant
-overstates each east–west step by roughly 45%. Ships would visibly outrun
-themselves. The backend copy is safe only because it serves the tube inference,
-which is off wherever there is no TfL key.
+**Failure isolation.** Previously `addTransitOverlays` ran three bare `await`s
+(line geometry, stations, trains) inside one `try`/`catch` before the
+`Promise.allSettled` that starts everything else. A single 404 on
+`/manifest.json` therefore took the ships, aircraft and rain radar down with it.
+That was latent in London and certain anywhere without baked tube data — note
+that the manifest is fetched *twice*, independently, by `transit-lines.ts` and
+`trains-controller.ts`, so guarding one would not have been enough. Each group
+now fails on its own.
 
-Whoever does the frontend half must make this a function of the region's
-latitude — it is a prerequisite for the ship layer being correct anywhere else,
-not a tidy-up.
+**`below(map, layerId)`** (`util/layer-order.ts`) exists because MapLibre's
+`addLayer` **throws** when its `beforeId` names a layer that is absent. Seven
+insertions said "sit under the station dots" or "sit under the trains" — true
+only where a TfL key creates those layers. A region with ships but no tube saw
+`vessels-icons` take itself down on startup. The helper degrades to "add on
+top", which is the honest answer when the layer you wanted to hide under is not
+there.
+
+**Panels follow capabilities.** The bus route filter tab is omitted without
+buses — a working-looking "type a route number" box in a city that has none is
+worse than no tab. The leaderboard shows only rankings the deployment can
+populate and defaults to the first of them, rather than opening on a Trains tab
+that can only ever read "No movement recorded yet". `ship` is gated on vessels
+*or* tube, because that ranking covers both AIS ships and TfL river boats.
+
+**`metersPerDegLon()` replaced the baked `111320 × cos(51.5°)`** in
+`layers/vessels.ts`, `layers/aircraft.ts` and `ui/vehicle-popup.ts`. It is read
+per call, never captured in a module-level `const` — a module constant is
+evaluated at import time, before the region is known, and would silently pin
+every consumer back to London. Hot loops lift it into a local at function entry.
+
+Why those three: `vessels` and `aircraft` dead-reckon between fixes
+(`lon + speed × dt × sin θ / M_PER_DEG_LON`), so at 25°N — where the true value
+is ~100,700 m/° against London's 69,300 — every east–west step is overstated by
+about 45% and the marker visibly outruns itself. `vehicle-popup` uses it to pick
+the nearest AIS ship to a click, so a wrong scale shows the **wrong vessel's**
+name and photo.
+
+## Still latitude-baked, deliberately
+
+`realtime/geometry.ts` and its manual copy `backend/src/shared/geometry.ts`,
+`layers/buses.ts`, and five `scripts/*.mjs` bakers still use `cos(51.5°)`.
+
+- The two `geometry.ts` copies serve the tube/NR inference, which cannot run
+  without a TfL or Darwin credential — i.e. only in the UK.
+- `buses.ts` converts degrees → metres and back again, so the round trip
+  cancels for *position*; only its speed and variance constants would be
+  mis-scaled, and buses only exist where BODS does. Changing it would alter
+  live London behaviour for no benefit.
+- The `scripts/` bakers must stay consistent with whatever consumes their
+  output — `learn-bus-routes.mjs` bakes `quality.meanResidualM`, which
+  `buses.ts` reads as a Kalman measurement noise. Changing one without the
+  other would silently mis-scale the filter.
+
+A second region that acquires a bus or rail feed will need all of these
+converted **together**, not piecemeal.
+
+## Known data-source limit
+
+`aisstream.io` is a volunteer receiver network, and its coverage is not global.
+Measured on 2026-08-02: the London box returned 8 vessels within 20 seconds,
+while a box covering the entire Persian Gulf and Strait of Hormuz (48–60°E,
+23–30.5°N) returned **zero in 90 seconds**. The code path is identical and
+correct; there is simply no data there.
+
+So "ships work anywhere" is false. Ships work where the network has receivers.
+Aircraft (ADS-B) and rain radar are genuinely global; a region should be
+expected to prove its AIS coverage before the ship layer is promised.

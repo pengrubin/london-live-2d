@@ -11,13 +11,12 @@ import { isLayerShown, makeRenderGate } from '../util/render-gate';
 import { registerPoll, symbolTierIntervalMs } from '../util/lifecycle';
 import { injectPopupStyles } from '../ui/station-popup';
 import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
+import { M_PER_DEG_LAT, metersPerDegLon } from '../region';
 
 export const AIRCRAFT_LAYER_ID = 'aircraft-icons';
 const SOURCE_ID = 'aircraft';
 const POLL_INTERVAL_MS = 5_000;
 const KN_TO_MS = 0.514444;
-const M_PER_DEG_LAT = 110540;
-const M_PER_DEG_LON = 111320 * Math.cos((51.5 * Math.PI) / 180);
 
 interface Aircraft {
   hex: string;
@@ -407,11 +406,12 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
       return;
     }
     const dtS = (Date.now() - fetchedAt) / 1000;
+    const mPerDegLon = metersPerDegLon();
     posByHex.clear();
     const features = fleet.map((a) => {
       const speedMs = a.alt_baro === 'ground' ? 0 : (a.gs ?? 0) * KN_TO_MS;
       const rad = (((a.track ?? 0) - 0) * Math.PI) / 180;
-      const lon = (a.lon as number) + (speedMs * dtS * Math.sin(rad)) / M_PER_DEG_LON;
+      const lon = (a.lon as number) + (speedMs * dtS * Math.sin(rad)) / mPerDegLon;
       const lat = (a.lat as number) + (speedMs * dtS * Math.cos(rad)) / M_PER_DEG_LAT;
       posByHex.set(a.hex, [lon, lat]);
       const emKind = classifyEmergency(a);

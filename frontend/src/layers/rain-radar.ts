@@ -60,7 +60,10 @@ export async function startRainRadar(map: MaplibreMap): Promise<void> {
       layout: { visibility: 'none' }, // off by default; toggled on via the legend
       paint: { 'raster-opacity': RADAR_OPACITY, 'raster-fade-duration': 300 },
     },
-    INSERT_BEFORE_LAYER_ID,
+    // Sit under the transit lines where they exist. A deployment without them
+    // has no such layer, and passing a missing id makes addLayer throw — which
+    // would take the radar down with it. Undefined simply means "on top".
+    map.getLayer(INSERT_BEFORE_LAYER_ID) ? INSERT_BEFORE_LAYER_ID : undefined,
   );
 
   async function refresh(): Promise<void> {

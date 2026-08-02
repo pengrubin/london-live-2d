@@ -56,6 +56,7 @@ import {
 } from '../realtime/bus-kalman';
 import { appendRankLine } from '../ui/rank-line';
 import { enablePopupDragToPan, isPopupTextInteracting } from '../ui/popup-drag';
+import { below } from '../util/layer-order';
 
 export const BUSES_DOTS_LAYER_ID = 'buses-dots';
 export const BUSES_ICONS_LAYER_ID = 'buses-icons';
@@ -527,7 +528,7 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
   map.addSource(ICONS_SOURCE_ID, { type: 'geojson', data: empty });
 
   // Beneath the TfL vehicle bullets so tube/rail markers stay readable.
-  const beforeId = map.getLayer('trains-dots') ? 'trains-dots' : undefined;
+  const beforeId = below(map, 'trains-dots');
   map.addLayer(
     {
       id: BUSES_DOTS_LAYER_ID,

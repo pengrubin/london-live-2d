@@ -7,6 +7,7 @@
 // Styled by reusing the legend classes plus .lb-* overrides.
 
 import { Marker, type Map as MaplibreMap } from 'maplibre-gl';
+import { hasLayer } from '../region';
 
 const REFRESH_INTERVAL_MS = 30_000;
 const LOCATE_ZOOM = 14.5;
@@ -24,6 +25,25 @@ const MODE_LABEL: Record<Mode, string> = {
   bus: '🚌 Buses',
   ship: '⛴ Ships',
 };
+
+/**
+ * Which capability makes each ranking meaningful. `ship` covers both AIS
+ * vessels and TfL river boats, so either feed justifies the tab; without this
+ * a deployment would show tabs that can only ever read "No movement recorded
+ * yet."
+ */
+const MODE_REQUIRES: Record<Mode, readonly string[]> = {
+  train: ['tube', 'nationalRail'],
+  bus: ['buses'],
+  ship: ['vessels', 'tube'],
+};
+
+function availableModes(): readonly Mode[] {
+  const modes = MODES.filter((mode) => MODE_REQUIRES[mode].some((layer) => hasLayer(layer)));
+  // Never render a tab-less board: if capabilities said nothing is available,
+  // fall back to the full set rather than an empty panel.
+  return modes.length > 0 ? modes : MODES;
+}
 
 const BUS_CHIP_COLOR = '#DA291C'; // London bus red
 const SHIP_CHIP_COLOR = '#2E86DE';
@@ -94,7 +114,10 @@ export function addLeaderboard(
   locator: VehicleLocator,
 ): void {
   let activePeriod: Period = 'day';
-  let activeMode: Mode = 'train';
+  // Only the rankings this deployment can populate, defaulting to the first
+  // of them rather than an unconditional 'train'.
+  const modes = availableModes();
+  let activeMode: Mode = modes[0] ?? 'train';
   let pulseMarker: Marker | null = null;
   let pulseTimer: number | null = null;
 
@@ -163,7 +186,7 @@ export function addLeaderboard(
   const modeTabs = document.createElement('div');
   modeTabs.className = 'lb-tabs lb-modes';
   const tabByMode = new Map<Mode, HTMLElement>();
-  for (const mode of MODES) {
+  for (const mode of modes) {
     const tab = document.createElement('div');
     tab.className = 'lb-tab';
     tab.textContent = MODE_LABEL[mode];

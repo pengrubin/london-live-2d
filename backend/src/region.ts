@@ -44,6 +44,12 @@ export interface RegionConfig {
   readonly adsb: CirclePoint;
   /** Environment Agency tide gauges are England-only; off outside the UK. */
   readonly tideGauges: boolean;
+  /**
+   * Basemap extract for this region. Reported to the frontend rather than
+   * compiled into it, so one bundle serves every deployment; unset leaves the
+   * frontend on its build-time default.
+   */
+  readonly pmtilesUrl: string | undefined;
 }
 
 // ── London defaults ──────────────────────────────────────────────────────────
@@ -185,5 +191,6 @@ export function loadRegion(readEnv: EnvReader): RegionConfig {
       ),
     },
     tideGauges: parseFlag(readEnv('TIDE_GAUGES'), true),
+    pmtilesUrl: readEnv('REGION_PMTILES_URL')?.trim() || undefined,
   };
 }

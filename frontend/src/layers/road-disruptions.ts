@@ -9,6 +9,7 @@ import {
   type MapLayerMouseEvent,
 } from 'maplibre-gl';
 import { registerPoll } from '../util/lifecycle';
+import { below } from '../util/layer-order';
 
 export const ROAD_DISRUPTIONS_FILL_LAYER_ID = 'road-disruptions-fill';
 export const ROAD_DISRUPTIONS_OUTLINE_LAYER_ID = 'road-disruptions-outline';
@@ -190,7 +191,7 @@ export async function startRoadDisruptions(map: MaplibreMap): Promise<void> {
         'fill-opacity': FILL_OPACITY,
       },
     },
-    'stations-circle', // beneath station dots and vehicles, like JamCams
+    below(map, 'stations-circle'), // beneath station dots and vehicles, like JamCams
   );
   map.addLayer(
     {
@@ -205,7 +206,7 @@ export async function startRoadDisruptions(map: MaplibreMap): Promise<void> {
         'line-opacity': 0.8,
       },
     },
-    'stations-circle',
+    below(map, 'stations-circle'),
   );
   map.addLayer(
     {
@@ -222,7 +223,7 @@ export async function startRoadDisruptions(map: MaplibreMap): Promise<void> {
         'circle-opacity': 0.9,
       },
     },
-    'stations-circle',
+    below(map, 'stations-circle'),
   );
 
   async function poll(): Promise<void> {
