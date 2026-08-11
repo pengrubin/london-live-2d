@@ -1,13 +1,15 @@
 // Shared floating control panel (docks top-left): one collapsible shell with a
-// row of top-level tabs that swap the body between three views —
+// row of top-level tabs that swap the body between four views —
 //   🏆 Board  — the leaderboard (leaderboard.ts)
 //   🚌 Filter — the bus line filter (bus-filter.ts)
 //   🗺 Lines  — the lines legend + overlays (legend.ts)
+//   ℹ️ About  — data sources, licences, acknowledgements (about.ts)
 // Merging the former two separate panels (leaderboard top-left + legend
 // top-right) into one frees screen space on phones and leaves the top-right
 // corner clear for MapLibre's zoom + geolocate controls.
 
 import type { Map as MaplibreMap } from 'maplibre-gl';
+import { addAbout } from './about';
 import { addLeaderboard, type VehicleLocator } from './leaderboard';
 import { addBusFilter } from './bus-filter';
 import { addLegend, type LegendLine, type OverlayToggle } from './legend';
@@ -17,11 +19,12 @@ import { hasLayer } from '../region';
 // the header expands it.
 const MOBILE_MEDIA_QUERY = '(max-width: 640px)';
 
-type TabKey = 'board' | 'filter' | 'lines';
+type TabKey = 'board' | 'filter' | 'lines' | 'about';
 const ALL_TABS: { key: TabKey; label: string }[] = [
   { key: 'board', label: '🏆 Board' },
   { key: 'filter', label: '🚌 Filter' },
   { key: 'lines', label: '🗺 Lines' },
+  { key: 'about', label: 'ℹ️' },
 ];
 
 export function addControlPanel(
@@ -85,6 +88,8 @@ export function addControlPanel(
   if (filterSection) addBusFilter(filterSection, map);
   const linesSection = sectionByKey.get('lines');
   if (linesSection) addLegend(linesSection, map, lines, overlays);
+  const aboutSection = sectionByKey.get('about');
+  if (aboutSection) addAbout(aboutSection);
 
   activate(defaultTab);
   if (window.matchMedia(MOBILE_MEDIA_QUERY).matches) panel.classList.add('collapsed');
