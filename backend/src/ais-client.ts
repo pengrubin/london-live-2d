@@ -114,7 +114,12 @@ export class AisClient {
       this.scheduleReconnect();
     });
     this.socket.addEventListener('error', () => {
-      this.socket?.close();
+      // Never close() a socket that hasn't finished connecting: undici treats
+      // close-during-CONNECTING as "fail the connection", which fires 'error'
+      // again — a synchronous mutual recursion that overflows the stack and
+      // kills the process. A failed connect fires 'close' by itself, so the
+      // reconnect in the close handler still runs.
+      if (this.socket?.readyState === WebSocket.OPEN) this.socket.close();
     });
   }
 
