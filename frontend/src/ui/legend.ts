@@ -172,11 +172,18 @@ export function addLegend(
 
 /**
  * Battery-saver preference row (bottom of the Lines tab). Distinct from the
- * line/overlay toggles above — it doesn't touch any layer, it flips the
- * power-saver lifecycle: pause polling while the map is hidden, and (on phones)
- * ease the animation cadence. Defaults on for mobile, off for desktop.
+ * line/overlay toggles above — it doesn't touch any layer, it eases the
+ * animation cadence to spare the GPU. Defaults on.
+ *
+ * MOBILE ONLY, and deliberately so: pausing the pollers while the page is
+ * hidden used to be the other half of this switch, but that is now
+ * unconditional (see util/lifecycle), and easing the cadence is gated on
+ * isMobile. On desktop the switch would therefore do nothing at all, and a
+ * visible control that does nothing is worse than no control.
  */
 function addBatterySaver(body: HTMLElement): void {
+  if (!isMobile) return;
+
   const wrap = document.createElement('div');
   wrap.className = 'legend-saver';
 
@@ -192,9 +199,7 @@ function addBatterySaver(body: HTMLElement): void {
 
   const hint = document.createElement('div');
   hint.className = 'legend-saver-hint';
-  hint.textContent = isMobile
-    ? 'Pauses updates when the map is hidden, and eases the animation to save power.'
-    : 'Pauses updates when this tab is hidden. (Off by default on desktop.)';
+  hint.textContent = 'Eases the animation to save power. Updates always pause when the map is hidden.';
 
   function paint(): void {
     const on = isPowerSaver();
