@@ -22,6 +22,7 @@ import { LearnerScheduler } from './learner-scheduler';
 import { loadNrGraph, makeCachedNrBoardFetcher, NrSampler } from './nr-sampler';
 import { RateBudget } from './rate-budget';
 import { RollupWriter } from './rollup-writer';
+import { TubeStatusRecorder } from './tube-status-recorder';
 import { TraceWriter } from './trace-writer';
 import { registerArrivalsRoute } from './routes/arrivals';
 import { registerCapabilitiesRoute } from './routes/capabilities';
@@ -151,6 +152,16 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     app.get('/api/buses', () => []);
   }
   registerBusRoutesRoute(app, join(busDataDir, 'bus-routes', 'learned'));
+
+  // Permanent line-status archive — TfL publishes no history, so we keep our
+  // own from the day this ships. A few MB per year; never pruned.
+  if (config.tflAppKey) {
+    const tubeStatus = new TubeStatusRecorder(busDataDir, config.tflAppKey, (msg) =>
+      app.log.info(msg),
+    );
+    tubeStatus.start();
+    app.addHook('onClose', () => tubeStatus.stop());
+  }
 
   // Docked bike share (optional feature — needs a GBFS discovery URL). GBFS is
   // an open standard, so this is not specific to any city or operator.
