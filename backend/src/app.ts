@@ -21,6 +21,7 @@ import {
 import { LearnerScheduler } from './learner-scheduler';
 import { loadNrGraph, makeCachedNrBoardFetcher, NrSampler } from './nr-sampler';
 import { RateBudget } from './rate-budget';
+import { RollupWriter } from './rollup-writer';
 import { TraceWriter } from './trace-writer';
 import { registerArrivalsRoute } from './routes/arrivals';
 import { registerCapabilitiesRoute } from './routes/capabilities';
@@ -135,10 +136,14 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     bods.start();
     const learner = new LearnerScheduler(SCRIPTS_DIR, busDataDir, (msg) => app.log.info(msg));
     learner.start();
+    // Daily aggregates outlive the 7-day raw-trace retention window.
+    const rollups = new RollupWriter(busDataDir, (msg) => app.log.info(msg));
+    rollups.start();
     app.addHook('onClose', () => {
       bods.stop();
       traces.stop();
       learner.stop();
+      rollups.stop();
     });
     app.get('/api/buses', () => bods.list());
     bodsClient = bods;
