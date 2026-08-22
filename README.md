@@ -111,3 +111,26 @@ implementation plan, roadmap.
 The "locate me" button uses your browser's geolocation only after you tap it (never on load).
 Your coordinates are used purely to recentre the map in your browser — they are never sent to
 the server, logged, or stored.
+
+## Data sources & licences
+
+**Powered by TfL Open Data.** Contains OS data © Crown copyright and database rights 2016
+and Geomni UK Map data © and database rights 2019. Used under the
+[TfL Open Data licence](https://tfl.gov.uk/corporate/terms-and-conditions/transport-data-service).
+
+Bus positions come from the [DfT Bus Open Data Service](https://www.bus-data.dft.gov.uk/)
+(SIRI-VM), used under the
+[Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/).
+Rail network geometry and the basemap are © [OpenStreetMap](https://www.openstreetmap.org/copyright)
+contributors (ODbL), basemap tiles by [Protomaps](https://protomaps.com). Tide gauges:
+Environment Agency (OGL v3). Ships: [aisstream.io](https://aisstream.io). Aircraft:
+[airplanes.live](https://airplanes.live) / [adsb.lol](https://adsb.lol). Rain radar:
+[RainViewer](https://www.rainviewer.com/). The in-app ℹ️ tab shows the credits that apply to
+each deployment's actual layer set.
+
+**Licensing:** the MIT licence in the repository root covers the code. The baked network
+geometry under `data/` is derived from OpenStreetMap and is licensed under the
+[ODbL v1.0](https://opendatacommons.org/licenses/odbl/1-0/) — see
+[`data/LICENSE-DATA.md`](data/LICENSE-DATA.md). *(Erratum, 11 Aug 2026: earlier revisions
+offered these files under MIT alongside the code; the OSM-derived data files were always
+ODbL and are now labelled correctly.)*

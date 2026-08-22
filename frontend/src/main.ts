@@ -97,6 +97,21 @@ async function bootstrap(): Promise<void> {
   const basemapUrl =
     region.pmtilesUrl ?? (import.meta.env.VITE_PMTILES_URL as string | undefined) ?? '/london.pmtiles';
 
+  // Corner credit line, derived from the layer set rather than the city name —
+  // a deployment only names the licensors whose data it actually draws (TfL's
+  // terms require a visible "Powered by TfL Open Data"; Dubai must not show
+  // one). Kept short: the full licence wording lives in the panel's About tab
+  // and the README. OSM is already credited via the basemap source attribution.
+  const dataCredits = [
+    hasLayer('trainPositions') || hasLayer('stopArrivals')
+      ? '<a href="https://tfl.gov.uk/info-for/open-data-users/" target="_blank" rel="noopener">Powered by TfL Open Data</a>'
+      : null,
+    hasLayer('buses')
+      ? '<a href="https://www.bus-data.dft.gov.uk/" target="_blank" rel="noopener">DfT BODS</a>'
+      : null,
+    '<a href="https://github.com/pengrubin/london-live-2d" target="_blank" rel="noopener"><b>© PENG</b></a>',
+  ].filter((credit): credit is string => credit !== null);
+
   const map = new maplibregl.Map({
     container: 'app',
     style: {
@@ -119,10 +134,11 @@ async function bootstrap(): Promise<void> {
       [bounds[0][0], bounds[0][1]],
       [bounds[1][0], bounds[1][1]],
     ],
+    // No `compact` override: MapLibre expands the line on desktop widths and
+    // collapses to the ⓘ button on phones, which is the accepted attribution
+    // pattern for small screens.
     attributionControl: {
-      compact: true,
-      customAttribution:
-        '<a href="https://github.com/pengrubin" target="_blank"><b>© PENG</b></a>',
+      customAttribution: dataCredits,
     },
   });
   toastHost = map.getContainer();
