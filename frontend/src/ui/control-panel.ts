@@ -3,7 +3,7 @@
 //   🏆 Board  — the leaderboard (leaderboard.ts)
 //   🚌 Filter — the bus line filter (bus-filter.ts)
 //   🗺 Lines  — the lines legend + overlays (legend.ts)
-//   ℹ️ About  — data sources, licences, acknowledgements (about.ts)
+//   ℹ️ Info   — data sources, licences, acknowledgements (about.ts)
 // Merging the former two separate panels (leaderboard top-left + legend
 // top-right) into one frees screen space on phones and leaves the top-right
 // corner clear for MapLibre's zoom + geolocate controls.
@@ -24,7 +24,7 @@ const ALL_TABS: { key: TabKey; label: string }[] = [
   { key: 'board', label: '🏆 Board' },
   { key: 'filter', label: '🚌 Filter' },
   { key: 'lines', label: '🗺 Lines' },
-  { key: 'about', label: 'ℹ️' },
+  { key: 'about', label: 'ℹ️ Info' },
 ];
 
 export function addControlPanel(
