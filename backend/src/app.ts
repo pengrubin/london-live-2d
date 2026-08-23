@@ -45,6 +45,7 @@ import {
 } from './routes/external';
 import { registerAircraftPhotoRoute } from './routes/aircraft-photo';
 import { registerBusRoutesRoute } from './routes/bus-routes';
+import { registerDataExportRoute } from './routes/data-export';
 import { registerShipPhotoRoute } from './routes/ship-photo';
 
 /** Repo layout anchors — data/ and scripts/ sit beside backend/. */
@@ -151,6 +152,12 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     app.get('/api/buses', () => []);
   }
   registerBusRoutesRoute(app, join(busDataDir, 'bus-routes', 'learned'));
+
+  // Token-guarded bulk export of the day-partitioned archives (traces, rollups,
+  // tube status) for local analysis. Off unless ADMIN_EXPORT_TOKEN is set.
+  if (config.adminExportToken) {
+    registerDataExportRoute(app, busDataDir, config.adminExportToken);
+  }
 
   // Docked bike share (optional feature — needs a GBFS discovery URL). GBFS is
   // an open standard, so this is not specific to any city or operator.

@@ -32,6 +32,12 @@ export interface AppConfig {
    * state survives redeploys; unset locally, where state stays under data/.
    */
   readonly persistDir: string | undefined;
+  /**
+   * Bearer token for the bulk data-export endpoints (/api/export/*). Raw traces
+   * contain vehicle IDs, so this must stay private; the routes are simply not
+   * registered when it is unset.
+   */
+  readonly adminExportToken: string | undefined;
   /** The geography this deployment serves — London unless REGION_* overrides it. */
   readonly region: RegionConfig;
 }
@@ -182,6 +188,8 @@ export function loadConfig(): AppConfig {
   const bodsApiKey = readEnv('BODS_API_KEY');
   const gbfsUrl = readEnv('GBFS_URL');
   const persistDir = readEnv('PERSIST_DIR');
+  const rawExportToken = readEnv('ADMIN_EXPORT_TOKEN');
+  const adminExportToken = rawExportToken === '' ? undefined : rawExportToken;
   const region = loadRegion(readEnv);
 
   return {
@@ -193,6 +201,7 @@ export function loadConfig(): AppConfig {
     bodsApiKey,
     gbfsUrl,
     persistDir,
+    adminExportToken,
     region,
   };
 }
