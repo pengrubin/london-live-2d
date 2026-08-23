@@ -44,6 +44,15 @@ export async function fetchLineStatus(
   return fetchTfl(`/Line/${lineIds.join(',')}/Status`, appKey, timeoutMs);
 }
 
+/** Service status for every line of the given modes (e.g. all tube lines). */
+export async function fetchLineStatusByModes(
+  modes: readonly string[],
+  appKey: string,
+  timeoutMs: number = UPSTREAM_TIMEOUT_MS,
+): Promise<TflResponse> {
+  return fetchTfl(`/Line/Mode/${modes.join(',')}/Status`, appKey, timeoutMs);
+}
+
 /** Full stop point detail (zones, facilities, lines) — a large object. */
 export async function fetchStopDetail(
   naptanId: string,
