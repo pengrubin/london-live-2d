@@ -92,6 +92,10 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   await app.register(compress, {
     encodings: ['br', 'gzip', 'deflate'],
     brotliOptions: { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY } },
+    // x-ndjson is not in mime-db's compressible set, but the JSONL trace
+    // exports compress ~8x — without this each daily archive pull ships
+    // ~700 MB of raw egress instead of ~80 MB.
+    customTypes: /^application\/x-ndjson$/,
   });
 
   // CORS_ORIGIN may be a single origin or a comma-separated list.
