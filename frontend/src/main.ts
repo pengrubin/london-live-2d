@@ -71,6 +71,101 @@ function readInitialViewFromUrl(
 }
 
 /**
+ * Google-Maps-style heading wedge on the geolocate dot. maplibre-gl 6.0 has no
+ * `showUserHeading`, so it is hand-rolled: a CSS wedge (styled in index.html as
+ * .user-heading-beam) appended inside maplibre's dot element and rotated from
+ * device-orientation events. Stays invisible until a trustworthy compass
+ * reading arrives, so desktop browsers never show a broken beam.
+ */
+function setupHeadingBeam(map: maplibregl.Map, geolocate: maplibregl.GeolocateControl): void {
+  let compassHeading: number | null = null; // degrees clockwise from true north
+  let beam: HTMLDivElement | null = null;
+  let rafPending = false;
+
+  // Orientation events and map `rotate` both fire in bursts; coalesce to one
+  // style write per frame by storing the latest heading and scheduling one rAF.
+  const scheduleRender = (): void => {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      if (beam === null || compassHeading === null) return;
+      // The wedge is drawn pointing screen-up; subtract the map bearing so it
+      // stays true when the map has been rotated by touch gestures.
+      beam.style.transform = `rotate(${compassHeading - map.getBearing()}deg)`;
+      beam.style.opacity = '1';
+    });
+  };
+
+  const onOrientation = (event: DeviceOrientationEvent): void => {
+    // iOS ships a ready-made compass heading (already clockwise-from-north);
+    // elsewhere alpha is only trustworthy when the browser marks it absolute.
+    // Anything else is ignored — no beam beats a wrong beam.
+    const webkitHeading = (event as any).webkitCompassHeading;
+    if (typeof webkitHeading === 'number' && Number.isFinite(webkitHeading)) {
+      compassHeading = webkitHeading;
+    } else if (event.absolute && event.alpha != null) {
+      // alpha is measured in the DEVICE frame, but the wedge is drawn in
+      // screen space — in landscape they differ by the screen rotation, so
+      // add it back. (webkitCompassHeading is already screen-corrected.)
+      const screenAngle = window.screen.orientation?.angle ?? 0;
+      compassHeading = (360 - event.alpha + screenAngle) % 360;
+    } else {
+      return;
+    }
+    scheduleRender();
+  };
+
+  let listening = false;
+  const startListening = (): void => {
+    if (listening) return;
+    listening = true;
+    // Prefer the absolute-referenced event (Android Chrome); fall back to the
+    // plain one where it does not exist (iOS, which compensates via
+    // webkitCompassHeading instead).
+    const type = 'ondeviceorientationabsolute' in window ? 'deviceorientationabsolute' : 'deviceorientation';
+    window.addEventListener(type, onOrientation as EventListener);
+  };
+
+  // iOS only grants orientation events when requestPermission() runs inside a
+  // user gesture, so piggyback on the geolocate button click (the element
+  // exists: the control's onAdd ran in addControl above). Denial silently
+  // means no beam.
+  const button = map.getContainer().querySelector<HTMLButtonElement>('.maplibregl-ctrl-geolocate');
+  button?.addEventListener('click', () => {
+    const request = typeof DeviceOrientationEvent !== 'undefined' ? (DeviceOrientationEvent as any).requestPermission : undefined;
+    if (typeof request === 'function') {
+      void Promise.resolve(request.call(DeviceOrientationEvent))
+        .then((state: unknown) => {
+          if (state === 'granted') startListening();
+        })
+        .catch((err: unknown) => {
+          // Denial resolves as 'denied' above; only genuine API errors land
+          // here — keep them visible in devtools without surfacing UI.
+          console.debug('[heading] orientation permission request failed', err);
+        });
+    } else {
+      startListening();
+    }
+  });
+
+  geolocate.on('geolocate', () => {
+    // The dot only exists after a successful fix. A child div is safe from the
+    // dot's pulse animation, which lives on its ::before/::after.
+    const dot = map.getContainer().querySelector('.maplibregl-user-location-dot');
+    if (dot === null) return;
+    if (beam === null) {
+      beam = document.createElement('div');
+      beam.className = 'user-heading-beam';
+    }
+    // Re-append if maplibre ever rebuilt the marker between fixes.
+    if (beam.parentElement !== dot) dot.append(beam);
+    scheduleRender();
+  });
+  map.on('rotate', scheduleRender);
+}
+
+/**
  * Builds the map from whatever the backend says this deployment is and has.
  *
  * The camera cannot be created before /api/capabilities answers — centre, zoom,
@@ -143,12 +238,13 @@ async function bootstrap(): Promise<void> {
   });
   toastHost = map.getContainer();
 
-  map.addControl(new maplibregl.NavigationControl(), 'top-right');
+  // No NavigationControl: the zoom +/- buttons and compass go unused (pinch /
+  // scroll zoom covers it, and the map is never deliberately rotated), so the
+  // top-right stack holds only the geolocate button.
 
   // User-initiated "locate me" control. Privacy-safe: the browser permission
   // prompt only fires on click, never on load, and the coordinates stay on the
-  // client (maplibre never transmits them). Sits directly under the zoom +/-
-  // buttons in the top-right stack.
+  // client (maplibre never transmits them).
   const geolocate = new maplibregl.GeolocateControl({
     positionOptions: { enableHighAccuracy: true },
     trackUserLocation: false,
@@ -159,6 +255,7 @@ async function bootstrap(): Promise<void> {
     fitBoundsOptions: { maxZoom: 14 },
   });
   map.addControl(geolocate, 'top-right');
+  setupHeadingBeam(map, geolocate);
 
   const isOutsideRegion = (lon: number, lat: number): boolean => {
     const [[west, south], [east, north]] = bounds;
@@ -345,7 +442,7 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
     .map((layer) => layer.overlay);
 
   // One merged panel (top-left): Board / Filter / Lines tabs. Leaving the
-  // top-right corner free for MapLibre's zoom + geolocate controls.
+  // top-right corner free for MapLibre's geolocate control.
   const handle = trains ?? NO_TRAINS;
   addControlPanel(target, manifestLines, overlays, handle.colorByLine, {
     findTrain: handle.findVehicle,

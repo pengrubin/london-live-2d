@@ -143,13 +143,22 @@ const parkedCase = (
 const dotsColorNormal = (): ExpressionSpecification => parkedCase(PARKED_FILL, TFL_BUS_RED);
 const iconImageNormal = (): ExpressionSpecification => parkedCase('bus-icon-parked', 'bus-bullet');
 
+/**
+ * Case-insensitive line membership test. BODS `line` values are mixed-case in
+ * the wild ("Go2", "x80") while filterLines is stored uppercased (see
+ * setBusLineFilter) — upcase the feature side so both agree, otherwise a user
+ * typing "GO2" would never match the live "Go2" buses.
+ */
+const lineMatch = (lines: readonly string[]): ExpressionSpecification =>
+  ['in', ['upcase', ['get', 'line']], ['literal', lines]] as ExpressionSpecification;
+
 /** Filtered dots: parked stays black, on-line stays red, everything else greys. */
 const dotsColorFiltered = (lines: readonly string[]): ExpressionSpecification =>
   [
     'case',
     ['==', ['get', 'parked'], 1],
     PARKED_FILL,
-    ['in', ['get', 'line'], ['literal', lines]],
+    lineMatch(lines),
     TFL_BUS_RED,
     BUS_DIM_FILL,
   ] as ExpressionSpecification;
@@ -157,7 +166,7 @@ const dotsColorFiltered = (lines: readonly string[]): ExpressionSpecification =>
 const dotsOpacityFiltered = (lines: readonly string[]): ExpressionSpecification =>
   [
     'case',
-    ['in', ['get', 'line'], ['literal', lines]],
+    lineMatch(lines),
     DOTS_OPACITY_MATCH,
     DOTS_OPACITY_DIM,
   ] as ExpressionSpecification;
@@ -167,7 +176,7 @@ const iconImageFiltered = (lines: readonly string[]): ExpressionSpecification =>
     'case',
     ['==', ['get', 'parked'], 1],
     'bus-icon-parked',
-    ['in', ['get', 'line'], ['literal', lines]],
+    lineMatch(lines),
     'bus-bullet',
     'bus-bullet-dim',
   ] as ExpressionSpecification;
@@ -323,9 +332,7 @@ function applyBusDisplay(map: MaplibreMap): void {
   // In every other case there's no setFilter, so non-matching buses stay on the
   // map and clickable.
   const layerFilter: FilterSpecification | null =
-    !busesOverlayOn && filterActive
-      ? (['in', ['get', 'line'], ['literal', filterLines]] as FilterSpecification)
-      : null;
+    !busesOverlayOn && filterActive ? (lineMatch(filterLines) as FilterSpecification) : null;
 
   for (const id of [BUSES_DOTS_LAYER_ID, BUSES_ICONS_LAYER_ID]) {
     if (!map.getLayer(id)) continue;
@@ -360,7 +367,9 @@ function applyBusDisplay(map: MaplibreMap): void {
  * applyBusDisplay. Passing null or an empty set clears the filter.
  */
 export function setBusLineFilter(map: MaplibreMap, lines: ReadonlySet<string> | null): void {
-  filterLines = lines ? [...lines] : [];
+  // Stored uppercased: lineMatch upcases the feature side, so together the
+  // whole comparison is case-insensitive regardless of how callers cased it.
+  filterLines = lines ? [...lines].map((line) => line.toUpperCase()) : [];
   applyBusDisplay(map);
 }
 
@@ -380,12 +389,16 @@ export function listActiveBusLines(): string[] {
   return [...seen].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
-/** How many live buses are currently running one of `lines` — light UI feedback. */
+/** How many live buses are currently running one of `lines` — light UI
+ * feedback. Case-insensitive: tracker lines keep BODS casing ("Go2", "x80"),
+ * callers may not. */
 export function countActiveBusesOnLines(lines: ReadonlySet<string>): number {
   if (!activeTrackers || lines.size === 0) return 0;
+  const upper = new Set<string>();
+  for (const line of lines) upper.add(line.toUpperCase());
   let n = 0;
   for (const tr of activeTrackers.values()) {
-    if (lines.has(tr.line)) n += 1;
+    if (upper.has(tr.line.toUpperCase())) n += 1;
   }
   return n;
 }
