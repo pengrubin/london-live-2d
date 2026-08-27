@@ -246,6 +246,19 @@ async function bootstrap(): Promise<void> {
   });
   toastHost = map.getContainer();
 
+  // On phone widths MapLibre's compact attribution starts EXPANDED — a fat
+  // white bar over the map until the user happens to tap elsewhere. Collapse
+  // it up front: credits stay one tap away behind the ⓘ (the OSMF-accepted
+  // minimum for small screens; ODbL requires OSM attribution on or one
+  // interaction from the map, so the control itself cannot be dropped).
+  // Desktop keeps the always-visible line — space is not contested there.
+  map.once('load', () => {
+    map
+      .getContainer()
+      .querySelector('.maplibregl-ctrl-attrib.maplibregl-compact')
+      ?.classList.remove('maplibregl-compact-show');
+  });
+
   // No NavigationControl: the zoom +/- buttons and compass go unused (pinch /
   // scroll zoom covers it, and the map is never deliberately rotated), so the
   // top-right stack holds only the geolocate button.
