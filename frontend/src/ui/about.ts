@@ -1,11 +1,12 @@
-// About / data-credits view for the control panel: what this map is, where
-// every layer's data comes from, and the licences that data arrives under.
+// About / data-credits view for the control panel: what this map is and where
+// every layer's data comes from, one terse line per source.
 //
 // Sources are derived from the capabilities layer set (hasLayer) — the same
 // signal that decides whether a layer exists — so a deployment only credits
 // the feeds it actually draws: Dubai never claims TfL, London never hides it.
-// The map-corner attribution line stays short; this view carries the full
-// licence wording (TfL's required text, OGL, ODbL) and the acknowledgements.
+// Panel space is premium: only the legally required notices stay here (TfL's
+// prescribed wording, OSM/ODbL); everything long-form — full licence text,
+// acknowledgements (Zone One) — lives in the README.
 
 import { hasLayer } from '../region';
 
@@ -31,6 +32,8 @@ function buildCredits(): CreditEntry[] {
     hasLayer('bikePoints');
   return [
     {
+      // TfL's licence prescribes this attribution and the OS/Geomni notice —
+      // the one entry that cannot be shortened further.
       when: usesTfl,
       html:
         `${link('https://tfl.gov.uk/info-for/open-data-users/', 'Powered by TfL Open Data')}. ` +
@@ -39,28 +42,26 @@ function buildCredits(): CreditEntry[] {
     },
     {
       when: hasLayer('buses'),
-      html:
-        `Bus positions: ${link('https://www.bus-data.dft.gov.uk/', 'DfT Bus Open Data Service')} ` +
-        `(${link('https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/', 'OGL v3')}).`,
+      html: `Buses: ${link('https://www.bus-data.dft.gov.uk/', 'DfT BODS')} (OGL v3).`,
     },
     {
       when: hasLayer('nationalRail'),
-      html: 'National Rail departures: Darwin, © Rail Delivery Group.',
+      html: 'National Rail: Darwin © Rail Delivery Group.',
     },
     {
       when: true,
       html:
-        `Network geometry &amp; basemap: © ${link('https://www.openstreetmap.org/copyright', 'OpenStreetMap')} contributors ` +
+        `Map &amp; routes: © ${link('https://www.openstreetmap.org/copyright', 'OpenStreetMap')} ` +
         `(${link('https://opendatacommons.org/licenses/odbl/', 'ODbL')}), ` +
-        `tiles by ${link('https://protomaps.com', 'Protomaps')}.`,
+        `${link('https://protomaps.com', 'Protomaps')} tiles.`,
     },
     {
       when: hasLayer('tideGauges'),
-      html: `Tide gauges: ${link('https://environment.data.gov.uk/', 'Environment Agency')} (OGL v3).`,
+      html: `Tides: ${link('https://environment.data.gov.uk/', 'Environment Agency')} (OGL v3).`,
     },
     {
       when: hasLayer('vessels'),
-      html: `Ship positions: ${link('https://aisstream.io', 'aisstream.io')}.`,
+      html: `Ships: ${link('https://aisstream.io', 'aisstream.io')}.`,
     },
     {
       when: hasLayer('aircraft'),
@@ -84,8 +85,8 @@ export function addAbout(container: HTMLElement): void {
   const intro = document.createElement('div');
   intro.className = 'about-note';
   intro.innerHTML =
-    'A real-time 2D transport map, estimated in your browser from open data. ' +
-    `Source on ${link(REPO_URL, 'GitHub')} — code MIT, baked network geometry ODbL.`;
+    'Real-time transport map from open data. ' +
+    `${link(REPO_URL, 'Source on GitHub')} — full licences &amp; credits there.`;
 
   const sourcesHeader = document.createElement('div');
   sourcesHeader.className = 'legend-group';
@@ -99,18 +100,4 @@ export function addAbout(container: HTMLElement): void {
     .join('');
 
   container.append(intro, sourcesHeader, sources);
-
-  // The countdown→position primitive behind the train layer is Zone One's idea;
-  // this project's contribution is the per-mode hardening on top of it.
-  if (hasLayer('trainPositions')) {
-    const ackHeader = document.createElement('div');
-    ackHeader.className = 'legend-group';
-    ackHeader.textContent = 'Acknowledgements';
-    const ack = document.createElement('div');
-    ack.className = 'about-note';
-    ack.innerHTML =
-      'Train positions are inferred from arrival countdowns — an approach ' +
-      `pioneered by ${link('https://london.jamespotter.dev', 'Zone One')}.`;
-    container.append(ackHeader, ack);
-  }
 }
