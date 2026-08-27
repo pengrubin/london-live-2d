@@ -8,6 +8,15 @@
       html, body { height: 100%; margin: 0; background: #0a0a0a; }
       #app { position: fixed; inset: 0; }
 
+      /* iOS Safari zooms the whole PAGE on a quick double-tap — easy to
+         trigger on the geolocate button, whose second tap often changes
+         nothing visibly (already located). Safari ignores user-scalable=no,
+         so opting every element out of double-tap zoom (pinch/pan stay
+         allowed) is the supported fix. touch-action does not inherit, hence
+         the universal selector; maplibre's own canvas gesture rules are class
+         selectors and outrank it, so map handling is untouched. */
+      * { touch-action: manipulation; }
+
       /* ── dark popup theme (vehicle + station boards) ──
          double selector outranks maplibre-gl.css, which is injected later */
       .maplibregl-popup .maplibregl-popup-content {
