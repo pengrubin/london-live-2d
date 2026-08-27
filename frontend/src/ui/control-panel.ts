@@ -6,7 +6,7 @@
 //   ℹ️ Info   — data sources, licences, acknowledgements (about.ts)
 // Merging the former two separate panels (leaderboard top-left + legend
 // top-right) into one frees screen space on phones and leaves the top-right
-// corner clear for MapLibre's zoom + geolocate controls.
+// corner clear for MapLibre's geolocate control.
 
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import { addAbout } from './about';

@@ -61,9 +61,29 @@
         to { opacity: 1; transform: translate(-50%, 0); }
       }
 
+      /* ── device-heading beam on the geolocate dot ──
+         Rotated from JS (main.ts setupHeadingBeam); drawn pointing up so
+         rotate(heading - bearing) is the whole transform. Centred on the 15px
+         dot so rotation pivots on the dot centre; the radial mask cuts a hole
+         over the dot and fades the wedge tip. Hidden until a valid compass
+         heading arrives (JS sets opacity). */
+      .user-heading-beam {
+        position: absolute; left: 50%; top: 50%;
+        width: 52px; height: 52px; margin: -26px 0 0 -26px;
+        pointer-events: none; opacity: 0; transition: opacity .3s;
+        /* ~45° fan straight up, in maplibre's dot blue (#1da1f2) */
+        background: conic-gradient(from -22.5deg,
+          rgba(29, 161, 242, 0.4) 0deg 45deg, transparent 45deg);
+        -webkit-mask: radial-gradient(circle,
+          transparent 8px, rgba(0, 0, 0, 0.9) 9px, transparent 26px);
+        mask: radial-gradient(circle,
+          transparent 8px, rgba(0, 0, 0, 0.9) 9px, transparent 26px);
+      }
+
       /* ── legend panel ──
-         top offset clears the top-right MapLibre control stack (zoom + compass
-         + geolocate) so the panel never covers the geolocate button */
+         top offset keeps clear of the top-right MapLibre stack (now just the
+         geolocate button; headroom kept from when zoom + compass lived there
+         so the layout did not shift) */
       .legend {
         position: absolute; right: 10px; top: 150px; z-index: 5;
         background: rgba(16, 18, 22, 0.92); border: 1px solid #333; border-radius: 6px;
@@ -111,7 +131,7 @@
 
       /* ── merged control panel (one panel, docks top-left) ──
          Board / Filter / Lines tabs live here; top-right stays free for the
-         MapLibre zoom + geolocate controls. */
+         MapLibre geolocate control. */
       .control-panel {
         left: 10px; right: auto; top: 10px; width: 224px;
         max-height: calc(100vh - 40px);
@@ -144,6 +164,11 @@
       /* ── bus line filter (Filter tab) ── */
       .bf-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 7px; }
       .bf-hint { color: #888; font-size: 10px; line-height: 1.4; }
+      .bf-row { display: flex; gap: 6px; }
+      /* min-width:auto would stop the input shrinking below its placeholder;
+         stretch overrides .bf-clear's flex-start for the row's Add button. */
+      .bf-row .bf-input { min-width: 0; }
+      .bf-row .bf-clear { align-self: stretch; }
       .bf-input {
         width: 100%; box-sizing: border-box; background: #101216; color: #ddd;
         border: 1px solid #333; border-radius: 4px; padding: 5px 7px;

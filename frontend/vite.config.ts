@@ -17,6 +17,10 @@ export default defineConfig(({ command }) => ({
   publicDir: command === 'build' ? false : dataDir,
   server: {
     port: 5173,
+    // Phone testing needs HTTPS (iOS gates geolocation + compass on a secure
+    // context); a cloudflared quick tunnel provides it, but vite's host check
+    // would 403 the tunnel's random hostname without this.
+    allowedHosts: ['.trycloudflare.com'],
     // Forward API calls to the Fastify backend so frontend code can use
     // relative /api URLs in dev and prod alike.
     proxy: {
