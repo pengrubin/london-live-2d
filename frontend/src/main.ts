@@ -196,16 +196,24 @@ async function bootstrap(): Promise<void> {
   // a deployment only names the licensors whose data it actually draws (TfL's
   // terms require a visible "Powered by TfL Open Data"; Dubai must not show
   // one). Kept short: the full licence wording lives in the panel's About tab
-  // and the README. OSM is already credited via the basemap source attribution.
+  // and the README. Joined into ONE string — MapLibre length-sorts separate
+  // attribution entries, which scrambled the order — so the owner credit stays
+  // first and the separator stays uniform. The basemap credit lives here too
+  // (not on the source) for the same reason.
   const dataCredits = [
+    '<a href="https://github.com/pengrubin/london-live-2d" target="_blank" rel="noopener"><b>© PENG</b></a>',
     hasLayer('trainPositions') || hasLayer('stopArrivals')
       ? '<a href="https://tfl.gov.uk/info-for/open-data-users/" target="_blank" rel="noopener">Powered by TfL Open Data</a>'
       : null,
     hasLayer('buses')
       ? '<a href="https://www.bus-data.dft.gov.uk/" target="_blank" rel="noopener">DfT BODS</a>'
       : null,
-    '<a href="https://github.com/pengrubin/london-live-2d" target="_blank" rel="noopener"><b>© PENG</b></a>',
-  ].filter((credit): credit is string => credit !== null);
+    // Corner keeps only the legally required OSM notice; the Protomaps tile
+    // credit lives in the Info tab and README (self-hosted pmtiles).
+    '<a href="https://openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a>',
+  ]
+    .filter((credit): credit is string => credit !== null)
+    .join(' | ');
 
   const map = new maplibregl.Map({
     container: 'app',
@@ -217,8 +225,8 @@ async function bootstrap(): Promise<void> {
         protomaps: {
           type: 'vector',
           url: `pmtiles://${basemapUrl}`,
-          attribution:
-            '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org">OpenStreetMap</a>',
+          // No `attribution` here: the Protomaps/OSM credit is part of
+          // dataCredits above so the credit line renders in a fixed order.
         },
       },
       layers: layers('protomaps', namedFlavor('dark'), { lang: 'en' }),
