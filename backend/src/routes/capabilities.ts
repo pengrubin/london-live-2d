@@ -14,6 +14,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { AppConfig } from '../config';
+import { isDiversionDetectorRunning } from '../diversion-detector';
 
 /** The coverage flag means "GET /api/coverage will answer 200 right now", so
  * it watches the ARTIFACT file, not the writer's inputs — anything else opens
@@ -49,6 +50,14 @@ export function buildCapabilities(
   // key can still draw the map it already earned. True only once the writer
   // has actually produced a servable artifact.
   const hasBusCoverage = existsSync(coverageArtifactPath(busDataDir));
+
+  // Diversion detection rides the BODS poll. The flag mirrors the detector
+  // ACTUALLY running — not a re-derivation from config + directories — so it
+  // can never disagree with app.ts's start decision (which now includes a
+  // fresh-volume retry that starts the detector long after boot). The flag
+  // can never dead-click: /api/diversions answers 200 with an empty event
+  // list even before the detector exists.
+  const hasBusDiversions = isDiversionDetectorRunning();
 
   // Line geometry and station points come from baked data on disk, NOT from a
   // credential — a region can have a drawn network with no operator API at all
@@ -86,6 +95,7 @@ export function buildCapabilities(
       // Independent feeds, each gated by its own credential or flag.
       buses: config.bodsApiKey !== undefined,
       busCoverage: hasBusCoverage,
+      busDiversions: hasBusDiversions,
       nationalRail: config.darwinToken !== undefined,
       bikeStations: config.gbfsUrl !== undefined,
       vessels: config.aisApiKey !== undefined,
@@ -106,13 +116,12 @@ export function registerCapabilitiesRoute(
 ): void {
   let payload = buildCapabilities(config, bakedDataDir, busDataDir);
   app.get('/api/capabilities', async () => {
-    // busCoverage is the one flag derived from a runtime-WRITTEN file rather
-    // than config or baked data: on a fresh volume it is false at boot and
-    // flips days later within this same process, when the coverage writer's
-    // first artifact lands. Re-check per request until it flips (the artifact
-    // is never deleted), then stop paying the stat. Async so the pre-flip
-    // window never blocks the event loop — every other flag stays a boot-time
-    // constant.
+    // busCoverage and busDiversions are the two flags that can flip mid-
+    // process on a fresh volume, days after boot: coverage when the writer's
+    // first artifact lands, diversions when the retry timer in app.ts starts
+    // the detector. Both use the same sticky lazy re-check — probe per
+    // request only until true, then stop paying. Coverage needs an async stat
+    // (never block the event loop pre-flip); diversions is a plain flag read.
     if (!payload.layers.busCoverage) {
       const servable = await stat(coverageArtifactPath(busDataDir)).then(
         (s) => s.isFile(),
@@ -121,6 +130,9 @@ export function registerCapabilitiesRoute(
       if (servable) {
         payload = { ...payload, layers: { ...payload.layers, busCoverage: true } };
       }
+    }
+    if (!payload.layers.busDiversions && isDiversionDetectorRunning()) {
+      payload = { ...payload, layers: { ...payload.layers, busDiversions: true } };
     }
     return payload;
   });

@@ -32,6 +32,7 @@ import { startRainRadar, RAIN_RADAR_LAYER_ID } from './layers/rain-radar';
 import { startBikeStations, BIKE_STATIONS_LAYER_ID } from './layers/bike-stations';
 import { startSimulatedTrains, SIMULATED_TRAINS_LAYER_ID } from './layers/simulated-trains';
 import { startBusCoverage, setBusCoverageVisible, BUS_COVERAGE_LAYER_ID } from './layers/coverage';
+import { startDiversions, setDiversionsVisible, DIVERSIONS_LAYER_IDS } from './layers/diversions';
 import { hasLayer, loadCapabilities } from './region';
 
 const TOAST_DISMISS_MS = 4000;
@@ -464,6 +465,19 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
         // Custom handler because the first toggle-on also triggers the lazy
         // one-time artifact fetch; afterwards it is a plain visibility flip.
         onToggle: (visible: boolean) => setBusCoverageVisible(target, visible),
+      },
+    },
+    {
+      name: 'busDiversions',
+      row: 11,
+      start: () => startDiversions(target),
+      overlay: {
+        // Default ON (no startOff): a live diversion is exactly the kind of
+        // thing the map exists to surface. The custom handler gates the 90 s
+        // poll on the toggle, so hiding it also stops the fetches.
+        label: 'Diversions',
+        layerIds: DIVERSIONS_LAYER_IDS,
+        onToggle: (visible: boolean) => setDiversionsVisible(target, visible),
       },
     },
   ];

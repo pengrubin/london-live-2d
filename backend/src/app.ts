@@ -12,6 +12,7 @@ import { GbfsClient } from './gbfs-client';
 import { TtlCache } from './cache';
 import { type AppConfig, resolveBusDataDir } from './config';
 import { startCoverageWriter } from './coverage-writer';
+import { startDiversionDetector, type DiversionDetector } from './diversion-detector';
 import { ARRIVALS_CACHE_TTL_MS, TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS } from './constants';
 import {
   LeaderboardTracker,
@@ -49,6 +50,7 @@ import { registerAircraftPhotoRoute } from './routes/aircraft-photo';
 import { registerBusRoutesRoute } from './routes/bus-routes';
 import { registerCoverageRoute } from './routes/coverage';
 import { registerDataExportRoute } from './routes/data-export';
+import { registerDiversionsRoute } from './routes/diversions';
 import { registerShipPhotoRoute } from './routes/ship-photo';
 
 /** Repo layout anchors — data/ and scripts/ sit beside backend/. */
@@ -72,6 +74,11 @@ function resolveBakedDataDir(): string {
   return isAbsolute(configured) ? configured : join(REPO_ROOT, configured);
 }
 const DATA_DIR = resolveBakedDataDir();
+
+/** Fresh-volume retry cadence for the diversion detector: the learner needs
+ * days of traces before the learned dir exists, so a boot-only check would
+ * disable the feature until a redeploy. 30 min is modest — one existsSync. */
+const DIVERSIONS_RETRY_INTERVAL_MS = 30 * 60_000;
 
 /** Builds the Fastify app with all plugins and routes; exported for tests (inject()). */
 export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
@@ -131,15 +138,38 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
 
   // All-London live buses (optional feature — needs a BODS key in .env)
   let bodsClient: BodsClient | null = null;
+  let diversions: DiversionDetector | null = null;
   if (config.bodsApiKey) {
     // Trace log + self-scheduled route learner ride along with the poller.
     const traces = new TraceWriter(join(busDataDir, 'bus-traces'), (msg) => app.log.info(msg));
     traces.start();
+    // Diversion detection also rides the poll, but only once the learner has
+    // produced polylines to project against. On a fresh volume that happens
+    // DAYS after boot, so a missing dir starts a modest retry instead of
+    // disabling the feature until redeploy (same bug class the capabilities
+    // busCoverage flag already fixed): re-check every 30 min, start the
+    // detector once, then stop retrying. The poll callback reads the mutable
+    // `diversions` binding, so a late start is picked up on the next poll.
+    const learnedDir = join(busDataDir, 'bus-routes', 'learned');
+    if (existsSync(learnedDir)) {
+      diversions = startDiversionDetector(busDataDir, (msg) => app.log.info(msg));
+    } else {
+      const retryTimer = setInterval(() => {
+        if (!existsSync(learnedDir)) return;
+        clearInterval(retryTimer);
+        diversions = startDiversionDetector(busDataDir, (msg) => app.log.info(msg));
+      }, DIVERSIONS_RETRY_INTERVAL_MS);
+      retryTimer.unref();
+      app.addHook('onClose', () => clearInterval(retryTimer));
+    }
     const bods = new BodsClient(
       config.bodsApiKey,
       config.region.bbox,
       (msg) => app.log.info(msg),
-      (buses, now) => traces.record(buses, now),
+      (buses, now) => {
+        traces.record(buses, now);
+        diversions?.record(buses, now);
+      },
     );
     bods.start();
     const learner = new LearnerScheduler(SCRIPTS_DIR, busDataDir, (msg) => app.log.info(msg));
@@ -152,6 +182,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
       traces.stop();
       learner.stop();
       rollups.stop();
+      diversions?.stop();
     });
     app.get('/api/buses', () => bods.list());
     bodsClient = bods;
@@ -159,6 +190,9 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     app.get('/api/buses', () => []);
   }
   registerBusRoutesRoute(app, join(busDataDir, 'bus-routes', 'learned'));
+  // A getter, not the instance: the detector may start long after boot (fresh
+  // volume + retry timer above), and the route must see it when it does.
+  registerDiversionsRoute(app, () => diversions);
 
   // Coverage flow-map artifact — derived offline from learned routes +
   // rollups already on disk, so unlike the writers above it needs no BODS key:

@@ -33,6 +33,7 @@ const DATASETS: Readonly<Record<string, DatasetSpec>> = {
     ext: '.jsonl',
     contentType: 'application/x-ndjson',
   },
+  diversions: { dir: 'diversions', ext: '.jsonl', contentType: 'application/x-ndjson' },
 };
 
 /** Constant-time bearer-token check; hashing first equalises lengths. */
