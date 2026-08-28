@@ -28,6 +28,11 @@ const DATASETS: Readonly<Record<string, DatasetSpec>> = {
   'bus-traces': { dir: 'bus-traces', ext: '.jsonl', contentType: 'application/x-ndjson' },
   'bus-rollups': { dir: 'bus-rollups', ext: '.json', contentType: 'application/json' },
   'tube-status': { dir: 'tube-status', ext: '.jsonl', contentType: 'application/x-ndjson' },
+  'road-disruptions': {
+    dir: 'road-disruptions',
+    ext: '.jsonl',
+    contentType: 'application/x-ndjson',
+  },
 };
 
 /** Constant-time bearer-token check; hashing first equalises lengths. */

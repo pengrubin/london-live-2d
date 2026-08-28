@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compactStatus, shouldWrite } from './tube-status-recorder';
+import { compactDisruptions, compactStatus, shouldWrite } from './status-recorder';
 
 const GOOD_SERVICE = {
   id: 'victoria',
@@ -61,22 +61,64 @@ describe('compactStatus', () => {
   });
 });
 
+describe('compactDisruptions', () => {
+  it('keeps the archived fields, truncates free text, sorts by id', () => {
+    const out = compactDisruptions([
+      {
+        id: 'TIMS-2',
+        category: 'Works',
+        severity: 'Serious',
+        location: 'B'.repeat(300),
+        comments: 'C'.repeat(400),
+        startDateTime: '2026-08-20T00:00:00Z',
+        endDateTime: '2026-09-30T00:00:00Z',
+        point: '[-0.1,51.5]',
+      },
+      { id: 'TIMS-1', category: 'Incident' },
+    ]);
+
+    expect(out?.map((d) => d.id)).toEqual(['TIMS-1', 'TIMS-2']);
+    expect(out?.[1]?.loc).toHaveLength(200);
+    expect(out?.[1]?.com).toHaveLength(300);
+    expect(out?.[1]?.pt).toBe('[-0.1,51.5]');
+    expect(out?.[0]).toEqual({ id: 'TIMS-1', cat: 'Incident' });
+  });
+
+  it('records a genuinely quiet network as an empty array, not a skip', () => {
+    expect(compactDisruptions([])).toEqual([]);
+  });
+
+  it('rejects non-array payloads', () => {
+    expect(compactDisruptions({ httpStatusCode: 429 })).toBeNull();
+    expect(compactDisruptions('<html>Bad Gateway</html>')).toBeNull();
+  });
+
+  it('drops entries without a usable id', () => {
+    expect(compactDisruptions([{ category: 'Works' }, null, { id: '' }])).toEqual([]);
+  });
+});
+
 describe('shouldWrite', () => {
   const T0 = 1_755_900_000_000;
+  const HEARTBEAT = 30 * 60_000;
 
   it('always writes the first snapshot of a file', () => {
-    expect(shouldWrite(null, '[]', null, T0)).toBe(true);
+    expect(shouldWrite(null, '[]', null, T0, HEARTBEAT)).toBe(true);
   });
 
   it('writes when the status changed', () => {
-    expect(shouldWrite('[a]', '[b]', T0, T0 + 120_000)).toBe(true);
+    expect(shouldWrite('[a]', '[b]', T0, T0 + 120_000, HEARTBEAT)).toBe(true);
   });
 
   it('skips an unchanged status inside the heartbeat window', () => {
-    expect(shouldWrite('[a]', '[a]', T0, T0 + 120_000)).toBe(false);
+    expect(shouldWrite('[a]', '[a]', T0, T0 + 120_000, HEARTBEAT)).toBe(false);
   });
 
   it('writes an unchanged status once the heartbeat interval elapses', () => {
-    expect(shouldWrite('[a]', '[a]', T0, T0 + 30 * 60_000)).toBe(true);
+    expect(shouldWrite('[a]', '[a]', T0, T0 + 30 * 60_000, HEARTBEAT)).toBe(true);
+  });
+
+  it('a zero heartbeat writes every poll even when unchanged', () => {
+    expect(shouldWrite('[a]', '[a]', T0, T0 + 1, 0)).toBe(true);
   });
 });
