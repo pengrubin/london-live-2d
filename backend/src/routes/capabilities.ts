@@ -10,9 +10,17 @@
 // touching this file.
 
 import { existsSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { AppConfig } from '../config';
+
+/** The coverage flag means "GET /api/coverage will answer 200 right now", so
+ * it watches the ARTIFACT file, not the writer's inputs — anything else opens
+ * a window where the toggle renders but the fetch 404s. */
+function coverageArtifactPath(busDataDir: string): string {
+  return join(busDataDir, 'coverage', 'latest.json');
+}
 
 export interface Capabilities {
   readonly region: {
@@ -28,9 +36,19 @@ export interface Capabilities {
   readonly layers: Readonly<Record<string, boolean>>;
 }
 
-export function buildCapabilities(config: AppConfig, bakedDataDir: string): Capabilities {
+export function buildCapabilities(
+  config: AppConfig,
+  bakedDataDir: string,
+  busDataDir: string,
+): Capabilities {
   const { region } = config;
   const hasTfl = config.tflAppKey !== undefined;
+
+  // The coverage flow-map is derived offline from learned route polylines and
+  // daily rollups. No credential is involved: a deployment that lost its BODS
+  // key can still draw the map it already earned. True only once the writer
+  // has actually produced a servable artifact.
+  const hasBusCoverage = existsSync(coverageArtifactPath(busDataDir));
 
   // Line geometry and station points come from baked data on disk, NOT from a
   // credential — a region can have a drawn network with no operator API at all
@@ -67,6 +85,7 @@ export function buildCapabilities(config: AppConfig, bakedDataDir: string): Capa
       bikePoints: hasTfl,
       // Independent feeds, each gated by its own credential or flag.
       buses: config.bodsApiKey !== undefined,
+      busCoverage: hasBusCoverage,
       nationalRail: config.darwinToken !== undefined,
       bikeStations: config.gbfsUrl !== undefined,
       vessels: config.aisApiKey !== undefined,
@@ -83,7 +102,26 @@ export function registerCapabilitiesRoute(
   app: FastifyInstance,
   config: AppConfig,
   bakedDataDir: string,
+  busDataDir: string,
 ): void {
-  const payload = buildCapabilities(config, bakedDataDir);
-  app.get('/api/capabilities', () => payload);
+  let payload = buildCapabilities(config, bakedDataDir, busDataDir);
+  app.get('/api/capabilities', async () => {
+    // busCoverage is the one flag derived from a runtime-WRITTEN file rather
+    // than config or baked data: on a fresh volume it is false at boot and
+    // flips days later within this same process, when the coverage writer's
+    // first artifact lands. Re-check per request until it flips (the artifact
+    // is never deleted), then stop paying the stat. Async so the pre-flip
+    // window never blocks the event loop — every other flag stays a boot-time
+    // constant.
+    if (!payload.layers.busCoverage) {
+      const servable = await stat(coverageArtifactPath(busDataDir)).then(
+        (s) => s.isFile(),
+        () => false,
+      );
+      if (servable) {
+        payload = { ...payload, layers: { ...payload.layers, busCoverage: true } };
+      }
+    }
+    return payload;
+  });
 }
