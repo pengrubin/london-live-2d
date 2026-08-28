@@ -73,6 +73,8 @@ const CLAMP_END_EPS_M = 1;
 const ENDPOINT_LOCUS_M = 200;
 const DWELL_SPEED_MS = 2;
 const DWELL_MOVING_FRAC_MIN = 0.3;
+/** Beyond this |d|, "diversion" is no longer the credible explanation. */
+const MAX_CREDIBLE_D_M = 1500;
 const MISLABEL_SAMPLE_N = 15;
 // memory bounds
 const EXC_FIX_CAP = 2000;
@@ -348,7 +350,14 @@ function finalizePending(pending: PendingExcursion, ctx: StepContext): Completed
   // guard (c): dwell — a stationary off-route vehicle (stand, stuck GPS) is
   // weak evidence; kept, but only as LOW confidence.
   const movingFrac = exc.totalPairs > 0 ? exc.movingPairs / exc.totalPairs : 0;
-  const confidence: Confidence = movingFrac >= DWELL_MOVING_FRAC_MIN ? 'high' : 'low';
+  // guard (e): a street-level diversion stays within ~hundreds of metres of
+  // the route; a kilometres-scale |d| means the learned shape and this
+  // vehicle's actual service disagree (live case: 254s projecting 2-4 km off
+  // hitchhiked their name onto a genuine 56/106 event). LOW keeps it logged
+  // without letting it name routes or draw segments.
+  const credibleD = exc.maxD <= MAX_CREDIBLE_D_M;
+  const confidence: Confidence =
+    movingFrac >= DWELL_MOVING_FRAC_MIN && credibleD ? 'high' : 'low';
   if (confidence === 'high') c.completedHigh += 1;
   else c.completedLow += 1;
 

@@ -666,3 +666,23 @@ describe('severity and route labels', () => {
     expect(two.events[0]?.routes).toEqual(['45 → Ealing', '45 → Uxbridge']);
   });
 });
+
+describe('credible-offset guard', () => {
+  test('a kilometres-scale offset is LOW confidence even when moving', () => {
+    const ctx = makeCtx();
+    const fixes = warmupFixes();
+    let t = AFTER_WARMUP_T;
+    // moving the whole time, but 2 km off the route — shape/service mismatch
+    for (let i = 0; i < 6; i++) {
+      t += STEP_S;
+      fixes.push(fixAt(t, 1200 + i * 120, 2000));
+    }
+    fixes.push(fixAt(t + STEP_S, 1920));
+    fixes.push(fixAt(t + 2 * STEP_S, 2040));
+
+    const { completed } = drive(fixes, ctx);
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.confidence).toBe('low');
+  });
+});
