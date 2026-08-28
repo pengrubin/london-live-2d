@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { registerCapabilitiesRoute } from './capabilities';
+import { startDiversionDetector } from '../diversion-detector';
 import type { AppConfig } from '../config';
 
 // Only the fields buildCapabilities reads; everything credential-ish is unset
@@ -64,5 +65,18 @@ describe('capabilities busCoverage flag', () => {
     await writeFile(join(busDataDir, 'coverage', 'latest.json'), '{"type":"FeatureCollection"}');
 
     expect((await layers()).busCoverage).toBe(true);
+  });
+
+  it('busDiversions flips true WITHOUT a restart once the detector starts', async () => {
+    // Same bug class: on a fresh volume app.ts starts the detector from a
+    // retry timer long after boot; the flag mirrors the running detector.
+    expect((await layers()).busDiversions).toBe(false);
+
+    const detector = startDiversionDetector(busDataDir, () => {});
+    try {
+      expect((await layers()).busDiversions).toBe(true);
+    } finally {
+      detector.stop();
+    }
   });
 });
