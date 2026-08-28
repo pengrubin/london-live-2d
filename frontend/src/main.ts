@@ -455,7 +455,10 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       row: 10,
       start: () => startBusCoverage(target),
       overlay: {
-        label: 'Coverage',
+        // "Bus Flow", not "Coverage": coverage reads as telecom/insurance
+        // jargon, while the layer answers "how much bus service flows down
+        // this road" — the label should say so.
+        label: 'Bus Flow',
         layerIds: [BUS_COVERAGE_LAYER_ID],
         startOff: true,
         // Custom handler because the first toggle-on also triggers the lazy
