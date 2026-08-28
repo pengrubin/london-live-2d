@@ -5,7 +5,8 @@
 // production (pinned by the backend scheduler via BUS_DATA_DIR), else data/.
 // Input:  <base>/bus-traces/YYYY-MM-DD.jsonl  (last 3 days; written by backend)
 //         <base>/bus-routes/prior/<key>.json  (optional BODS timetable shapes)
-// Output: <base>/bus-routes/learned/<key>.json {poly, quality:{journeys, meanResidualM}}
+// Output: <base>/bus-routes/learned/<key>.json
+//           {poly, quality:{journeys, meanResidualM, coverage}}
 //         scheduler freshness stamp at BUS_LAST_RUN_PATH (the scheduler passes
 //         the exact path it reads; standalone runs default to the flat volume /
 //         data/-local convention) — matching learner-scheduler.ts.
@@ -20,6 +21,13 @@
 //           one light smoothing pass;
 //   gate  = re-project points on the result; keep only if meanResidual ≤ 35 m
 //           (worse means bad geometry — unsnapped buses look better).
+//
+// Every result is then MEASURED: coverage = fraction of ALL the key's journey
+// fixes inside the result's adaptive corridor (written as quality.coverage).
+// For London operators, a result covering < COVERAGE_THRESHOLD of its own fix
+// cloud means the seed was bad (a short working or a glued median journey) —
+// the REPAIR PATH re-seeds from the observed journey that best explains the
+// whole cloud and keeps the repaired result only when it measures better.
 //
 // Idempotent full recompute from the trace window; existing learned files for
 // keys that currently lack data are left in place. Memory is bounded by
@@ -73,6 +81,64 @@ const STOP_ANCHOR_PULL = 0.5;
 const MAX_MEAN_RESIDUAL_M = 35;
 /** Per-chunk fix budget bounds memory (~24 B/fix → ≲ 100 MB a chunk). */
 const CHUNK_FIX_BUDGET = 4_000_000;
+
+// ── coverage measurement + low-coverage repair ─────────────────────────────
+/**
+ * A learned shape must cover at least this fraction of its own fix cloud or —
+ * for London operators — the repair path re-seeds it. London-only because low
+ * coverage there reliably means a bad seed (dense urban routes, dense traces);
+ * coaches and country operators legitimately stray (diversions, motorway
+ * variants), so re-seeding them from one journey would do harm.
+ */
+const COVERAGE_THRESHOLD = 0.9;
+// Case-insensitive (operator codes have burned us before: go2 vs Go2), and an
+// empty/blank env value falls back to the default rather than silently
+// disabling every repair.
+const LONDON_OPERATORS = (() => {
+  const parsed = (process.env.LONDON_OPERATORS ?? '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean);
+  return new Set(parsed.length > 0 ? parsed : ['TFLO']);
+})();
+/** Candidate journeys actually scored per repaired key (most-fixes first). */
+const SCORING_MAX_CANDIDATES = 400;
+/** Fixes are stride-sampled to at most this many for candidate-journey scoring. */
+const SCORING_SAMPLE_CAP = 15_000;
+/** "Explains the cloud" radius for best-journey scoring (~ corridor cap). */
+const SCORING_RADIUS_M = 60;
+/**
+ * A candidate vertex is "supported" when at least this many sampled fixes
+ * project to it. Genuine-corridor vertices collect tens of fixes; vertices on
+ * a glued deadhead/mislabeled leg collect almost none. Candidate selection
+ * maximizes recall × precision, where precision = supported vertex fraction —
+ * this defeats revenue-trip+deadhead glue journeys that dwell-splitting
+ * cannot catch (fast < 5 min turnarounds).
+ */
+const VERTEX_SUPPORT_MIN_FIXES = 3;
+/**
+ * Anti-doubling guard for candidate journeys. Direction mislabels can glue an
+ * outbound return onto an inbound leg (600 s turnarounds don't split them);
+ * such an out-and-back explains ~100 % of the cloud and would always win. A
+ * candidate whose path retraces itself — more than OVERLAP_MAX_FRACTION of its
+ * vertices lying within OVERLAP_RADIUS_M of an EARLIER, non-adjacent (>
+ * OVERLAP_MIN_SEPARATION segments back) part of its own path — is rejected.
+ * Genuine one-way trips only self-overlap at terminus loops (fraction ≪ 0.3).
+ */
+const OVERLAP_RADIUS_M = 30;
+const OVERLAP_MIN_SEPARATION = 20; // segments (~500 m along path at 25 m spacing)
+const OVERLAP_MAX_FRACTION = 0.3;
+/**
+ * Layover split for candidate journeys. A terminal stand shorter than
+ * JOURNEY_SPLIT_GAP_S glues a trip to its return leg (often carrying a
+ * mislabeled direction), producing a "journey" that spans the route
+ * down-and-back and wins the best-journey contest on recall alone (a 591 s
+ * stand did exactly this on route 254). Split whenever the vehicle dwells
+ * within LAYOVER_RADIUS_M for at least LAYOVER_MIN_S — terminal stands are
+ * minutes long; ordinary stops and traffic lights are not.
+ */
+const LAYOVER_MIN_S = 300;
+const LAYOVER_RADIUS_M = 80;
 
 const M_PER_DEG_LAT = 110_540;
 const M_PER_DEG_LON = 111_320 * Math.cos((51.5 * Math.PI) / 180);
@@ -180,6 +246,14 @@ function quantile(sorted, q) {
   return sorted[idx];
 }
 
+/** Completeness filter shared by both journey splitters. */
+function isCompleteJourney(j) {
+  if (j.length < JOURNEY_MIN_FIXES) return false;
+  if (j[j.length - 1].t - j[0].t < JOURNEY_MIN_DURATION_S) return false;
+  const pts = j.map((f) => toM([f.x, f.y]));
+  return pathLengthM(pts) >= JOURNEY_MIN_LENGTH_M;
+}
+
 /** Split one vehicle's time-sorted fixes into complete journeys. */
 function splitJourneys(fixes) {
   fixes.sort((a, b) => a.t - b.t);
@@ -193,12 +267,57 @@ function splitJourneys(fixes) {
     if (current.length === 0 || fix.t > current[current.length - 1].t) current.push(fix);
   }
   if (current.length > 0) journeys.push(current);
-  return journeys.filter((j) => {
-    if (j.length < JOURNEY_MIN_FIXES) return false;
-    if (j[j.length - 1].t - j[0].t < JOURNEY_MIN_DURATION_S) return false;
-    const pts = j.map((f) => toM([f.x, f.y]));
-    return pathLengthM(pts) >= JOURNEY_MIN_LENGTH_M;
-  });
+  return journeys.filter(isCompleteJourney);
+}
+
+/**
+ * Split one vehicle's fixes into complete journeys, ALSO splitting at
+ * layovers (dwell within LAYOVER_RADIUS_M for ≥ LAYOVER_MIN_S). Used only to
+ * build repair-path candidate journeys: the normal learn keeps the plain
+ * gap-split so its behavior stays identical, but a candidate seed glued to
+ * its return leg across a short terminal stand must never win (guard (a)).
+ */
+function splitJourneysAtLayovers(fixes) {
+  fixes.sort((a, b) => a.t - b.t);
+  const distM = (a, b) => {
+    const [ax, ay] = toM([a.x, a.y]);
+    const [bx, by] = toM([b.x, b.y]);
+    return Math.hypot(ax - bx, ay - by);
+  };
+  const journeys = [];
+  let current = [];
+  let standStart = 0; // index into `current` of the possible stand anchor
+  for (const fix of fixes) {
+    if (current.length > 0 && fix.t <= current[current.length - 1].t) continue;
+    if (current.length > 0) {
+      const prev = current[current.length - 1];
+      const dt = fix.t - prev.t;
+      const isGapSplit = dt > JOURNEY_SPLIT_GAP_S;
+      // Quiet layover: a long fix gap while parked (writers often go silent on stand).
+      const isQuietLayover = !isGapSplit && dt >= LAYOVER_MIN_S && distM(fix, prev) <= LAYOVER_RADIUS_M;
+      // Dwelling layover: fixes keep coming but the bus stays put for LAYOVER_MIN_S.
+      let isDwellLayover = false;
+      if (!isGapSplit && !isQuietLayover) {
+        if (distM(fix, current[standStart]) > LAYOVER_RADIUS_M) {
+          standStart = current.length; // window re-anchors on the incoming fix
+        } else if (fix.t - current[standStart].t >= LAYOVER_MIN_S) {
+          isDwellLayover = true;
+        }
+      }
+      if (isGapSplit || isQuietLayover || isDwellLayover) {
+        // Dwell split: keep the journey up to where the stand began; the
+        // stationary tail belongs to the layover, not either leg.
+        const endIdx = isDwellLayover ? standStart + 1 : current.length;
+        journeys.push(current.slice(0, endIdx));
+        current = [];
+        standStart = 0;
+      }
+    }
+    if (current.length === 0) standStart = 0;
+    current.push(fix);
+  }
+  if (current.length > 0) journeys.push(current);
+  return journeys.filter(isCompleteJourney);
 }
 
 async function loadPrior(key) {
@@ -211,6 +330,176 @@ async function loadPrior(key) {
   } catch {
     return null;
   }
+}
+
+/**
+ * COVERAGE METRIC. Project every fix (meter-space) onto a shape (degree-space
+ * poly). Corridor = adaptive p90 of on-shape residuals clamped to
+ * [CORRIDOR_START_M, CORRIDOR_CAP_M] — the same rule the fit uses. Coverage =
+ * fraction of ALL fixes inside the corridor; fixes beyond
+ * MAX_CONSIDERED_RESIDUAL_M count as uncovered. Coverage is unrounded here so
+ * normal-vs-repaired comparison is exact; it is rounded once at write time.
+ */
+function computeShapeStats(polyDeg, fixesM) {
+  const polyM = polyDeg.map(toM);
+  const index = buildSegmentIndex(polyM, 100);
+  // Stride-sampled: this runs for EVERY key, and busy keys carry ~100k fixes
+  // per window — an unsampled pass would dominate the run and blow the
+  // per-chunk memory budget. 15k samples put the coverage error well under
+  // a percentage point, far inside the 0.06 threshold hysteresis.
+  const step = Math.max(1, Math.floor(fixesM.length / SCORING_SAMPLE_CAP));
+  let sampled = 0;
+  const hits = [];
+  for (let i = 0; i < fixesM.length; i += step) {
+    const [px, py] = fixesM[i];
+    sampled += 1;
+    const proj = projectOnto(polyM, index, px, py, MAX_CONSIDERED_RESIDUAL_M);
+    if (proj !== null) hits.push(proj.dist);
+  }
+  hits.sort((a, b) => a - b);
+  const corridorM = Math.min(
+    CORRIDOR_CAP_M,
+    Math.max(CORRIDOR_START_M, quantile(hits, 0.9)),
+  );
+  let covered = 0;
+  for (const d of hits) {
+    if (d > corridorM) break; // hits are sorted — everything past here is out
+    covered += 1;
+  }
+  return {
+    lengthKm: Number((pathLengthM(polyM) / 1000).toFixed(2)),
+    coverage: sampled === 0 ? 0 : covered / sampled,
+  };
+}
+
+/** Fraction of a resampled path's vertices that retrace an earlier part of it. */
+function selfOverlapFraction(poly) {
+  if (poly.length < OVERLAP_MIN_SEPARATION + 2) return 0;
+  const index = buildSegmentIndex(poly, 100);
+  const { cells, cellM } = index;
+  const reach = Math.max(1, Math.ceil(OVERLAP_RADIUS_M / cellM));
+  let overlapped = 0;
+  for (let i = 0; i < poly.length; i += 1) {
+    const [px, py] = poly[i];
+    const cx = Math.floor(px / cellM);
+    const cy = Math.floor(py / cellM);
+    let hit = false;
+    for (let dx = -reach; dx <= reach && !hit; dx += 1) {
+      for (let dy = -reach; dy <= reach && !hit; dy += 1) {
+        const list = cells.get(`${cx + dx},${cy + dy}`);
+        if (!list) continue;
+        for (const j of list) {
+          if (j > i - OVERLAP_MIN_SEPARATION) continue; // only earlier, non-adjacent path
+          const [ax, ay] = poly[j];
+          const [bx, by] = poly[j + 1];
+          const vx = bx - ax;
+          const vy = by - ay;
+          const len2 = vx * vx + vy * vy;
+          const u = len2 === 0 ? 0 : Math.min(1, Math.max(0, ((px - ax) * vx + (py - ay) * vy) / len2));
+          const d = Math.hypot(px - (ax + vx * u), py - (ay + vy * u));
+          if (d <= OVERLAP_RADIUS_M) {
+            hit = true;
+            break;
+          }
+        }
+      }
+    }
+    if (hit) overlapped += 1;
+  }
+  return overlapped / poly.length;
+}
+
+/**
+ * BEST-JOURNEY SELECTION for the repair path. Score every candidate journey
+ * by recall × precision against the route's (stride-sampled) fix cloud:
+ * recall = fraction of the sample within SCORING_RADIUS_M of the candidate's
+ * path (NOT length, so a rare short/school working cannot win merely by being
+ * long or common); precision = supported fraction of the candidate's
+ * 25 m-resampled vertices (guard (b) — kills revenue-trip+deadhead glue).
+ * Doubled out-and-back candidates are rejected via selfOverlapFraction.
+ * Ties break toward the longer path. Returns the winner or null.
+ */
+function selectBestJourney(journeyMetas, fixesM) {
+  const step = Math.max(1, Math.floor(fixesM.length / SCORING_SAMPLE_CAP));
+  const sample = [];
+  for (let i = 0; i < fixesM.length; i += step) sample.push(fixesM[i]);
+  // Busy keys can offer >1000 candidate journeys; scoring cost is linear in
+  // candidates. The most-fixes-first cap keeps the winner (a full-length,
+  // well-sampled journey by construction) while bounding the worst case.
+  const candidates = [...journeyMetas]
+    .sort((a, b) => b.fixes.length - a.fixes.length)
+    .slice(0, SCORING_MAX_CANDIDATES);
+  let best = null;
+  for (const meta of candidates) {
+    const pts = meta.fixes.map((f) => toM([f.x, f.y]));
+    const poly = resample(pts, SEED_SPACING_M);
+    if (poly.length < 2) continue;
+    if (selfOverlapFraction(poly) > OVERLAP_MAX_FRACTION) {
+      continue; // out-and-back from a direction mislabel — never a valid seed
+    }
+    const index = buildSegmentIndex(poly, 100);
+    let inside = 0;
+    const support = new Array(poly.length).fill(0);
+    for (const [px, py] of sample) {
+      const proj = projectOnto(poly, index, px, py, SCORING_RADIUS_M);
+      if (proj === null) continue;
+      inside += 1;
+      support[proj.u < 0.5 ? proj.seg : proj.seg + 1] += 1;
+    }
+    const recall = sample.length === 0 ? 0 : inside / sample.length;
+    let supported = 0;
+    for (const c of support) if (c >= VERTEX_SUPPORT_MIN_FIXES) supported += 1;
+    const precision = supported / poly.length;
+    const score = recall * precision;
+    const lenM = pathLengthM(pts);
+    if (
+      best === null ||
+      score > best.score + 1e-9 ||
+      (Math.abs(score - best.score) <= 1e-9 && lenM > best.lenM)
+    ) {
+      best = { meta, score, lenM };
+    }
+  }
+  return best;
+}
+
+/**
+ * REPAIR PATH for a London key whose normal result under-covers its own fix
+ * cloud. Re-seed from the best-scoring observed journey (candidates come from
+ * the layover-aware split), re-run the standard refine on that seed, and keep
+ * the repaired result only when its coverage beats the normal one. Returns
+ * {result, stats} or null when no repair improves on the normal result.
+ */
+function repairLowCoverageKey(key, vehicles, journeys, fixesM, normalStats) {
+  const candidates = [];
+  for (const [veh, fixes] of vehicles) {
+    for (const j of splitJourneysAtLayovers(fixes)) candidates.push({ veh, fixes: j });
+  }
+  const best = selectBestJourney(candidates, fixesM);
+  if (best === null) return null;
+  // The winning journey acts as the seed "prior" (degree-space, no stops);
+  // the refine itself — corridor, trimmed mean, smoothing, gate — is the
+  // standard learnKey over the SAME journeys as the normal pass.
+  const seedPrior = { poly: best.meta.fixes.map((f) => [f.x, f.y]), stops: [] };
+  const result = learnKey(journeys, seedPrior);
+  if (result.skip) return null;
+  const stats = computeShapeStats(result.poly, fixesM);
+  if (stats.coverage <= normalStats.coverage) return null;
+  // One summary line per repaired key, on the same stdout stream the
+  // scheduler already captures for learner runs.
+  console.log(
+    JSON.stringify({
+      task: 'learn-bus-routes',
+      event: 'repaired-low-coverage-key',
+      key,
+      seedVehicle: best.meta.veh,
+      oldCoverage: Number(normalStats.coverage.toFixed(3)),
+      newCoverage: Number(stats.coverage.toFixed(3)),
+      oldLengthKm: normalStats.lengthKm,
+      newLengthKm: stats.lengthKm,
+    }),
+  );
+  return { result, stats };
 }
 
 /** Learn one key from its journeys; returns a result object or a skip reason. */
@@ -375,6 +664,9 @@ async function main() {
     traceFiles: files.length,
     keysSeen: 0,
     learned: 0,
+    repaired: 0,
+    /** per-repair audit (key + old/new coverage/length), capped at 200. */
+    repairs: [],
     insufficientData: 0,
     badGeometry: 0,
     otherSkips: 0,
@@ -442,16 +734,53 @@ async function main() {
         summary.otherSkips += 1;
         continue;
       }
+
+      // Measure the result against the key's whole fix cloud (all journey
+      // fixes, meter space) — quality.coverage for every learned file.
+      const fixesM = [];
+      for (const j of journeys) for (const f of j) fixesM.push(toM([f.x, f.y]));
+      let final = result;
+      let stats = computeShapeStats(result.poly, fixesM);
+
+      // Low coverage on a London route = bad seed; try the repair path.
+      const operator = (key.split(':')[0] ?? '').toUpperCase();
+      if (stats.coverage < COVERAGE_THRESHOLD && LONDON_OPERATORS.has(operator)) {
+        const before = stats;
+        const repaired = repairLowCoverageKey(key, vehicles, journeys, fixesM, stats);
+        if (repaired) {
+          final = repaired.result;
+          stats = repaired.stats;
+          summary.repaired += 1;
+          // Persisted in the last-run stamp: the stdout line vanishes with
+          // the child process in production, and "which shapes changed and
+          // why" is exactly what a future incident will ask. Capped so the
+          // stamp stays small.
+          if (summary.repairs.length < 200) {
+            summary.repairs.push({
+              key,
+              oldCoverage: Number(before.coverage.toFixed(3)),
+              newCoverage: Number(stats.coverage.toFixed(3)),
+              oldLengthKm: before.lengthKm,
+              newLengthKm: stats.lengthKm,
+            });
+          }
+        }
+      }
+
       await writeFile(
         join(LEARNED_DIR, `${sanitizeKey(key)}.json`),
         JSON.stringify({
           key,
-          poly: result.poly,
-          quality: { journeys: journeys.length, meanResidualM: result.meanResidualM },
+          poly: final.poly,
+          quality: {
+            journeys: journeys.length,
+            meanResidualM: final.meanResidualM,
+            coverage: Number(stats.coverage.toFixed(3)),
+          },
         }),
       );
       summary.learned += 1;
-      residualTotal += result.meanResidualM;
+      residualTotal += final.meanResidualM;
     }
   }
 
