@@ -45,6 +45,14 @@ export async function fetchLineStatus(
 }
 
 /** Service status for every line of the given modes (e.g. all tube lines). */
+/** Every current road disruption (roadworks, closures) network-wide. */
+export async function fetchRoadDisruptions(
+  appKey: string,
+  timeoutMs: number = UPSTREAM_TIMEOUT_MS,
+): Promise<TflResponse> {
+  return fetchTfl('/Road/all/Disruption', appKey, timeoutMs, { stripContent: 'false' });
+}
+
 export async function fetchLineStatusByModes(
   modes: readonly string[],
   appKey: string,

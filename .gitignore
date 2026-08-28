@@ -21,6 +21,7 @@ data/**/osm-cache/
 data/**/bus-routes/
 data/**/bus-rollups/
 data/**/tube-status/
+data/**/road-disruptions/
 data/**/coverage/
 data/**/leaderboard.json
 data/**/leaderboard.json.tmp
@@ -29,6 +30,7 @@ data/osm-cache/
 data/bus-routes/
 data/bus-rollups/
 data/tube-status/
+data/road-disruptions/
 data/coverage/
 data/leaderboard.json
 data/leaderboard.json.tmp

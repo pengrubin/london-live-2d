@@ -27,6 +27,7 @@ const DATASETS = [
   { name: 'bus-traces', ext: '.jsonl' },
   { name: 'bus-rollups', ext: '.json' },
   { name: 'tube-status', ext: '.jsonl' },
+  { name: 'road-disruptions', ext: '.jsonl' },
 ];
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_BASE = 'https://london.pengrubin.com';

@@ -23,7 +23,7 @@ import { LearnerScheduler } from './learner-scheduler';
 import { loadNrGraph, makeCachedNrBoardFetcher, NrSampler } from './nr-sampler';
 import { RateBudget } from './rate-budget';
 import { RollupWriter } from './rollup-writer';
-import { TubeStatusRecorder } from './tube-status-recorder';
+import { ROAD_DISRUPTIONS_FEED, SnapshotRecorder, TUBE_STATUS_FEED } from './status-recorder';
 import { TraceWriter } from './trace-writer';
 import { registerArrivalsRoute } from './routes/arrivals';
 import { registerCapabilitiesRoute } from './routes/capabilities';
@@ -168,14 +168,17 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   app.addHook('onClose', () => coverage.stop());
   registerCoverageRoute(app, join(busDataDir, 'coverage'));
 
-  // Permanent line-status archive — TfL publishes no history, so we keep our
-  // own from the day this ships. A few MB per year; never pruned.
+  // Permanent archives of TfL feeds with no historical endpoint (line status
+  // + road disruptions) — kept from the day this ships. A few MB per year;
+  // never pruned. Road disruptions double as the gold standard for validating
+  // bus diversion detection.
   if (config.tflAppKey) {
-    const tubeStatus = new TubeStatusRecorder(busDataDir, config.tflAppKey, (msg) =>
-      app.log.info(msg),
-    );
-    tubeStatus.start();
-    app.addHook('onClose', () => tubeStatus.stop());
+    for (const feed of [TUBE_STATUS_FEED, ROAD_DISRUPTIONS_FEED]) {
+      const recorder = new SnapshotRecorder(busDataDir, config.tflAppKey, (msg) =>
+        app.log.info(msg), feed);
+      recorder.start();
+      app.addHook('onClose', () => recorder.stop());
+    }
   }
 
   // Token-guarded bulk export of the day-partitioned archives (traces, rollups,
