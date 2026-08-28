@@ -19,8 +19,13 @@ import { registerPoll } from '../util/lifecycle';
 import { below } from '../util/layer-order';
 
 export const DIVERSIONS_SEGMENTS_LAYER_ID = 'diversions-segments';
+export const DIVERSIONS_CASING_LAYER_ID = 'diversions-casing';
 export const DIVERSIONS_DOTS_LAYER_ID = 'diversions-dots';
-export const DIVERSIONS_LAYER_IDS = [DIVERSIONS_SEGMENTS_LAYER_ID, DIVERSIONS_DOTS_LAYER_ID];
+export const DIVERSIONS_LAYER_IDS = [
+  DIVERSIONS_CASING_LAYER_ID,
+  DIVERSIONS_SEGMENTS_LAYER_ID,
+  DIVERSIONS_DOTS_LAYER_ID,
+];
 
 const SOURCE_ID = 'diversions';
 const DIVERSIONS_URL = '/api/diversions';
@@ -213,17 +218,41 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
   // Same anchor as roadworks: stations-circle sits above the transit lines
   // (and the coverage glow beneath them) but below every vehicle layer, so
   // inserting under it lands exactly between the static network and the dots.
+  //
+  // DASHED over a dark casing, not a solid line: solid red is exactly the
+  // Central line (and Windrush), and every other hue belongs to some route
+  // too — no colour is free. Dashes are the cartographic convention for
+  // temporary closures and NO transit line uses them, so the style itself
+  // says "alert overlay", unmistakable at any zoom. Casing first; the dashed
+  // layer is added with the same beforeId afterwards, landing above it.
+  map.addLayer(
+    {
+      id: DIVERSIONS_CASING_LAYER_ID,
+      type: 'line',
+      source: SOURCE_ID,
+      filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: {
+        'line-color': '#0a0a0a',
+        'line-opacity': STATUS_OPACITY,
+        'line-width': ['interpolate', ['linear'], ['zoom'], 9, 4.5, 13, 7, 16, 9.5],
+      },
+    },
+    below(map, 'stations-circle'),
+  );
   map.addLayer(
     {
       id: DIVERSIONS_SEGMENTS_LAYER_ID,
       type: 'line',
       source: SOURCE_ID,
       filter: ['==', ['geometry-type'], 'LineString'],
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      // butt caps keep the dashes crisp; round caps would bead them.
+      layout: { 'line-cap': 'butt', 'line-join': 'round' },
       paint: {
         'line-color': STATUS_COLOR,
         'line-opacity': STATUS_OPACITY,
         'line-width': ['interpolate', ['linear'], ['zoom'], 9, 2, 13, 4, 16, 6],
+        'line-dasharray': [2, 1.4],
       },
     },
     below(map, 'stations-circle'),
