@@ -19,11 +19,17 @@ data/*.pmtiles
 data/**/bus-traces/
 data/**/osm-cache/
 data/**/bus-routes/
+data/**/bus-rollups/
+data/**/tube-status/
+data/**/coverage/
 data/**/leaderboard.json
 data/**/leaderboard.json.tmp
 data/bus-traces/
 data/osm-cache/
 data/bus-routes/
+data/bus-rollups/
+data/tube-status/
+data/coverage/
 data/leaderboard.json
 data/leaderboard.json.tmp
 # Scratch space (review agents and one-off experiments write here).

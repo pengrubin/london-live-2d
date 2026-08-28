@@ -31,6 +31,7 @@ import { startTideGauges, TIDE_GAUGES_LAYER_IDS } from './layers/tide-gauges';
 import { startRainRadar, RAIN_RADAR_LAYER_ID } from './layers/rain-radar';
 import { startBikeStations, BIKE_STATIONS_LAYER_ID } from './layers/bike-stations';
 import { startSimulatedTrains, SIMULATED_TRAINS_LAYER_ID } from './layers/simulated-trains';
+import { startBusCoverage, setBusCoverageVisible, BUS_COVERAGE_LAYER_ID } from './layers/coverage';
 import { hasLayer, loadCapabilities } from './region';
 
 const TOAST_DISMISS_MS = 4000;
@@ -205,7 +206,9 @@ async function bootstrap(): Promise<void> {
     hasLayer('trainPositions') || hasLayer('stopArrivals')
       ? '<a href="https://tfl.gov.uk/info-for/open-data-users/" target="_blank" rel="noopener">Powered by TfL Open Data</a>'
       : null,
-    hasLayer('buses')
+    // busCoverage is BODS-derived too — the corner credit must survive a
+    // deployment losing its live key while still drawing earned coverage.
+    hasLayer('buses') || hasLayer('busCoverage')
       ? '<a href="https://www.bus-data.dft.gov.uk/" target="_blank" rel="noopener">DfT BODS</a>'
       : null,
     // Corner keeps only the legally required OSM notice; the Protomaps tile
@@ -446,6 +449,19 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       row: 9,
       start: () => startRainRadar(target),
       overlay: { label: 'Rain radar', layerIds: [RAIN_RADAR_LAYER_ID], startOff: true },
+    },
+    {
+      name: 'busCoverage',
+      row: 10,
+      start: () => startBusCoverage(target),
+      overlay: {
+        label: 'Coverage',
+        layerIds: [BUS_COVERAGE_LAYER_ID],
+        startOff: true,
+        // Custom handler because the first toggle-on also triggers the lazy
+        // one-time artifact fetch; afterwards it is a plain visibility flip.
+        onToggle: (visible: boolean) => setBusCoverageVisible(target, visible),
+      },
     },
   ];
 

@@ -11,6 +11,7 @@ import { BodsClient } from './bods-client';
 import { GbfsClient } from './gbfs-client';
 import { TtlCache } from './cache';
 import { type AppConfig, resolveBusDataDir } from './config';
+import { startCoverageWriter } from './coverage-writer';
 import { ARRIVALS_CACHE_TTL_MS, TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS } from './constants';
 import {
   LeaderboardTracker,
@@ -46,6 +47,7 @@ import {
 } from './routes/external';
 import { registerAircraftPhotoRoute } from './routes/aircraft-photo';
 import { registerBusRoutesRoute } from './routes/bus-routes';
+import { registerCoverageRoute } from './routes/coverage';
 import { registerDataExportRoute } from './routes/data-export';
 import { registerShipPhotoRoute } from './routes/ship-photo';
 
@@ -158,6 +160,14 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   }
   registerBusRoutesRoute(app, join(busDataDir, 'bus-routes', 'learned'));
 
+  // Coverage flow-map artifact — derived offline from learned routes +
+  // rollups already on disk, so unlike the writers above it needs no BODS key:
+  // a deployment that lost its credential keeps serving (and re-windowing)
+  // the coverage it already earned. Skips itself until inputs exist.
+  const coverage = startCoverageWriter(busDataDir, (msg) => app.log.info(msg));
+  app.addHook('onClose', () => coverage.stop());
+  registerCoverageRoute(app, join(busDataDir, 'coverage'));
+
   // Permanent line-status archive — TfL publishes no history, so we keep our
   // own from the day this ships. A few MB per year; never pruned.
   if (config.tflAppKey) {
@@ -202,7 +212,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
 
   registerHealthRoute(app);
-  registerCapabilitiesRoute(app, config, DATA_DIR);
+  registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir);
   registerArrivalsRoute(app, { config, cache: arrivalsCache, budget: tflBudget });
   registerStopArrivalsRoute(app, { config, cache: stopArrivalsCache, budget: tflBudget });
   registerVehicleArrivalsRoute(app, { config, cache: vehicleArrivalsCache, budget: tflBudget });

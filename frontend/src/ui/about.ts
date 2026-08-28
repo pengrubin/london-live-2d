@@ -41,7 +41,9 @@ function buildCredits(): CreditEntry[] {
         'and Geomni UK Map data © and database rights 2019.',
     },
     {
-      when: hasLayer('buses'),
+      // busCoverage is BODS-derived too (learned from SIRI-VM traces): the
+      // credit must survive losing the live key while coverage still renders.
+      when: hasLayer('buses') || hasLayer('busCoverage'),
       html: `Buses: ${link('https://www.bus-data.dft.gov.uk/', 'DfT BODS')} (OGL v3).`,
     },
     {
