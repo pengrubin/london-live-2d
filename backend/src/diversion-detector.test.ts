@@ -686,3 +686,23 @@ describe('credible-offset guard', () => {
     expect(completed[0]?.confidence).toBe('low');
   });
 });
+
+describe('credible-bracket guard', () => {
+  test('a kilometres-long bypassed stretch is LOW confidence even when clean', () => {
+    const ctx = makeCtx();
+    const fixes = warmupFixes();
+    let t = AFTER_WARMUP_T;
+    // clean 150 m lateral offset, but skips 5 km of route before rejoining
+    for (let i = 0; i < 40; i++) {
+      t += STEP_S;
+      fixes.push(fixAt(t, 1200 + i * 120, 150));
+    }
+    fixes.push(fixAt(t + STEP_S, 6200));
+    fixes.push(fixAt(t + 2 * STEP_S, 6320));
+
+    const { completed } = drive(fixes, ctx);
+
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.confidence).toBe('low');
+  });
+});
