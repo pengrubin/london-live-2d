@@ -276,15 +276,18 @@ async function bootstrap(): Promise<void> {
     showAccuracyCircle: true,
     showUserLocation: true,
     // Cap the fly-to zoom at ~14 (default is 15). maxBounds still clamps the
-    // camera so it can never pan outside the region.
-    fitBoundsOptions: { maxZoom: 14 },
+    // camera so it can never pan outside the region. bearing 0: with the
+    // compass button gone, locate doubles as the way back to north — and it
+    // must be HERE, not a click-time resetNorth(), because the success
+    // fly-to explicitly preserves the bearing it finds (a fast phone fix
+    // lands mid-reset-animation and locks the rotation back in).
+    fitBoundsOptions: { maxZoom: 14, bearing: 0 },
   });
   map.addControl(geolocate, 'top-right');
   setupHeadingBeam(map, geolocate);
 
-  // With the compass button gone, a touch-rotated map had no way back to
-  // north — tapping locate now doubles as the reset. The heading beam tracks
-  // the animation via its map `rotate` listener, so the wedge stays true.
+  // Failed/denied locates never fly, so the fitBoundsOptions bearing never
+  // applies — the click still straightens the map on its own.
   map
     .getContainer()
     .querySelector('.maplibregl-ctrl-geolocate')
