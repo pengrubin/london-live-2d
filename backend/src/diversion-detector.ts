@@ -75,6 +75,11 @@ const DWELL_SPEED_MS = 2;
 const DWELL_MOVING_FRAC_MIN = 0.3;
 /** Beyond this |d|, "diversion" is no longer the credible explanation. */
 const MAX_CREDIBLE_D_M = 1500;
+/** Beyond this bypassed-stretch length, likewise: a street closure diverts
+ * you around hundreds of metres, occasionally 2-3 km — never 10+. Live case:
+ * coach/mismatched-shape vehicles leaving near a route's start and rejoining
+ * near its end painted 11-15 km washes across half of north-west London. */
+const MAX_CREDIBLE_BRACKET_M = 4000;
 const MISLABEL_SAMPLE_N = 15;
 // memory bounds
 const EXC_FIX_CAP = 2000;
@@ -356,8 +361,14 @@ function finalizePending(pending: PendingExcursion, ctx: StepContext): Completed
   // hitchhiked their name onto a genuine 56/106 event). LOW keeps it logged
   // without letting it name routes or draw segments.
   const credibleD = exc.maxD <= MAX_CREDIBLE_D_M;
+  // guard (f): the bypassed stretch itself must be street-closure sized —
+  // laterally credible but kilometres-long brackets are shape/service
+  // mismatch, not a diversion.
+  const credibleBracket =
+    Math.abs(Math.max(exc.sExit, sRejoin) - Math.min(exc.sExit, sRejoin)) <=
+    MAX_CREDIBLE_BRACKET_M;
   const confidence: Confidence =
-    movingFrac >= DWELL_MOVING_FRAC_MIN && credibleD ? 'high' : 'low';
+    movingFrac >= DWELL_MOVING_FRAC_MIN && credibleD && credibleBracket ? 'high' : 'low';
   if (confidence === 'high') c.completedHigh += 1;
   else c.completedLow += 1;
 

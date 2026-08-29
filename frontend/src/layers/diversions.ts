@@ -1,6 +1,6 @@
 // Live bus-diversion events from the detector (/api/diversions). Each event's
 // bypassed learned-polyline slices draw as a translucent highlighter band
-// with a small dot at the centroid. The API returns only display-worthy
+// (no separate centroid marker — the wide band itself is the click target). The API returns only display-worthy
 // events — the frontend renders exactly what it is given, no filtering.
 //
 // Polling is gated on the overlay toggle (default OFF): the detector output
@@ -19,11 +19,7 @@ import { registerPoll } from '../util/lifecycle';
 import { below } from '../util/layer-order';
 
 export const DIVERSIONS_SEGMENTS_LAYER_ID = 'diversions-segments';
-export const DIVERSIONS_DOTS_LAYER_ID = 'diversions-dots';
-export const DIVERSIONS_LAYER_IDS = [
-  DIVERSIONS_SEGMENTS_LAYER_ID,
-  DIVERSIONS_DOTS_LAYER_ID,
-];
+export const DIVERSIONS_LAYER_IDS = [DIVERSIONS_SEGMENTS_LAYER_ID];
 
 const SOURCE_ID = 'diversions';
 const DIVERSIONS_URL = '/api/diversions';
@@ -135,13 +131,6 @@ function toFeatures(events: DiversionEvent[]): GeoJSON.Feature[] {
         geometry: { type: 'MultiLineString', coordinates: segments },
       });
     }
-    if (isLngLat(ev.centroid)) {
-      features.push({
-        type: 'Feature',
-        properties: props,
-        geometry: { type: 'Point', coordinates: [ev.centroid[0], ev.centroid[1]] },
-      });
-    }
     return features;
   });
 }
@@ -247,25 +236,6 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
     },
     below(map, 'stations-circle'),
   );
-  map.addLayer(
-    {
-      id: DIVERSIONS_DOTS_LAYER_ID,
-      type: 'circle',
-      source: SOURCE_ID,
-      filter: ['==', ['geometry-type'], 'Point'],
-      layout: { visibility: 'none' },
-      paint: {
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 15, 6],
-        'circle-color': STATUS_COLOR,
-        // The dot is the click anchor — it stays crisp while the band is a
-        // wash, so a faint highlight is still findable and tappable.
-        'circle-opacity': ['match', ['get', 'status'], 'recovering', 0.6, 'stale', 0.3, 0.9],
-        'circle-stroke-color': '#0a0a0a',
-        'circle-stroke-width': 1,
-      },
-    },
-    below(map, 'stations-circle'),
-  );
 
   async function poll(): Promise<void> {
     if (!overlayOn) return;
@@ -291,7 +261,6 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
   refresh = () => void poll();
 
   wireInteractions(map, DIVERSIONS_SEGMENTS_LAYER_ID);
-  wireInteractions(map, DIVERSIONS_DOTS_LAYER_ID);
 
   await poll();
   registerPoll(() => void poll(), POLL_INTERVAL_MS);
