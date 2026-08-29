@@ -1,9 +1,9 @@
 // Live bus-diversion events from the detector (/api/diversions). Each event's
-// bypassed learned-polyline slices draw as a prominent red line with a small
-// dot at the centroid. The API returns only display-worthy events — the
-// frontend renders exactly what it is given, no client-side filtering.
+// bypassed learned-polyline slices draw as a translucent highlighter band
+// with a small dot at the centroid. The API returns only display-worthy
+// events — the frontend renders exactly what it is given, no filtering.
 //
-// Polling is gated on the overlay toggle (default ON): the detector output
+// Polling is gated on the overlay toggle (default OFF): the detector output
 // only changes every rollup pass, so a hidden overlay polling anyway would be
 // pure egress waste. Re-enabling refreshes immediately since the last picture
 // may be a whole off-interval stale.
@@ -19,10 +19,8 @@ import { registerPoll } from '../util/lifecycle';
 import { below } from '../util/layer-order';
 
 export const DIVERSIONS_SEGMENTS_LAYER_ID = 'diversions-segments';
-export const DIVERSIONS_CASING_LAYER_ID = 'diversions-casing';
 export const DIVERSIONS_DOTS_LAYER_ID = 'diversions-dots';
 export const DIVERSIONS_LAYER_IDS = [
-  DIVERSIONS_CASING_LAYER_ID,
   DIVERSIONS_SEGMENTS_LAYER_ID,
   DIVERSIONS_DOTS_LAYER_ID,
 ];
@@ -32,19 +30,25 @@ const DIVERSIONS_URL = '/api/diversions';
 /** The API caches for 60 s; 90 s keeps at most one wasted hit per fresh copy. */
 const POLL_INTERVAL_MS = 90_000;
 
-/** Status drives the lifecycle look (recovering = healing green, stale =
- * faded furniture); among ACTIVE events, severity splits red from amber:
- * 'road' (>=2 route-directions divert — the road has a problem) stays loud
- * red, 'partial' (one direction of one route; the road otherwise flows)
- * drops to amber so it never reads as a closure. */
+/** Highlighter-band styling: the basemap is already saturated with coloured
+ * transit lines, so competing on colour loses — instead the event is a WIDE,
+ * strongly translucent band over the road, a visual channel nothing else on
+ * the map uses. Status drives the lifecycle look (recovering = healing
+ * green, stale = nearly gone); among ACTIVE events, severity splits red
+ * ('road': >=2 route-directions divert) from amber ('partial': one direction
+ * of one route; the road otherwise flows). */
 const STATUS_COLOR: ExpressionSpecification = [
   'match', ['get', 'status'],
   'recovering', '#4c5',
   'stale', '#8a94a0',
-  ['match', ['get', 'severity'], 'partial', '#f0a030', '#e33'],
+  ['match', ['get', 'severity'], 'partial', '#f7b04a', '#ff6b6b'],
 ];
+// Tuned by bisection on the DARK basemap: 0.3 and even 0.45 render nearly
+// invisible against near-black streets (verified with constant-paint tests);
+// 0.6 with a soft blur is the floor where a wash stays clearly findable
+// without turning back into a solid line.
 const STATUS_OPACITY: ExpressionSpecification =
-  ['match', ['get', 'status'], 'recovering', 0.7, 'stale', 0.35, 0.9];
+  ['match', ['get', 'status'], 'recovering', 0.5, 'stale', 0.22, 0.6];
 
 type LngLat = [number, number];
 
@@ -196,8 +200,8 @@ function wireInteractions(map: MaplibreMap, layerId: string): void {
   });
 }
 
-/** ON by default, mirroring the legend row (no startOff). */
-let overlayOn = true;
+/** OFF by default, mirroring the legend row's startOff. */
+let overlayOn = false;
 /** Set by startDiversions so the toggle can force an immediate refresh. */
 let refresh: (() => void) | null = null;
 
@@ -219,40 +223,26 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
   // (and the coverage glow beneath them) but below every vehicle layer, so
   // inserting under it lands exactly between the static network and the dots.
   //
-  // DASHED over a dark casing, not a solid line: solid red is exactly the
-  // Central line (and Windrush), and every other hue belongs to some route
-  // too — no colour is free. Dashes are the cartographic convention for
-  // temporary closures and NO transit line uses them, so the style itself
-  // says "alert overlay", unmistakable at any zoom. Casing first; the dashed
-  // layer is added with the same beforeId afterwards, landing above it.
-  map.addLayer(
-    {
-      id: DIVERSIONS_CASING_LAYER_ID,
-      type: 'line',
-      source: SOURCE_ID,
-      filter: ['==', ['geometry-type'], 'LineString'],
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: {
-        'line-color': '#0a0a0a',
-        'line-opacity': STATUS_OPACITY,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 9, 4.5, 13, 7, 16, 9.5],
-      },
-    },
-    below(map, 'stations-circle'),
-  );
+  // One wide translucent band — no casing, no dashes: solid saturated lines
+  // lose against a basemap full of them (a previous dashed-red pass read as
+  // yet another line), while a broad ~30%-opacity wash over the road is a
+  // channel nothing else on the map uses. Since the overlay is opt-in
+  // (default off), subtle is a feature: you turned it on, you are looking
+  // for it.
   map.addLayer(
     {
       id: DIVERSIONS_SEGMENTS_LAYER_ID,
       type: 'line',
       source: SOURCE_ID,
       filter: ['==', ['geometry-type'], 'LineString'],
-      // butt caps keep the dashes crisp; round caps would bead them.
-      layout: { 'line-cap': 'butt', 'line-join': 'round' },
+      // off by default; the legend toggle flips visibility on opt-in
+      layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
       paint: {
         'line-color': STATUS_COLOR,
         'line-opacity': STATUS_OPACITY,
-        'line-width': ['interpolate', ['linear'], ['zoom'], 9, 2, 13, 4, 16, 6],
-        'line-dasharray': [2, 1.4],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 9, 5, 13, 11, 16, 20],
+        // Soft edges: reads as a highlight wash, not another transit line.
+        'line-blur': 2.5,
       },
     },
     below(map, 'stations-circle'),
@@ -263,10 +253,13 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
       type: 'circle',
       source: SOURCE_ID,
       filter: ['==', ['geometry-type'], 'Point'],
+      layout: { visibility: 'none' },
       paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 15, 6],
         'circle-color': STATUS_COLOR,
-        'circle-opacity': STATUS_OPACITY,
+        // The dot is the click anchor — it stays crisp while the band is a
+        // wash, so a faint highlight is still findable and tappable.
+        'circle-opacity': ['match', ['get', 'status'], 'recovering', 0.6, 'stale', 0.3, 0.9],
         'circle-stroke-color': '#0a0a0a',
         'circle-stroke-width': 1,
       },
