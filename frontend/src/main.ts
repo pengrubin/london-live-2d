@@ -282,6 +282,14 @@ async function bootstrap(): Promise<void> {
   map.addControl(geolocate, 'top-right');
   setupHeadingBeam(map, geolocate);
 
+  // With the compass button gone, a touch-rotated map had no way back to
+  // north — tapping locate now doubles as the reset. The heading beam tracks
+  // the animation via its map `rotate` listener, so the wedge stays true.
+  map
+    .getContainer()
+    .querySelector('.maplibregl-ctrl-geolocate')
+    ?.addEventListener('click', () => map.resetNorth());
+
   const isOutsideRegion = (lon: number, lat: number): boolean => {
     const [[west, south], [east, north]] = bounds;
     return lon < west || lon > east || lat < south || lat > north;
