@@ -472,11 +472,13 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       row: 11,
       start: () => startDiversions(target),
       overlay: {
-        // Default ON (no startOff): a live diversion is exactly the kind of
-        // thing the map exists to surface. The custom handler gates the 90 s
-        // poll on the toggle, so hiding it also stops the fetches.
+        // Default OFF (user call after a live-map session): the base map is
+        // already dense with coloured lines, so this ships as an opt-in tool
+        // layer. The custom handler gates the 90 s poll on the toggle, so
+        // while hidden it also costs zero fetches.
         label: 'Diversions',
         layerIds: DIVERSIONS_LAYER_IDS,
+        startOff: true,
         onToggle: (visible: boolean) => setDiversionsVisible(target, visible),
       },
     },
