@@ -315,7 +315,11 @@ export function addExcursion(
     transitions.push(transitionOf(target, nowSec, 'created'));
   }
 
-  if (target.members.length < EVENT_MEMBER_CAP) target.members.push(exc);
+  // The cap drops excursions rather than evicting them, and the map draws from
+  // members — so an excursion that did not land here is not drawn, and must
+  // not create a bracket the retirement gate then waits on forever.
+  const recorded = target.members.length < EVENT_MEMBER_CAP;
+  if (recorded) target.members.push(exc);
   if (!target.vehicles.has(exc.veh)) {
     evictOldestIfFull(target.vehicles);
     target.vehicles.add(exc.veh);
@@ -328,15 +332,12 @@ export function addExcursion(
     bracket.sA = Math.min(bracket.sA, exc.sA);
     bracket.sB = Math.max(bracket.sB, exc.sB);
   }
+  const drawnMember = recorded && exc.confidence === 'high';
   const recovery = target.recovery.get(exc.key);
   if (recovery === undefined) {
     evictOldestIfFull(target.recovery);
-    target.recovery.set(exc.key, {
-      displayed: exc.confidence === 'high',
-      cleanPassAt: null,
-      recovered: false,
-    });
-  } else if (exc.confidence === 'high') {
+    target.recovery.set(exc.key, { displayed: drawnMember, cleanPassAt: null, recovered: false });
+  } else if (drawnMember) {
     recovery.displayed = true;
   }
   target.startedAt = Math.min(target.startedAt, exc.t0);
@@ -474,7 +475,10 @@ export function noteOnRouteFix(
 }
 
 /** An off-route fix inside a bracket breaks that vehicle's recovery passage —
- * it demonstrably did NOT get through on-route. */
+ * it demonstrably did NOT get through on-route. Recovery for that key is then
+ * re-derived from the passages that survive: a bus proven off-route here is
+ * live evidence against the road being open, and leaving an earlier
+ * `recovered` latched would let the whole event retire mid-diversion. */
 export function noteOffRouteFix(store: EventStore, key: string, veh: string, s: number): void {
   for (const ev of store.events) {
     if (ev.status !== 'active') continue;
@@ -482,6 +486,12 @@ export function noteOffRouteFix(store: EventStore, key: string, veh: string, s: 
     if (bracket === undefined || s < bracket.sA || s > bracket.sB) continue;
     const passage = ev.passages.get(`${key}|${veh}`);
     if (passage !== undefined) passage.broken = true;
+    const recovery = ev.recovery.get(key);
+    if (recovery === undefined) continue;
+    // The quiet path must not fire off a clean pass that this fix contradicts.
+    recovery.cleanPassAt = null;
+    const { fraction, vehicles } = bracketRecovery(ev, key, bracket);
+    recovery.recovered = fraction >= RECOVERY_COVERAGE_FRAC && vehicles >= RECOVERY_MIN_VEHICLES;
   }
 }
 

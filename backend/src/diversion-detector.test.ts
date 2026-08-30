@@ -429,6 +429,39 @@ describe('lifecycle', () => {
     expect(store.events[0]?.status).toBe('active'); // OP:45:inbound never cleared
   });
 
+  test('a bus caught off-route again un-recovers its direction', () => {
+    // Without this the recovered flag latches: the event could retire (and be
+    // dropped ten minutes later) while a bus was provably still diverting.
+    const store = twoKeyStore();
+    for (const veh of ['OP:R1', 'OP:R2']) {
+      for (let s = 1080; s <= 1920; s += 60) noteOnRouteFix(store, ROUTE_KEY, veh, s, T0 + 2000);
+    }
+    expect(store.events[0]?.recovery.get(ROUTE_KEY)?.recovered).toBe(true);
+
+    noteOffRouteFix(store, ROUTE_KEY, 'OP:R1', 1200);
+    expect(store.events[0]?.recovery.get(ROUTE_KEY)?.recovered).toBe(false);
+
+    // Clearing the OTHER direction must no longer retire the whole event.
+    for (const veh of ['OP:R3', 'OP:R4']) {
+      for (let s = 3000; s <= 3800; s += 60) noteOnRouteFix(store, OTHER_KEY, veh, s, T0 + 2200);
+    }
+    expect(store.events[0]?.status).toBe('active');
+  });
+
+  test('an excursion dropped by the member cap creates no bracket to wait on', () => {
+    // members is capped by count and never evicted, so a late excursion is not
+    // drawn — it must not gate retirement either.
+    const store = createEventStore();
+    for (let i = 0; i < 500; i += 1) {
+      addExcursion(store, mkExc({ veh: `OP:F${i}`, t0: T0 + i, t1: T0 + i + 30 }), T0 + i + 30);
+    }
+    expect(store.events[0]?.members.length).toBe(500);
+
+    addExcursion(store, mkExc({ key: OTHER_KEY, veh: 'OP:LATE', sA: 3000, sB: 3800 }), T0 + 600);
+
+    expect(store.events[0]?.recovery.get(OTHER_KEY)?.displayed).toBe(false);
+  });
+
   test('quiet retirement waits for every drawn direction, then fires', () => {
     const store = twoKeyStore(); // last evidence T0 + 900
 
