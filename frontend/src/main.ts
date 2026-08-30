@@ -32,8 +32,9 @@ import { startRainRadar, RAIN_RADAR_LAYER_ID } from './layers/rain-radar';
 import { startBikeStations, BIKE_STATIONS_LAYER_ID } from './layers/bike-stations';
 import { startSimulatedTrains, SIMULATED_TRAINS_LAYER_ID } from './layers/simulated-trains';
 import { startBusCoverage, setBusCoverageVisible, BUS_COVERAGE_LAYER_ID } from './layers/coverage';
+import { startBusRouteShapes } from './layers/bus-route-shape';
 import { startDiversions, setDiversionsVisible, DIVERSIONS_LAYER_IDS } from './layers/diversions';
-import { hasLayer, loadCapabilities } from './region';
+import { hasLayer, isInsideRegion, loadCapabilities } from './region';
 
 const TOAST_DISMISS_MS = 4000;
 let activeToast: HTMLDivElement | null = null;
@@ -293,10 +294,7 @@ async function bootstrap(): Promise<void> {
     .querySelector('.maplibregl-ctrl-geolocate')
     ?.addEventListener('click', () => map.resetNorth());
 
-  const isOutsideRegion = (lon: number, lat: number): boolean => {
-    const [[west, south], [east, north]] = bounds;
-    return lon < west || lon > east || lat < south || lat > north;
-  };
+  const isOutsideRegion = (lon: number, lat: number): boolean => !isInsideRegion(lon, lat);
   const showOutsideRegionToast = (): void => {
     showToast(`You appear to be outside ${region.name} — showing the nearest edge.`);
   };
@@ -497,6 +495,18 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
 
   const available = LAYERS.filter((layer) => hasLayer(layer.name));
   await Promise.allSettled(available.map((layer) => layer.start()));
+
+  // Filter-driven, not user-togglable, so deliberately NOT a LAYERS entry —
+  // every entry there mints a Lines-tab row. Started after the registry so the
+  // bus layers it anchors against already exist, and before the control panel
+  // below, whose bus filter applies its (empty) selection on construction.
+  if (hasLayer('buses')) {
+    try {
+      await startBusRouteShapes(target);
+    } catch (error) {
+      console.error('[bus-route-shape]', error);
+    }
+  }
 
   // Offer a toggle only for layers that actually exist. A capability being on
   // is not the same as a layer having been created: a start can decline (the
