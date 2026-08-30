@@ -18,6 +18,13 @@ const DISPLAY_MIN_VEHICLES = 2;
 const RECOVERY_MIN_VEHICLES = 2;
 /** A recovery passage must reach within this of both bracket ends. */
 const RECOVERY_PASS_MARGIN_M = 50;
+/** Share of the bypassed bracket that on-route traffic must cover, stitched
+ * across vehicles, before the road counts as reopened. */
+const RECOVERY_COVERAGE_FRAC = 0.9;
+/** No fresh diverting bus for this long, with at least one clean pass since,
+ * retires the event without waiting for full coverage — the works ended and
+ * the remaining traffic simply never produced two spanning passages. */
+const QUIET_RECOVERY_S = 20 * 60;
 const STALE_AFTER_S = 90 * 60;
 const STALE_DROP_AFTER_S = 6 * 3600;
 const RECOVERING_DROP_AFTER_S = 10 * 60;
@@ -113,6 +120,15 @@ interface RecoveryPassage {
   broken: boolean;
 }
 
+interface KeyRecovery {
+  /** this key has a HIGH member, so the map actually draws its bracket */
+  displayed: boolean;
+  /** when a bus last got through this bracket on-route; null until one does */
+  cleanPassAt: number | null;
+  /** on-route traffic has re-driven enough of this bracket */
+  recovered: boolean;
+}
+
 export interface DiversionEvent {
   id: string;
   status: EventStatus;
@@ -127,7 +143,8 @@ export interface DiversionEvent {
   centroid: [number, number];
   /** `${key}|${veh}` → on-route traversal progress through the bracket */
   passages: Map<string, RecoveryPassage>;
-  passedVehicles: Set<string>;
+  /** per route key: recovery progress for the stretch this event bypasses */
+  recovery: Map<string, KeyRecovery>;
 }
 
 export interface EventStore {
@@ -292,7 +309,7 @@ export function addExcursion(
       brackets: new Map(),
       centroid: [exc.midLon, exc.midLat],
       passages: new Map(),
-      passedVehicles: new Set(),
+      recovery: new Map(),
     };
     store.events.push(target);
     transitions.push(transitionOf(target, nowSec, 'created'));
@@ -311,6 +328,17 @@ export function addExcursion(
     bracket.sA = Math.min(bracket.sA, exc.sA);
     bracket.sB = Math.max(bracket.sB, exc.sB);
   }
+  const recovery = target.recovery.get(exc.key);
+  if (recovery === undefined) {
+    evictOldestIfFull(target.recovery);
+    target.recovery.set(exc.key, {
+      displayed: exc.confidence === 'high',
+      cleanPassAt: null,
+      recovered: false,
+    });
+  } else if (exc.confidence === 'high') {
+    recovery.displayed = true;
+  }
   target.startedAt = Math.min(target.startedAt, exc.t0);
   target.lastEvidenceAt = Math.max(target.lastEvidenceAt, exc.t1);
   recomputeCentroid(target);
@@ -318,7 +346,10 @@ export function addExcursion(
   // Fresh diversion evidence contradicts recovery/staleness: back to active,
   // and recovery passages must be re-earned from scratch.
   target.passages.clear();
-  target.passedVehicles.clear();
+  for (const rec of target.recovery.values()) {
+    rec.cleanPassAt = null;
+    rec.recovered = false;
+  }
   if (target.status !== 'active') {
     target.status = 'active';
     target.recoveringAt = null;
@@ -330,6 +361,72 @@ export function addExcursion(
     transitions.push(transitionOf(target, nowSec, 'displayed'));
   }
   return transitions;
+}
+
+/**
+ * How much of the bypassed bracket unbroken passages cover once STITCHED
+ * ACROSS VEHICLES, and how many vehicles contributed. Stitching is the point:
+ * a bus that entered service inside the bracket can never reach `sA` on its
+ * own, so a per-vehicle span test leaves such events open until they time out
+ * even while traffic visibly flows through.
+ */
+function bracketRecovery(
+  ev: DiversionEvent,
+  key: string,
+  bracket: KeyBracket,
+): { fraction: number; vehicles: number } {
+  const prefix = `${key}|`;
+  const spans: Array<[number, number]> = [];
+  const vehicles = new Set<string>();
+  for (const [passKey, passage] of ev.passages) {
+    if (passage.broken || !passKey.startsWith(prefix)) continue;
+    // The margin is what makes an end "reached": a pass that stops 50 m short
+    // of sA still demonstrates that stretch was drivable.
+    const lo = Math.max(bracket.sA, passage.minS - RECOVERY_PASS_MARGIN_M);
+    const hi = Math.min(bracket.sB, passage.maxS + RECOVERY_PASS_MARGIN_M);
+    if (hi < lo) continue;
+    vehicles.add(passKey.slice(prefix.length));
+    spans.push([lo, hi]);
+  }
+  const span = bracket.sB - bracket.sA;
+  if (span <= 0) return { fraction: vehicles.size > 0 ? 1 : 0, vehicles: vehicles.size };
+
+  spans.sort((a, b) => a[0] - b[0]);
+  let covered = 0;
+  let runLo = Number.NEGATIVE_INFINITY;
+  let runHi = Number.NEGATIVE_INFINITY;
+  for (const [lo, hi] of spans) {
+    if (lo > runHi) {
+      if (runHi > runLo) covered += runHi - runLo;
+      runLo = lo;
+      runHi = hi;
+    } else if (hi > runHi) {
+      runHi = hi;
+    }
+  }
+  if (runHi > runLo) covered += runHi - runLo;
+  return { fraction: covered / span, vehicles: vehicles.size };
+}
+
+/**
+ * Is every bracket the map draws clear again? A 'road' event carries several
+ * route directions at one site, and one direction reopening says nothing about
+ * the others — retiring the whole event on the first would erase a closure
+ * that is still diverting buses. `allowQuiet` additionally accepts a bracket
+ * that merely saw a bus get through after the last diversion.
+ */
+function drawnBracketsClear(ev: DiversionEvent, allowQuiet: boolean): boolean {
+  let drawn = 0;
+  for (const rec of ev.recovery.values()) {
+    if (!rec.displayed) continue;
+    drawn += 1;
+    if (rec.recovered) continue;
+    if (allowQuiet && rec.cleanPassAt !== null && rec.cleanPassAt > ev.lastEvidenceAt) continue;
+    return false;
+  }
+  // No drawn bracket means only LOW members so far: nothing is on the map to
+  // retire, and the event may still earn its display bar.
+  return drawn > 0;
 }
 
 /**
@@ -359,17 +456,18 @@ export function noteOnRouteFix(
     }
     passage.minS = Math.min(passage.minS, s);
     passage.maxS = Math.max(passage.maxS, s);
-    if (
-      !passage.broken &&
-      passage.minS <= bracket.sA + RECOVERY_PASS_MARGIN_M &&
-      passage.maxS >= bracket.sB - RECOVERY_PASS_MARGIN_M
-    ) {
-      ev.passedVehicles.add(veh);
-      if (ev.passedVehicles.size >= RECOVERY_MIN_VEHICLES) {
-        ev.status = 'recovering';
-        ev.recoveringAt = nowSec;
-        transitions.push(transitionOf(ev, nowSec, 'recovering'));
-      }
+    if (passage.broken) continue;
+    const recovery = ev.recovery.get(key);
+    if (recovery === undefined) continue;
+    recovery.cleanPassAt = nowSec;
+    if (!recovery.recovered) {
+      const { fraction, vehicles } = bracketRecovery(ev, key, bracket);
+      recovery.recovered = fraction >= RECOVERY_COVERAGE_FRAC && vehicles >= RECOVERY_MIN_VEHICLES;
+    }
+    if (recovery.recovered && drawnBracketsClear(ev, false)) {
+      ev.status = 'recovering';
+      ev.recoveringAt = nowSec;
+      transitions.push(transitionOf(ev, nowSec, 'recovering'));
     }
   }
   return transitions;
@@ -399,6 +497,17 @@ export function tickLifecycle(store: EventStore, nowSec: number): TransitionReco
         transitions.push(transitionOf(ev, nowSec, 'dropped'));
         continue;
       }
+    } else if (
+      ev.status === 'active' &&
+      sinceEvidence >= QUIET_RECOVERY_S &&
+      drawnBracketsClear(ev, true)
+    ) {
+      // Works ended: nothing has diverted for QUIET_RECOVERY_S and buses have
+      // since driven the bracket. Retiring here is what stops a finished
+      // closure sitting red for the full 90-minute staleness window.
+      ev.status = 'recovering';
+      ev.recoveringAt = nowSec;
+      transitions.push(transitionOf(ev, nowSec, 'recovering'));
     } else if (ev.status === 'active' && sinceEvidence >= STALE_AFTER_S) {
       ev.status = 'stale';
       transitions.push(transitionOf(ev, nowSec, 'stale'));

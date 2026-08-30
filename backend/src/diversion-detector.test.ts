@@ -18,6 +18,7 @@ import {
   buildApiEvents,
   createEventStore,
   matchTfl,
+  noteOffRouteFix,
   noteOnRouteFix,
   parseDisruptionSnapshotLine,
   tickLifecycle,
@@ -400,7 +401,110 @@ describe('lifecycle', () => {
 
     expect(transitions.map((r) => r.transition)).toContain('reactivated');
     expect(store.events[0]?.status).toBe('active');
-    expect(store.events[0]?.passedVehicles.size).toBe(0);
+    expect(store.events[0]?.passages.size).toBe(0);
+    const recovery = [...(store.events[0]?.recovery.values() ?? [])];
+    expect(recovery.every((r) => r.cleanPassAt === null && !r.recovered)).toBe(true);
+  });
+
+  // One site, two route directions — what severity 'road' means. Retiring the
+  // whole event when only one direction reopens would erase a live closure.
+  const OTHER_KEY = 'OP:45:inbound';
+  function twoKeyStore(): ReturnType<typeof createEventStore> {
+    const store = displayWorthyStore();
+    addExcursion(
+      store,
+      mkExc({ key: OTHER_KEY, veh: 'OP:V3', t0: T0 + 600, t1: T0 + 900, sA: 3000, sB: 3800 }),
+      T0 + 900,
+    );
+    return store;
+  }
+
+  test('one direction fully re-driven does not retire the other direction', () => {
+    const store = twoKeyStore();
+
+    for (const veh of ['OP:R1', 'OP:R2']) {
+      for (let s = 1080; s <= 1920; s += 60) noteOnRouteFix(store, ROUTE_KEY, veh, s, T0 + 2000);
+    }
+
+    expect(store.events[0]?.status).toBe('active'); // OP:45:inbound never cleared
+  });
+
+  test('quiet retirement waits for every drawn direction, then fires', () => {
+    const store = twoKeyStore(); // last evidence T0 + 900
+
+    for (let s = 3000; s <= 3200; s += 55) noteOnRouteFix(store, OTHER_KEY, 'OP:R9', s, T0 + 1000);
+    expect(tickLifecycle(store, T0 + 900 + 20 * 60 + 1)).toEqual([]);
+    expect(store.events[0]?.status).toBe('active');
+
+    for (let s = 1080; s <= 1300; s += 55) noteOnRouteFix(store, ROUTE_KEY, 'OP:R1', s, T0 + 1100);
+
+    const quiet = tickLifecycle(store, T0 + 900 + 20 * 60 + 2);
+    expect(quiet.map((r) => r.transition)).toEqual(['recovering']);
+  });
+
+  test('two vehicles covering DIFFERENT halves stitch into one recovery', () => {
+    // Bracket is [1080, 1920]. Neither vehicle spans it alone — the case a bus
+    // that entered service mid-bracket creates, which used to hold the event
+    // open until it timed out.
+    const store = displayWorthyStore();
+    const transitions: string[] = [];
+    for (let s = 1080; s <= 1500; s += 60) {
+      transitions.push(
+        ...noteOnRouteFix(store, ROUTE_KEY, 'OP:R1', s, T0 + 2000).map((r) => r.transition),
+      );
+    }
+    expect(store.events[0]?.status).toBe('active'); // half the bracket, one vehicle
+
+    for (let s = 1500; s <= 1920; s += 60) {
+      transitions.push(
+        ...noteOnRouteFix(store, ROUTE_KEY, 'OP:R2', s, T0 + 2100).map((r) => r.transition),
+      );
+    }
+
+    expect(transitions).toEqual(['recovering']);
+    expect(store.events[0]?.status).toBe('recovering');
+  });
+
+  test('stitched passes that leave a gap in the middle do not recover the event', () => {
+    const store = displayWorthyStore();
+    for (let s = 1080; s <= 1300; s += 55) noteOnRouteFix(store, ROUTE_KEY, 'OP:R1', s, T0 + 2000);
+    for (let s = 1750; s <= 1920; s += 55) noteOnRouteFix(store, ROUTE_KEY, 'OP:R2', s, T0 + 2100);
+
+    // ~0.6 of the bracket covered, so the middle is still unproven.
+    expect(store.events[0]?.status).toBe('active');
+  });
+
+  test('an off-route fix inside the bracket disqualifies that vehicle from stitching', () => {
+    const store = displayWorthyStore();
+    for (let s = 1080; s <= 1500; s += 60) noteOnRouteFix(store, ROUTE_KEY, 'OP:R1', s, T0 + 2000);
+    noteOffRouteFix(store, ROUTE_KEY, 'OP:R1', 1200); // R1 demonstrably left the route
+    for (let s = 1500; s <= 1920; s += 60) noteOnRouteFix(store, ROUTE_KEY, 'OP:R2', s, T0 + 2100);
+
+    expect(store.events[0]?.status).toBe('active');
+  });
+
+  test('20 min quiet plus one clean pass retires the event without full coverage', () => {
+    const store = displayWorthyStore(); // last evidence T0 + 900
+    // A single bus drives part of the bracket — not enough to stitch coverage.
+    for (let s = 1080; s <= 1300; s += 55) noteOnRouteFix(store, ROUTE_KEY, 'OP:R1', s, T0 + 1000);
+    expect(store.events[0]?.status).toBe('active');
+
+    const quiet = tickLifecycle(store, T0 + 900 + 20 * 60 + 1);
+    expect(quiet.map((r) => r.transition)).toEqual(['recovering']);
+
+    const dropped = tickLifecycle(store, T0 + 900 + 20 * 60 + 1 + 601);
+    expect(dropped.map((r) => r.transition)).toEqual(['dropped']);
+    expect(store.events).toHaveLength(0);
+  });
+
+  test('quiet alone does not retire an event when no bus has got through', () => {
+    const store = displayWorthyStore();
+
+    expect(tickLifecycle(store, T0 + 900 + 20 * 60 + 1)).toEqual([]);
+    expect(store.events[0]?.status).toBe('active');
+
+    // The 90 min staleness path still applies when nothing ever passes.
+    expect(tickLifecycle(store, T0 + 900 + 90 * 60).map((r) => r.transition)).toEqual(['stale']);
   });
 
   test('active → stale at 90 min without evidence, dropped 6 h after that', () => {
