@@ -76,6 +76,7 @@ interface DiversionProps {
   severity: string;
   longRunning: boolean;
   startedAt: number;
+  lastEvidenceAt: number;
   hasTfl: boolean;
   tflLoc: string;
   tflDist: number;
@@ -105,6 +106,7 @@ function toProps(ev: DiversionEvent): DiversionProps {
     severity: ev.severity ?? 'road',
     longRunning: ev.longRunning === true,
     startedAt: ev.startedAt ?? 0,
+    lastEvidenceAt: ev.lastEvidenceAt ?? 0,
     hasTfl: ev.tfl != null,
     tflLoc: ev.tfl?.loc ?? '',
     tflDist: ev.tfl?.dist ?? 0,
@@ -156,6 +158,19 @@ const timeLabel = (epochSec: number, longRunning: boolean): string => {
       });
 };
 
+/** How long ago the last bus actually diverted here. The red stretch outlives
+ * the closure by design (it clears only once traffic has driven it again), so
+ * without this a finished diversion reads as happening right now. */
+export function freshnessLabel(lastEvidenceAt: number, nowSec: number): string {
+  if (!Number.isFinite(lastEvidenceAt) || lastEvidenceAt <= 0) return '';
+  const mins = Math.floor((nowSec - lastEvidenceAt) / 60);
+  if (mins < 0) return '';
+  if (mins < 1) return 'last diverting bus just now';
+  if (mins < 60) return `last diverting bus ${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  return `last diverting bus ${hours} h ${mins % 60} min ago`;
+}
+
 function popupHtml(p: DiversionProps): string {
   // 'partial' softens everything: one direction of one route is diverting
   // while the road itself flows — "Diversion" + red would read as a closure.
@@ -168,9 +183,12 @@ function popupHtml(p: DiversionProps): string {
   const tfl = p.hasTfl
     ? `TfL: ${esc(p.tflLoc)} (~${Math.round(p.tflDist)}m)`
     : 'no matching roadworks record';
+  const fresh =
+    p.status === 'stale' ? '' : freshnessLabel(p.lastEvidenceAt, Math.floor(Date.now() / 1000));
   return `<div class="vp"><div class="sp-title">${title} — ${esc(p.routes)}</div>
     <div>${esc(status)}${ongoing}</div>
     <div>since ${timeLabel(p.startedAt, p.longRunning)} · ${p.vehicles} vehicle${p.vehicles === 1 ? '' : 's'}</div>
+    ${fresh === '' ? '' : `<div class="vp-dim">${fresh}</div>`}
     <div class="vp-dim">${tfl}</div></div>`;
 }
 
