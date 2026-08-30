@@ -135,13 +135,20 @@ export function addBusFilter(container: HTMLElement, map: MaplibreMap): void {
   const feedback = document.createElement('div');
   feedback.className = 'bf-feedback';
 
+  // Shown only while a route path is drawn: the path is inferred from vehicle
+  // GPS, which drifts between tall buildings, so it can differ from the road
+  // the bus legally runs on.
+  const note = document.createElement('div');
+  note.className = 'bf-note';
+  note.textContent = 'Beta · route path learned from bus GPS, which drifts in cities.';
+
   const clear = document.createElement('button');
   clear.type = 'button';
   clear.className = 'bf-clear';
   clear.textContent = 'Clear';
 
   inputRow.append(input, add);
-  wrap.append(hint, inputRow, datalist, chips, feedback, clear);
+  wrap.append(hint, inputRow, datalist, chips, feedback, note, clear);
   container.append(wrap);
 
   /** Push the current selection down to the map and refresh chips + feedback. */
@@ -173,6 +180,9 @@ export function addBusFilter(container: HTMLElement, map: MaplibreMap): void {
   }
 
   function renderFeedback(): void {
+    // The caveat belongs to the drawn path, so it tracks the same condition
+    // the route-shape layer does: a non-empty selection.
+    note.hidden = selected.size === 0;
     if (selected.size === 0) {
       feedback.textContent = 'No filter — all buses shown normally.';
       clear.disabled = true;
