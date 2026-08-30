@@ -288,6 +288,21 @@ let activeTrackers: ReadonlyMap<string, BusTracker> | null = null;
 let refreshBuses: (() => void) | null = null;
 
 /**
+ * The route-shape layer's update function, registered by
+ * layers/bus-route-shape.ts at start. A hook rather than an import because that
+ * module already imports the geometry accessors below — calling it directly
+ * would close an import cycle. Same shape as `refreshBuses`.
+ */
+let routeShapeHook: ((map: MaplibreMap, lines: ReadonlySet<string> | null) => void) | null = null;
+
+/** Registers the route-shape update called on every real line-filter change. */
+export function setBusRouteShapeHook(
+  hook: (map: MaplibreMap, lines: ReadonlySet<string> | null) => void,
+): void {
+  routeShapeHook = hook;
+}
+
+/**
  * Displayed [lng, lat] of a live bus by operator-qualified vehicle id
  * ("OPERATOR:VehicleRef"), or null when it isn't currently tracked.
  */
@@ -369,8 +384,15 @@ function applyBusDisplay(map: MaplibreMap): void {
 export function setBusLineFilter(map: MaplibreMap, lines: ReadonlySet<string> | null): void {
   // Stored uppercased: lineMatch upcases the feature side, so together the
   // whole comparison is case-insensitive regardless of how callers cased it.
-  filterLines = lines ? [...lines].map((line) => line.toUpperCase()) : [];
+  const next = lines ? [...lines].map((line) => line.toUpperCase()) : [];
+  const changed =
+    next.length !== filterLines.length || next.some((line) => !filterLines.includes(line));
+  filterLines = next;
   applyBusDisplay(map);
+  // Only on a REAL change: resolving shapes walks the whole fleet and can
+  // fetch, while apply() upstream re-pushes the entire selection on every chip
+  // add/remove, and the search input's `change` also fires on blur.
+  if (changed) routeShapeHook?.(map, lines);
 }
 
 /** Reflect the Buses overlay toggle (Lines tab). Combined with any active filter. */
@@ -404,11 +426,93 @@ export function countActiveBusesOnLines(lines: ReadonlySet<string>): number {
 }
 
 /** Sanitized keys with a learned route on the server; null until loaded. */
-let routeIndex: Set<string> | null = null;
-/** fileKey → geometry, or a load-state marker. */
-const routeCache = new Map<string, LearnedRoute | 'pending' | 'absent'>();
+let routeIndex: BusRouteIndex | null = null;
+/**
+ * fileKey → geometry, the in-flight fetch, or 'absent'. The promise IS the
+ * pending marker: a second caller awaits the same fetch instead of starting
+ * another, and the eviction loop below keeps its "settled vs in flight" test.
+ */
+const routeCache = new Map<string, LearnedRoute | Promise<LearnedRoute | null> | 'absent'>();
 /** Cache cap — oldest settled entry evicted first (trackers keep their own ref). */
 const ROUTE_CACHE_MAX = 600;
+/** A cold learned route can be a ~200 KB polyline over a phone connection. */
+const ROUTE_FETCH_TIMEOUT_MS = 10_000;
+/** The only response status that proves the learner never wrote this route. */
+const HTTP_NOT_FOUND = 404;
+
+/** The tracker fields route-key resolution reads — every BusTracker is one. */
+export interface LiveBusRoute {
+  readonly line: string;
+  readonly routeFileKey: string;
+}
+
+export interface BusRouteIndex {
+  /** Served stems, exactly as named on a case-sensitive filesystem. */
+  readonly stems: ReadonlySet<string>;
+  /** Lowercased stem → the index's own spelling of it. */
+  readonly folded: ReadonlyMap<string, string>;
+}
+
+/**
+ * Index `stems` with a case-folded lookup beside them, built once here because
+ * its consumer (indexedKey in bus-route-shape.ts) runs on the synchronous click
+ * path, once per matching tracker, against ~1430 stems. First spelling wins:
+ * two stems differing only by case both serve, so either is equally right.
+ */
+export function foldRouteIndex(stems: Iterable<string>): BusRouteIndex {
+  const set = new Set(stems);
+  const folded = new Map<string, string>();
+  for (const stem of set) {
+    const lower = stem.toLowerCase();
+    if (!folded.has(lower)) folded.set(lower, stem);
+  }
+  return { stems: set, folded };
+}
+
+/** The live fleet's line + learned-route key, for route-key resolution. */
+export function activeBusRoutes(): Iterable<LiveBusRoute> {
+  return activeTrackers?.values() ?? [];
+}
+
+/** The loaded learner index, or null while it is still in flight / absent. */
+export function busRouteIndex(): BusRouteIndex | null {
+  return routeIndex;
+}
+
+/**
+ * Learned polyline for `fileKey` as [lng, lat] pairs, or null when the file is
+ * missing or malformed. Awaits an in-flight fetch rather than starting a second
+ * one — this shares routeCache with the snapping path, so a selected line whose
+ * buses are already on screen costs no network at all.
+ *
+ * lon/lat come from inverting the SAME affine transform the cache stores
+ * (M_PER_DEG_LON/LAT above, exact to ~1e-11°). The returned array is built
+ * fresh per call and owned by the caller — nothing here retains it, so it
+ * outlives any later eviction of the cached route.
+ */
+export async function loadRouteGeometry(fileKey: string): Promise<[number, number][] | null> {
+  const route = await requestRoute(fileKey);
+  if (route === null) return null;
+  const { xs, ys } = route;
+  const poly: [number, number][] = new Array(xs.length);
+  for (let i = 0; i < xs.length; i += 1) {
+    poly[i] = [xs[i] / M_PER_DEG_LON, ys[i] / M_PER_DEG_LAT];
+  }
+  return poly;
+}
+
+/**
+ * Drop `fileKey`'s cached geometry — for index-derived route shapes, which the
+ * snapping engine can never reach and which would otherwise evict routes that
+ * on-screen buses ARE snapped to. Only settled geometry goes: an in-flight
+ * entry still has callers awaiting it, and 'absent' is the negative cache that
+ * stops a 404 repeating.
+ */
+export function forgetRouteGeometry(fileKey: string): void {
+  const cached = routeCache.get(fileKey);
+  if (cached === undefined || cached === 'absent' || cached instanceof Promise) return;
+  routeCache.delete(fileKey);
+}
 
 async function loadRouteIndex(): Promise<void> {
   try {
@@ -416,34 +520,53 @@ async function loadRouteIndex(): Promise<void> {
     if (!res.ok) return;
     const list: unknown = await res.json();
     if (!Array.isArray(list)) return;
-    routeIndex = new Set(list.filter((k): k is string => typeof k === 'string'));
+    routeIndex = foldRouteIndex(list.filter((k): k is string => typeof k === 'string'));
   } catch {
     // no learner output yet — every bus simply renders unsnapped
   }
 }
 
-/** Lazy-load one learned route (dev: Vite publicDir; prod: backend route). */
-function requestRoute(fileKey: string): void {
-  if (routeCache.has(fileKey)) return;
+/**
+ * Lazy-load one learned route (dev: Vite publicDir; prod: backend route).
+ * Resolves null when the file is missing or malformed; callers that only want
+ * the side effect can drop the promise.
+ */
+function requestRoute(fileKey: string): Promise<LearnedRoute | null> {
+  const cached = routeCache.get(fileKey);
+  if (cached !== undefined) {
+    if (cached === 'absent') return Promise.resolve(null);
+    return cached instanceof Promise ? cached : Promise.resolve(cached);
+  }
   if (routeCache.size >= ROUTE_CACHE_MAX) {
     for (const [key, value] of routeCache) {
-      if (value !== 'pending') {
+      if (!(value instanceof Promise)) {
         routeCache.delete(key);
         break;
       }
     }
   }
-  routeCache.set(fileKey, 'pending');
-  void (async () => {
+  const inFlight = (async (): Promise<LearnedRoute | null> => {
+    // Whether a failure below is proof this route will never load. A 404 or a
+    // corrupt payload is; a timeout, an offline blip or a 5xx is not, and
+    // negative-caching one of those kills the route for the life of the page.
+    let definitive = false;
     try {
-      const res = await fetch(`/bus-routes/learned/${fileKey}.json`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch(`/bus-routes/learned/${fileKey}.json`, {
+        signal: AbortSignal.timeout(ROUTE_FETCH_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        definitive = res.status === HTTP_NOT_FOUND;
+        throw new Error(`HTTP ${res.status}`);
+      }
       const body = (await res.json()) as {
         poly?: [number, number][];
         quality?: { meanResidualM?: number };
       };
       const poly = body.poly;
-      if (!Array.isArray(poly) || poly.length < 2) throw new Error('bad poly');
+      if (!Array.isArray(poly) || poly.length < 2) {
+        definitive = true;
+        throw new Error('bad poly');
+      }
       const xs = new Float64Array(poly.length);
       const ys = new Float64Array(poly.length);
       for (let i = 0; i < poly.length; i += 1) {
@@ -453,20 +576,34 @@ function requestRoute(fileKey: string): void {
         // the cumulative arc-length sum from that vertex on, and NaN defeats
         // the filter's gate comparisons (every NaN compare is false) — far
         // worse than simply rendering this route's buses unsnapped.
-        if (!Number.isFinite(lon) || !Number.isFinite(lat)) throw new Error('bad vertex');
+        if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
+          definitive = true;
+          throw new Error('bad vertex');
+        }
         xs[i] = lon * M_PER_DEG_LON;
         ys[i] = lat * M_PER_DEG_LAT;
       }
-      routeCache.set(fileKey, {
+      const route: LearnedRoute = {
         xs,
         ys,
         cum: cumulativeLengthsM(xs, ys),
         measVar: measurementVariance(body.quality?.meanResidualM),
-      });
+      };
+      routeCache.set(fileKey, route);
+      return route;
     } catch {
-      routeCache.set(fileKey, 'absent');
+      // A missing or corrupt learned file is routine (the learner only writes
+      // routes it has seen enough journeys for): this bus renders unsnapped and
+      // the route-shape layer simply skips the key.
+      if (definitive) routeCache.set(fileKey, 'absent');
+      else routeCache.delete(fileKey); // transient — a later selection retries
+      return null;
     }
   })();
+  // Safe after the IIFE: its first statement awaits, so it cannot have settled
+  // and overwritten this entry yet.
+  routeCache.set(fileKey, inFlight);
+  return inFlight;
 }
 
 /** Nearest point on route segments [from,to) to (px,py), meter space. */
@@ -786,13 +923,13 @@ export async function startBuses(map: MaplibreMap): Promise<void> {
 
   /** Attach a learned route to the tracker once index + geometry are ready. */
   function resolveRoute(tr: BusTracker): void {
-    if (tr.route !== null || routeIndex === null || !routeIndex.has(tr.routeFileKey)) return;
+    if (tr.route !== null || routeIndex === null || !routeIndex.stems.has(tr.routeFileKey)) return;
     const cached = routeCache.get(tr.routeFileKey);
     if (cached === undefined) {
-      requestRoute(tr.routeFileKey);
+      void requestRoute(tr.routeFileKey);
       return;
     }
-    if (cached !== 'pending' && cached !== 'absent') tr.route = cached;
+    if (cached !== 'absent' && !(cached instanceof Promise)) tr.route = cached;
   }
 
   /** Scratch for pointAtArclen — per-tick path, keep it allocation-free. */

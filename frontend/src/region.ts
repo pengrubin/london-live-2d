@@ -90,6 +90,17 @@ export function hasLayer(name: string): boolean {
 }
 
 /**
+ * Whether (lon, lat) falls within the active region's maxBounds, corners
+ * inclusive. The one definition of "is this in the city we are rendering" —
+ * the geolocate toast and the route-shape layer's coach filter must not be
+ * able to disagree about where the region ends.
+ */
+export function isInsideRegion(lon: number, lat: number): boolean {
+  const [[west, south], [east, north]] = active.region.maxBounds;
+  return lon >= west && lon <= east && lat >= south && lat <= north;
+}
+
+/**
  * Fetches capabilities, falling back to London on any failure. Never rejects:
  * a backend hiccup must degrade the layer set, not blank the page — before
  * this existed the map rendered regardless of what the API did, and that
