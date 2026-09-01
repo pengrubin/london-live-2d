@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   assignBucket,
   buildCoverageArtifact,
@@ -6,6 +9,7 @@ import {
   quantizePolyline,
   selectWindowDays,
   simplifyPolyline,
+  olderThanOneCycle,
   type LonLat,
 } from './coverage-writer';
 
@@ -412,5 +416,37 @@ describe('buildCoverageArtifact (corridor merge)', () => {
     for (const value of coords) {
       expect(value).toBe(Number(value.toFixed(4)));
     }
+  });
+});
+
+describe('olderThanOneCycle', () => {
+  const CYCLE_MS = 24 * 60 * 60_000;
+
+  test('a missing artifact always triggers a build', async () => {
+    await expect(olderThanOneCycle('/nonexistent/coverage/latest.json', Date.now())).resolves.toBe(
+      true,
+    );
+  });
+
+  test('a just-written artifact does not', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coverage-age-'));
+    const path = join(dir, 'latest.json');
+    await writeFile(path, '{}');
+
+    await expect(olderThanOneCycle(path, Date.now())).resolves.toBe(false);
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test('an artifact a full cycle old does — this is what survives a restart', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'coverage-age-'));
+    const path = join(dir, 'latest.json');
+    await writeFile(path, '{}');
+
+    // Advance the clock rather than backdating the file: same comparison,
+    // no dependence on the filesystem's mtime resolution.
+    await expect(olderThanOneCycle(path, Date.now() + CYCLE_MS + 1_000)).resolves.toBe(true);
+
+    await rm(dir, { recursive: true, force: true });
   });
 });
