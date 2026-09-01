@@ -8,6 +8,7 @@ import {
   createVehicleState,
   isDiversionDetectorRunning,
   oppositeKey,
+  pruneVehicleStates,
   startDiversionDetector,
   stepVehicle,
   type FixInput,
@@ -841,5 +842,41 @@ describe('credible-bracket guard', () => {
 
     expect(completed).toHaveLength(1);
     expect(completed[0]?.confidence).toBe('low');
+  });
+});
+
+describe('pruneVehicleStates', () => {
+  const TTL_S = 30 * 60;
+
+  function stateAt(lastT: number) {
+    const s = createVehicleState();
+    s.lastT = lastT;
+    return s;
+  }
+
+  test('drops only vehicles silent for longer than the TTL', () => {
+    const now = T0 + 100_000;
+    const states = new Map([
+      ['fresh', stateAt(now - 60)],
+      ['borderline', stateAt(now - TTL_S + 30)],
+      ['finished-its-shift', stateAt(now - TTL_S - 1)],
+    ]);
+
+    const removed = pruneVehicleStates(states, now);
+
+    expect(removed).toBe(1);
+    expect([...states.keys()]).toEqual(['fresh', 'borderline']);
+  });
+
+  test('prunes a small map — the old size>=20000 throttle never fired at fleet scale', () => {
+    // London's live fleet peaks near 9,000, so a threshold of 20,000 meant the
+    // TTL never applied and stale states were retained indefinitely.
+    const now = T0 + 100_000;
+    const states = new Map(
+      Array.from({ length: 9_000 }, (_, i) => [`v${i}`, stateAt(now - TTL_S - 1)] as const),
+    );
+
+    expect(pruneVehicleStates(states, now)).toBe(9_000);
+    expect(states.size).toBe(0);
   });
 });

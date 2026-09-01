@@ -162,6 +162,30 @@ export interface VehicleState {
   pendings: PendingExcursion[];
 }
 
+/**
+ * Forget vehicles that have gone quiet for longer than the TTL, and report how
+ * many were dropped.
+ *
+ * This used to be throttled by `states.size < 20_000`, a guard against
+ * scanning on every poll — but London's fleet peaks near 9,000, so the
+ * threshold was never reached and the TTL never applied. A bus that ended its
+ * shift mid-excursion kept its state forever, including up to EXC_FIX_CAP
+ * fixes accumulated for a rejoin that would never come. It now runs on the
+ * once-a-minute lifecycle tick, where a full scan of the live fleet is
+ * microseconds and the TTL is what bounds the map.
+ */
+export function pruneVehicleStates(states: Map<string, VehicleState>, nowSec: number): number {
+  const cutoff = nowSec - VEHICLE_STATE_TTL_S;
+  let removed = 0;
+  for (const [id, state] of states) {
+    if (state.lastT < cutoff) {
+      states.delete(id);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 export function createVehicleState(): VehicleState {
   return {
     lastT: 0,
@@ -673,14 +697,6 @@ export function startDiversionDetector(
     });
   }
 
-  function pruneStates(nowSec: number): void {
-    if (states.size < 20_000) return;
-    const cutoff = nowSec - VEHICLE_STATE_TTL_S;
-    for (const [id, state] of states) {
-      if (state.lastT < cutoff) states.delete(id);
-    }
-  }
-
   function record(buses: readonly Bus[], nowMs: number): void {
     if (!ready) return;
     refreshThresholds(nowMs);
@@ -731,12 +747,13 @@ export function startDiversionDetector(
         transitions.push(...addExcursion(store, exc, nowSec));
       }
     }
-    pruneStates(nowSec);
     appendTransitions(transitions);
   }
 
   const lifecycleTimer = setInterval(() => {
-    appendTransitions(tickLifecycle(store, Math.floor(Date.now() / 1000)));
+    const nowSec = Math.floor(Date.now() / 1000);
+    pruneVehicleStates(states, nowSec);
+    appendTransitions(tickLifecycle(store, nowSec));
   }, LIFECYCLE_TICK_MS);
   lifecycleTimer.unref();
 
