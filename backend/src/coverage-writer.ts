@@ -34,7 +34,11 @@ export const COVERAGE_WINDOW_DAYS = 7;
 /** Absolute bucket lower bounds in journeys/day (b = index 0..5). */
 export const COVERAGE_BUCKET_EDGES = [0, 10, 30, 75, 150, 300] as const;
 const COORD_DECIMALS = 4;
-const REGEN_INTERVAL_MS = 6 * 60 * 60_000;
+/** The inputs are completed daily rollups averaged over a rolling week, so the
+ * output cannot change more than once a day. Rebuilding four times a day only
+ * bought staleness that did not exist — and each build is the process's
+ * largest memory peak, which Railway bills for long after it subsides. */
+const REGEN_INTERVAL_MS = 24 * 60 * 60_000;
 const ROLLUP_FILE_RE = /^\d{4}-\d{2}-\d{2}\.json$/;
 /** Metres per degree of latitude (equirectangular; fine at route scale). */
 const M_PER_DEG = 111_320;
@@ -503,12 +507,16 @@ export async function buildCoverageArtifact(
   return { type: 'FeatureCollection', day, windowDays, features };
 }
 
-async function fileExists(path: string): Promise<boolean> {
+/** Missing, unreadable, or last built at least one cycle ago. The mtime check
+ * is what makes a 24 h cycle safe across restarts: the interval timer restarts
+ * with the process, so a deploy would otherwise push the next rebuild a full
+ * cycle further out and could leave a two-day-old artifact serving. */
+export async function olderThanOneCycle(path: string, nowMs: number): Promise<boolean> {
   try {
-    await stat(path);
-    return true;
+    const info = await stat(path);
+    return nowMs - info.mtimeMs >= REGEN_INTERVAL_MS;
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -614,9 +622,10 @@ export async function generateCoverage(
   );
 }
 
-/** Boot build only when the artifact is missing, then every 6 h regardless —
- * the recompute is pure local-disk work, so unconditional beats tracking
- * which rollup day it last saw. `baseDir` is the resolved bus data dir. */
+/** Boot build when the artifact is missing or a cycle old, then every
+ * REGEN_INTERVAL_MS regardless — the recompute is pure local-disk work, so
+ * unconditional beats tracking which rollup day it last saw. `baseDir` is the
+ * resolved bus data dir. */
 export function startCoverageWriter(
   baseDir: string,
   log: (msg: string) => void,
@@ -635,7 +644,7 @@ export function startCoverageWriter(
     }
   };
   void (async () => {
-    if (!(await fileExists(join(baseDir, 'coverage', 'latest.json')))) await run();
+    if (await olderThanOneCycle(join(baseDir, 'coverage', 'latest.json'), Date.now())) await run();
   })();
   const timer = setInterval(() => void run(), REGEN_INTERVAL_MS);
   timer.unref();
