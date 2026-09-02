@@ -285,6 +285,14 @@ export class LeaderboardTracker {
     this.filePath = persistPath('leaderboard.json');
   }
 
+  /** Live map sizes for /health. Unlike persistenceStatus() this touches no
+   * disk, so it is safe to poll. */
+  sizes(): Record<string, number> {
+    let vehicleTotals = 0;
+    for (const bucket of this.buckets.values()) vehicleTotals += bucket.size;
+    return { lbBuckets: this.buckets.size, lbVehicleTotals: vehicleTotals, lbLastFixes: this.last.size };
+  }
+
   /** Diagnostics for the persistence path (which file, does it exist, when saved). */
   persistenceStatus(): {
     persistDirSet: boolean;

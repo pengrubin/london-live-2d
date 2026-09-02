@@ -248,7 +248,6 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const bikePointsCache = new TtlCache<unknown>(BIKE_POINTS_TTL_MS);
   const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
 
-  registerHealthRoute(app);
   registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir);
   registerArrivalsRoute(app, { config, cache: arrivalsCache, budget: tflBudget });
   registerStopArrivalsRoute(app, { config, cache: stopArrivalsCache, budget: tflBudget });
@@ -302,6 +301,20 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     nrSampler,
   });
   leaderboard.start();
+  // Registered here rather than at boot so the closure can see the leaderboard
+  // and the caches: /health reports what each structure is holding, and the
+  // caches are the ones keyed by stop and vehicle id.
+  registerHealthRoute(app, () => ({
+    ...(diversions?.sizes() ?? {}),
+    ...leaderboard.sizes(),
+    cacheArrivals: arrivalsCache.size,
+    cacheStopArrivals: stopArrivalsCache.size,
+    cacheVehicleArrivals: vehicleArrivalsCache.size,
+    cacheStopDetail: stopDetailCache.size,
+    cacheCrowding: crowdingCache.size,
+    cacheLiftDisruptions: liftDisruptionsCache.size,
+    cacheBikePoints: bikePointsCache.size,
+  }));
   app.addHook('onClose', () => leaderboard.stop());
   registerLeaderboardRoute(app, leaderboard);
   // Persistence diagnostic (no secrets — path + booleans only).
