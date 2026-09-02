@@ -10,6 +10,22 @@ describe('health route', () => {
     registerHealthRoute(app);
   });
 
+  it('reports component sizes when a reporter is supplied', async () => {
+    const counted = Fastify();
+    registerHealthRoute(counted, () => ({ vehicleStates: 6202, cacheVehicleArrivals: 41 }));
+
+    const body = res(await counted.inject({ method: 'GET', url: '/health' }));
+
+    expect(body.components).toEqual({ vehicleStates: 6202, cacheVehicleArrivals: 41 });
+    await counted.close();
+  });
+
+  it('reports an empty component set when none is supplied', async () => {
+    const body = res(await app.inject({ method: 'GET', url: '/health' }));
+
+    expect(body.components).toEqual({});
+  });
+
   afterEach(async () => {
     await app.close();
   });
@@ -38,6 +54,7 @@ describe('health route', () => {
 interface HealthBody {
   status: string;
   uptimeS: number;
+  components: Record<string, number>;
   memory: { rssMB: number; heapUsedMB: number; heapTotalMB: number; externalMB: number };
 }
 

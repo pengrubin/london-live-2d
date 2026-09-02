@@ -51,6 +51,7 @@ describe('diversions route', () => {
     const detector: DiversionDetector = {
       record: () => {},
       snapshot: () => Promise.resolve(payload),
+      sizes: () => ({}),
       stop: () => {},
     };
     app = Fastify();
@@ -77,6 +78,7 @@ describe('diversions route', () => {
     detector = {
       record: () => {},
       snapshot: () => Promise.resolve(payload),
+      sizes: () => ({}),
       stop: () => {},
     };
     const after = await app.inject({ method: 'GET', url: '/api/diversions' });

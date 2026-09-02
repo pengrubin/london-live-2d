@@ -546,6 +546,8 @@ export interface DiversionDetector {
   /** Ride-along on the BODS poll callback — synchronous CPU only, no IO. */
   record(buses: readonly Bus[], nowMs: number): void;
   snapshot(): Promise<DiversionsPayload>;
+  /** Live map sizes for /health — the retention question, not the cost one. */
+  sizes(): Record<string, number>;
   stop(): void;
 }
 
@@ -804,6 +806,22 @@ export function startDiversionDetector(
   return {
     record,
     snapshot,
+    sizes: () => {
+      let eventMembers = 0;
+      let eventPassages = 0;
+      for (const ev of store.events) {
+        eventMembers += ev.members.length;
+        eventPassages += ev.passages.size;
+      }
+      return {
+        vehicleStates: states.size,
+        routeIndexes: routes.size,
+        shapeGates: gates.size,
+        events: store.events.length,
+        eventMembers,
+        eventPassages,
+      };
+    },
     stop: () => {
       clearInterval(lifecycleTimer);
       clearInterval(rebuildTimer);
