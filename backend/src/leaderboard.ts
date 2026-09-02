@@ -6,7 +6,7 @@
 // GET /api/leaderboard. Buckets persist to data/leaderboard.json so restarts
 // don't wipe standings. No cron: a rollover simply starts writing a new key.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Vessel } from './ais-client';
@@ -149,6 +149,13 @@ export function londonPeriodKeys(now: number): PeriodKeys {
   return { day, week: anchor.toISOString().slice(0, 10), month: day.slice(0, 7) };
 }
 
+/** Bucket keys for the periods still accumulating right now — the only ones
+ * any API can serve, because snapshot() derives its key from the clock. */
+export function openBucketKeys(now: number): Set<string> {
+  const keys = londonPeriodKeys(now);
+  return new Set(PERIODS.map((period) => `${period}:${keys[period]}`));
+}
+
 /** Start of a bucket ("day:2026-07-24" / "week:…" / "month:2026-07") as epoch ms. */
 function bucketStartMs(bucketKey: string): number {
   const datePart = bucketKey.slice(bucketKey.indexOf(':') + 1);
@@ -255,6 +262,8 @@ export function makeCachedArrivalsFetcher(deps: ArrivalsFetcherDeps): () => Prom
 
 export interface LeaderboardDeps {
   log: (msg: string) => void;
+  /** Directory for per-day archives; served by /api/export/leaderboard. */
+  archiveDir: string;
   getBuses: () => readonly BusWire[];
   getVessels: () => readonly Vessel[];
   fetchTubePredictions: () => Promise<Prediction[] | null>;
@@ -522,8 +531,12 @@ export class LeaderboardTracker {
         }
         if (bucket.size > 0) this.buckets.set(bucketKey, bucket);
       }
+      const { archived, dropped } = this.archiveAndDropClosedBuckets(Date.now());
       this.pruneOldBuckets(Date.now());
-      this.deps.log(`leaderboard: loaded ${this.buckets.size} bucket(s) from ${this.filePath}`);
+      this.deps.log(
+        `leaderboard: loaded ${this.buckets.size} open bucket(s) from ${this.filePath}` +
+          (dropped > 0 ? `, archived ${archived} day(s) and released ${dropped} closed bucket(s)` : ''),
+      );
     } catch (err) {
       this.deps.log(`leaderboard: persisted state unreadable, starting fresh: ${String(err)}`);
     }
@@ -531,6 +544,7 @@ export class LeaderboardTracker {
 
   private persist(): void {
     if (!this.dirty) return;
+    this.archiveAndDropClosedBuckets(Date.now());
     this.pruneOldBuckets(Date.now());
     const state: PersistedState = { savedAt: Date.now(), buckets: {} };
     for (const [bucketKey, bucket] of this.buckets) {
@@ -544,6 +558,54 @@ export class LeaderboardTracker {
       this.dirty = false;
     } catch (err) {
       this.deps.log(`leaderboard persist failed: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Closed periods leave memory entirely. A finished day is written to
+   * <archiveDir>/YYYY-MM-DD.json first — full per-vehicle detail, which
+   * /api/export serves and the local archive syncs — so nothing is lost by
+   * dropping it here. Week and month buckets are not archived because they
+   * are sums of their days: one sample credits all three at once.
+   *
+   * A bucket whose archive could not be written stays in memory and is
+   * retried on the next tick. Losing a day to a transient disk error would
+   * be a far worse trade than holding it a minute longer.
+   */
+  private archiveAndDropClosedBuckets(now: number): { archived: number; dropped: number } {
+    const open = openBucketKeys(now);
+    let archived = 0;
+    let dropped = 0;
+    for (const [bucketKey, bucket] of this.buckets) {
+      if (open.has(bucketKey)) continue;
+      if (bucketKey.startsWith('day:')) {
+        const outcome = this.writeDayArchive(bucketKey.slice('day:'.length), bucket);
+        if (outcome === 'failed') continue;
+        if (outcome === 'written') archived += 1;
+      }
+      this.buckets.delete(bucketKey);
+      dropped += 1;
+    }
+    return { archived, dropped };
+  }
+
+  private writeDayArchive(
+    day: string,
+    bucket: ReadonlyMap<string, VehicleTotal>,
+  ): 'written' | 'exists' | 'failed' {
+    const path = join(this.deps.archiveDir, `${day}.json`);
+    try {
+      // Never rewrite: a finished day cannot change, and the local archive
+      // skips files it already has.
+      if (existsSync(path)) return 'exists';
+      mkdirSync(this.deps.archiveDir, { recursive: true });
+      const tmpPath = `${path}.tmp`;
+      writeFileSync(tmpPath, JSON.stringify({ day, savedAt: Date.now(), totals: [...bucket.values()] }));
+      renameSync(tmpPath, path);
+      return 'written';
+    } catch (err) {
+      this.deps.log(`leaderboard: archiving ${day} failed, keeping it in memory: ${String(err)}`);
+      return 'failed';
     }
   }
 

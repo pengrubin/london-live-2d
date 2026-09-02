@@ -287,6 +287,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
 
   const leaderboard = new LeaderboardTracker({
     log,
+    archiveDir: join(busDataDir, 'leaderboard'),
     getBuses: () => bodsClient?.list() ?? [],
     getVessels: () => aisClient?.list() ?? [],
     fetchTubePredictions: makeCachedArrivalsFetcher({
