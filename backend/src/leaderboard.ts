@@ -38,6 +38,12 @@ const LAST_SEEN_TTL_MS = 15 * 60_000;
 /** Buckets older than roughly two months are pruned from memory + disk. */
 const BUCKET_RETENTION_MS = 62 * 24 * 3_600_000;
 const TOP_N = 20;
+/** A closed period is frozen and can only ever be shown as a ranking, so it is
+ * kept as a per-mode top-N summary instead of every vehicle that moved that
+ * day. Full retention is what let 43 buckets no API can read hold 1.4M totals.
+ * Per MODE matters: a river boat covers a fraction of a tube train's distance,
+ * so a single global cut would erase ships from history entirely. */
+const CLOSED_BUCKET_TOP_N = 200;
 /** Full-bucket rank sorts are cached this long per mode (popup opens are cheap). */
 const RANK_CACHE_TTL_MS = 15_000;
 const EARTH_RADIUS_M = 6_371_000;
@@ -51,12 +57,13 @@ const RIVER_LINE_IDS = new Set(['rb1', 'rb4', 'rb6', 'woolwich-ferry']);
 export type LeaderboardMode = 'tube' | 'bus' | 'ship';
 export type LeaderboardPeriod = 'day' | 'week' | 'month';
 const PERIODS: readonly LeaderboardPeriod[] = ['day', 'week', 'month'];
+const MODES: readonly LeaderboardMode[] = ['tube', 'bus', 'ship'];
 
 /** Public API mode values → internal entry modes ("train" ranks tube/rail). */
 const API_MODES = { train: 'tube', bus: 'bus', ship: 'ship' } as const;
 export type LeaderboardApiMode = keyof typeof API_MODES;
 
-interface VehicleTotal {
+export interface VehicleTotal {
   mode: LeaderboardMode;
   id: string;
   label: string;
@@ -64,6 +71,28 @@ interface VehicleTotal {
   lineId?: string;
   /** cumulative metres in this bucket */
   m: number;
+}
+
+/** Bucket keys for the periods that are still accumulating right now. */
+export function openBucketKeys(now: number): Set<string> {
+  const keys = londonPeriodKeys(now);
+  return new Set(PERIODS.map((period) => `${period}:${keys[period]}`));
+}
+
+/** The bucket reduced to its strongest `topN` entries per mode. */
+export function compactBucket(
+  bucket: ReadonlyMap<string, VehicleTotal>,
+  topN: number,
+): Map<string, VehicleTotal> {
+  const kept = new Map<string, VehicleTotal>();
+  for (const mode of MODES) {
+    const ranked = [...bucket.values()]
+      .filter((total) => total.mode === mode)
+      .sort((a, b) => b.m - a.m)
+      .slice(0, topN);
+    for (const total of ranked) kept.set(total.id, total);
+  }
+  return kept;
 }
 
 interface LastFix {
@@ -523,7 +552,11 @@ export class LeaderboardTracker {
         if (bucket.size > 0) this.buckets.set(bucketKey, bucket);
       }
       this.pruneOldBuckets(Date.now());
-      this.deps.log(`leaderboard: loaded ${this.buckets.size} bucket(s) from ${this.filePath}`);
+      const dropped = this.compactClosedBuckets(Date.now());
+      this.deps.log(
+        `leaderboard: loaded ${this.buckets.size} bucket(s) from ${this.filePath}` +
+          (dropped > 0 ? `, summarised ${dropped} closed-period total(s) away` : ''),
+      );
     } catch (err) {
       this.deps.log(`leaderboard: persisted state unreadable, starting fresh: ${String(err)}`);
     }
@@ -532,6 +565,7 @@ export class LeaderboardTracker {
   private persist(): void {
     if (!this.dirty) return;
     this.pruneOldBuckets(Date.now());
+    this.compactClosedBuckets(Date.now());
     const state: PersistedState = { savedAt: Date.now(), buckets: {} };
     for (const [bucketKey, bucket] of this.buckets) {
       state.buckets[bucketKey] = [...bucket.values()];
@@ -545,6 +579,20 @@ export class LeaderboardTracker {
     } catch (err) {
       this.deps.log(`leaderboard persist failed: ${String(err)}`);
     }
+  }
+
+  /** Summarise every bucket whose period has ended. Open buckets are left
+   * whole: a vehicle ranked 500th at noon can still finish in the top 20. */
+  private compactClosedBuckets(now: number): number {
+    const open = openBucketKeys(now);
+    let dropped = 0;
+    for (const [bucketKey, bucket] of this.buckets) {
+      if (open.has(bucketKey) || bucket.size <= CLOSED_BUCKET_TOP_N) continue;
+      const kept = compactBucket(bucket, CLOSED_BUCKET_TOP_N);
+      dropped += bucket.size - kept.size;
+      this.buckets.set(bucketKey, kept);
+    }
+    return dropped;
   }
 
   private pruneOldBuckets(now: number): void {
