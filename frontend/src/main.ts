@@ -34,6 +34,13 @@ import { startSimulatedTrains, SIMULATED_TRAINS_LAYER_ID } from './layers/simula
 import { startBusCoverage, setBusCoverageVisible, BUS_COVERAGE_LAYER_ID } from './layers/coverage';
 import { startBusRouteShapes } from './layers/bus-route-shape';
 import { startDiversions, setDiversionsVisible, DIVERSIONS_LAYER_IDS } from './layers/diversions';
+import {
+  startDisruptions,
+  setDisruptionsVisible,
+  setPlannedWorksVisible,
+  DISRUPTIONS_LAYER_IDS,
+  DISRUPTIONS_PLANNED_IDS,
+} from './layers/disruptions';
 import { hasLayer, isInsideRegion, loadCapabilities } from './region';
 
 const TOAST_DISMISS_MS = 4000;
@@ -374,6 +381,19 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
     }
   }
 
+  // Disruption bands need the network's colours and names whether or not the
+  // train pipeline started; branches come from the trains handle when it did.
+  const lineColors: ReadonlyMap<string, string> =
+    trains?.colorByLine ?? new Map(manifestLines.map((l) => [l.id, l.displayColor ?? l.color]));
+  const lineNames: ReadonlyMap<string, string> = new Map(
+    manifestLines.map((l) => [l.id, l.name]),
+  );
+  const disruptionsDeps = {
+    getBranches: () => trains?.branchesByLine ?? null,
+    colorByLine: lineColors,
+    nameByLine: lineNames,
+  };
+
   // TWO ORDERS, deliberately different — collapsing them into one silently
   // restacks the map.
   //
@@ -447,6 +467,34 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       row: 7,
       start: () => startRoadDisruptions(target),
       overlay: { label: 'Roadworks', layerIds: ROAD_DISRUPTIONS_LAYER_IDS },
+    },
+    {
+      // Started after the roadworks/diversion bands and before the tide
+      // gauges, so the rail bands sit on top of the other two overlay washes
+      // while staying under every dot layer (all three anchor on
+      // stations-circle, and start order decides who wins among them).
+      name: 'disruptions',
+      row: 7.2,
+      start: () => startDisruptions(target, disruptionsDeps),
+      overlay: {
+        label: 'Disruptions',
+        layerIds: DISRUPTIONS_LAYER_IDS,
+        onToggle: (visible: boolean) => setDisruptionsVisible(target, visible),
+      },
+    },
+    {
+      // Same layer, second toggle: planned works ship on their own source and
+      // are OFF by default — a weekend closure is not what "what is broken
+      // right now" means.
+      name: 'disruptions',
+      row: 7.5,
+      start: () => Promise.resolve(),
+      overlay: {
+        label: 'Planned works',
+        layerIds: DISRUPTIONS_PLANNED_IDS,
+        startOff: true,
+        onToggle: (visible: boolean) => setPlannedWorksVisible(target, visible),
+      },
     },
     {
       name: 'tideGauges',

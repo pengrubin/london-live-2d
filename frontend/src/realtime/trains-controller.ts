@@ -74,6 +74,9 @@ export interface TrainsHandle {
   stats: { trains: number; polls: number; lastPollAt: number };
   /** lineId → display colour, shared with other UI (station popups, legend) */
   colorByLine: ReadonlyMap<string, string>;
+  /** Baked branch geometry, already downloaded here — shared so the
+   * disruptions layer does not fetch data/branches/ (1.0 MB) a second time. */
+  branchesByLine: ReadonlyMap<string, LineBranches>;
   /** dismiss the follow-the-vehicle popup (e.g. when a station board opens) */
   closeVehiclePopup: () => void;
   /** key of the vehicle whose detail card is open, if any */
@@ -178,6 +181,7 @@ export async function startTrains(map: MaplibreMap): Promise<TrainsHandle> {
     },
     stats,
     colorByLine,
+    branchesByLine: branches,
     closeVehiclePopup: () => vehiclePopup.close(),
     selectedVehicleKey: () => vehiclePopup.selected,
     findVehicle: (key) => interpolator.findVehicle(key),
