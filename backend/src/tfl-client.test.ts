@@ -4,6 +4,7 @@ import {
   fetchBusLineStatus,
   fetchLineStatusWindow,
   fetchStopPointDisruptions,
+  fetchStopPoints,
 } from './tfl-client';
 import { UPSTREAM_TIMEOUT_MS } from './constants';
 
@@ -53,6 +54,19 @@ describe('disruption fetchers', () => {
     expect(response.status).toBe(200);
     expect(urls[0]?.pathname).toBe('/StopPoint/Mode/tube,dlr/Disruption');
     expect(urls[0]?.searchParams.get('detail')).toBeNull();
+  });
+
+  it('fetchStopPoints comma-joins the ids into one StopPoint lookup', async () => {
+    // The bus-stop gazetteer's only network call; 20 ids per URL is the
+    // measured ceiling, so the joined form has to survive verbatim.
+    const urls = stubFetch(200, []);
+
+    const response = await fetchStopPoints(['490006655CG', '490G00006655'], APP_KEY);
+
+    expect(response.status).toBe(200);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]?.pathname).toBe('/StopPoint/490006655CG,490G00006655');
+    expect(urls[0]?.searchParams.get('app_key')).toBe(APP_KEY);
   });
 
   it('fetchBusLineStatus fetches every bus route status without detail and with the long timeout', async () => {
