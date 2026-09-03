@@ -122,3 +122,224 @@ describe('shouldWrite', () => {
     expect(shouldWrite('[a]', '[a]', T0, T0 + 1, 0)).toBe(true);
   });
 });
+
+// --- structured disruption fields (TfL ?detail=true) -------------------------
+
+const stop = (naptanId: string, commonName: string) => ({ naptanId, commonName });
+
+const DETAILED_PART_CLOSURE = {
+  id: 'district',
+  lineStatuses: [
+    {
+      statusSeverity: 4,
+      statusSeverityDescription: 'Part Closure',
+      reason: 'District Line: No service between Earl\'s Court and Kensington (Olympia).',
+      validityPeriods: [{ fromDate: '2026-09-05T04:30:00Z', toDate: '2026-09-06T01:29:00Z', isNow: true }],
+      disruption: {
+        category: 'PlannedWork',
+        closureText: 'partClosure',
+        description: 'District Line: No service between Earl\'s Court and Kensington (Olympia).',
+        affectedRoutes: [
+          {
+            id: '2105',
+            name: "Earl's Court - Kensington (Olympia)",
+            direction: 'outbound',
+            originationName: "Earl's Court",
+            destinationName: 'Kensington (Olympia)',
+            isEntireRouteSection: false,
+            routeSectionNaptanEntrySequence: [
+              { ordinal: 0, stopPoint: stop('940GZZLUECT', "Earl's Court") },
+              { ordinal: 1, stopPoint: stop('940GZZLUKOY', 'Kensington (Olympia)') },
+            ],
+          },
+        ],
+        affectedStops: [
+          stop('940GZZLUECT', "Earl's Court"),
+          stop('940GZZLUKOY', 'Kensington (Olympia)'),
+          stop('940GZZLUECT', "Earl's Court"), // defensive: archive each id once
+        ],
+      },
+    },
+  ],
+};
+
+describe('compactStatus structured disruption fields', () => {
+  it('archives validity, category, closure text, affected routes and stops', () => {
+    const entry = compactStatus([DETAILED_PART_CLOSURE])?.[0]?.st[0];
+
+    expect(entry?.c).toBe('PlannedWork');
+    expect(entry?.ct).toBe('partClosure');
+    expect(entry?.v).toEqual([{ f: '2026-09-05T04:30:00Z', t: '2026-09-06T01:29:00Z', n: true }]);
+    expect(entry?.ar).toEqual([
+      {
+        id: '2105',
+        n: "Earl's Court - Kensington (Olympia)",
+        dir: 'outbound',
+        o: "Earl's Court",
+        de: 'Kensington (Olympia)',
+        e: false,
+        st: ['940GZZLUECT', '940GZZLUKOY'],
+      },
+    ]);
+    expect(entry?.as).toEqual(['940GZZLUECT', '940GZZLUKOY']);
+  });
+
+  it('omits every structured key when TfL sends none, so old archives stay byte-compatible', () => {
+    const entry = compactStatus([GOOD_SERVICE])?.[0]?.st[0];
+
+    expect(entry).toEqual({ s: 10, d: 'Good Service' });
+    expect(JSON.stringify(entry)).toBe('{"s":10,"d":"Good Service"}');
+  });
+
+  it('drops malformed routes and stops but keeps the well-formed ones', () => {
+    const entry = compactStatus([
+      {
+        id: 'central',
+        lineStatuses: [
+          {
+            statusSeverity: 6,
+            statusSeverityDescription: 'Severe Delays',
+            validityPeriods: 'not-an-array',
+            disruption: {
+              category: 42,
+              affectedRoutes: [
+                { name: 'no id' },
+                {
+                  id: '2330',
+                  routeSectionNaptanEntrySequence: [
+                    { ordinal: 0, stopPoint: { commonName: 'no naptan' } },
+                    { ordinal: 1, stopPoint: stop('940GZZLUEBY', 'Ealing Broadway') },
+                    null,
+                  ],
+                },
+                null,
+              ],
+              affectedStops: [null, { commonName: 'no id' }, stop('940GZZLUEBY', 'Ealing Broadway')],
+            },
+          },
+        ],
+      },
+    ])?.[0]?.st[0];
+
+    expect(entry?.v).toBeUndefined();
+    expect(entry?.c).toBeUndefined();
+    expect(entry?.ar).toEqual([{ id: '2330', st: ['940GZZLUEBY'] }]);
+    expect(entry?.as).toEqual(['940GZZLUEBY']);
+  });
+
+  it('omits empty affected lists rather than archiving []', () => {
+    const entry = compactStatus([
+      {
+        id: 'jubilee',
+        lineStatuses: [
+          {
+            statusSeverity: 9,
+            statusSeverityDescription: 'Minor Delays',
+            disruption: { category: 'RealTime', affectedRoutes: [], affectedStops: [] },
+          },
+        ],
+      },
+    ])?.[0]?.st[0];
+
+    expect(entry?.c).toBe('RealTime');
+    expect(entry?.ar).toBeUndefined();
+    expect(entry?.as).toBeUndefined();
+  });
+});
+
+// --- archive-size guards (measured 2026-09-02, see docs/DISRUPTION_GEOLOCATION.md §8) ---
+
+describe('compactStatus archive-size guards', () => {
+  it('drops the stop list of an entire-route section (whole line, no localisation value) but keeps its flag', () => {
+    const entry = compactStatus([
+      {
+        id: 'northern',
+        lineStatuses: [
+          {
+            statusSeverity: 9,
+            statusSeverityDescription: 'Minor Delays',
+            disruption: {
+              category: 'RealTime',
+              affectedRoutes: [
+                {
+                  id: '2330',
+                  name: 'Edgware - Morden via Bank',
+                  isEntireRouteSection: true,
+                  routeSectionNaptanEntrySequence: [
+                    { ordinal: 0, stopPoint: stop('940GZZLUEGW', 'Edgware') },
+                    { ordinal: 1, stopPoint: stop('940GZZLUBTK', 'Burnt Oak') },
+                  ],
+                },
+                {
+                  id: '2105',
+                  isEntireRouteSection: false,
+                  routeSectionNaptanEntrySequence: [
+                    { ordinal: 0, stopPoint: stop('940GZZLUEGW', 'Edgware') },
+                    { ordinal: 1, stopPoint: stop('940GZZLUBTK', 'Burnt Oak') },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ])?.[0]?.st[0];
+
+    expect(entry?.ar).toEqual([
+      { id: '2330', n: 'Edgware - Morden via Bank', e: true },
+      { id: '2105', e: false, st: ['940GZZLUEGW', '940GZZLUBTK'] },
+    ]);
+  });
+
+  it('keeps only the start of a RealTime validity period, because TfL rolls its end forward every poll', () => {
+    const realtime = compactStatus([
+      {
+        id: 'windrush',
+        lineStatuses: [
+          {
+            statusSeverity: 3,
+            statusSeverityDescription: 'Part Suspended',
+            validityPeriods: [{ fromDate: '2026-09-02T21:03:01Z', toDate: '2026-09-03T00:54:21Z', isNow: true }],
+            disruption: { category: 'RealTime' },
+          },
+        ],
+      },
+    ])?.[0]?.st[0];
+    const planned = compactStatus([
+      {
+        id: 'district',
+        lineStatuses: [
+          {
+            statusSeverity: 5,
+            statusSeverityDescription: 'Part Closure',
+            validityPeriods: [{ fromDate: '2026-09-05T02:30:00Z', toDate: '2026-09-07T00:29:00Z', isNow: false }],
+            disruption: { category: 'PlannedWork' },
+          },
+        ],
+      },
+    ])?.[0]?.st[0];
+
+    expect(realtime?.v).toEqual([{ f: '2026-09-02T21:03:01Z', n: true }]);
+    expect(planned?.v).toEqual([{ f: '2026-09-05T02:30:00Z', t: '2026-09-07T00:29:00Z' }]);
+  });
+
+  it('serializes two polls of the same live suspension identically when only the rolling end moved', () => {
+    const poll = (toDate: string) =>
+      compactStatus([
+        {
+          id: 'windrush',
+          lineStatuses: [
+            {
+              statusSeverity: 3,
+              statusSeverityDescription: 'Part Suspended',
+              reason: 'Windrush Line: No service between Clapham Junction and Surrey Quays.',
+              validityPeriods: [{ fromDate: '2026-09-02T21:03:01Z', toDate, isNow: true }],
+              disruption: { category: 'RealTime', closureText: 'partSuspended' },
+            },
+          ],
+        },
+      ]);
+
+    expect(JSON.stringify(poll('2026-09-03T00:54:21Z'))).toBe(JSON.stringify(poll('2026-09-03T00:56:30Z')));
+  });
+});

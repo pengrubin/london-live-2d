@@ -44,7 +44,6 @@ export async function fetchLineStatus(
   return fetchTfl(`/Line/${lineIds.join(',')}/Status`, appKey, timeoutMs);
 }
 
-/** Service status for every line of the given modes (e.g. all tube lines). */
 /** Every current road disruption (roadworks, closures) network-wide. */
 export async function fetchRoadDisruptions(
   appKey: string,
@@ -53,12 +52,21 @@ export async function fetchRoadDisruptions(
   return fetchTfl('/Road/all/Disruption', appKey, timeoutMs, { stripContent: 'false' });
 }
 
+/**
+ * Service status for every line of the given modes (e.g. all tube lines).
+ * `withDetail` asks TfL for the structured `disruption` object (affectedRoutes /
+ * affectedStops with NaPTAN ids) alongside the free-text reason. Measured on
+ * 2026-09-02: 399 KB raw vs 19 KB without, 91% of it affectedRoutes — so only
+ * callers that archive or geolocate should ask, never a browser-facing proxy.
+ */
 export async function fetchLineStatusByModes(
   modes: readonly string[],
   appKey: string,
   timeoutMs: number = UPSTREAM_TIMEOUT_MS,
+  withDetail = false,
 ): Promise<TflResponse> {
-  return fetchTfl(`/Line/Mode/${modes.join(',')}/Status`, appKey, timeoutMs);
+  const params = withDetail ? { detail: 'true' } : undefined;
+  return fetchTfl(`/Line/Mode/${modes.join(',')}/Status`, appKey, timeoutMs, params);
 }
 
 /** Full stop point detail (zones, facilities, lines) — a large object. */
