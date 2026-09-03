@@ -1,6 +1,6 @@
 # Geolocating TfL disruption notices without an LLM
 
-> Status: **design complete, implementation not started** (2026-09-02). This is the
+> Status: **P0 implemented on branch `feat/disruptions-p0`, P1 not started** (2026-09-03). This is the
 > engineering record for the feature; the implementation contract is
 > [`DISRUPTION_GEOLOCATION_SPEC.md`](DISRUPTION_GEOLOCATION_SPEC.md) and the evidence base is
 > under [`disruption-geolocation/`](disruption-geolocation/). Numbers marked *measured* cite
@@ -133,6 +133,22 @@ Semantics that decide the design:
 - **`disruption.created`** is populated on planned works (stable identity across sentence
   edits) and absent on live incidents; `additionalInfo` carries replacement-bus text on 4/9
   planned statuses. Neither is archived yet.
+- **The date-window form filters by validity-period overlap, not by start date** (*measured*
+  2026-09-03, two independent probes). A District closure starting 2026-09-05T02:30Z was
+  returned for a window opening on 09-06 with its validity periods clipped to the window;
+  three strictly past two-day windows returned zero RealTime statuses while the Mode form
+  carried three live ones, so the window form is not a history API. Boundaries are
+  London-local midnights, the `to` date is exclusive, and `from == to` is a 400. A live
+  incident that began before `from` therefore stays in the body for as long as its rolling
+  period covers now. The recorder still shadow-compares every window body against the
+  no-detail Mode form and logs `tube-status: window-miss` if that ever fails to hold.
+- **TfL error bodies echo the app key.** Both the 404 for an unknown line id and the 400 for
+  `from == to` return `ApiError.relativeUri` with the full query string, key included
+  (*measured*). Nothing may forward or log an upstream error body verbatim.
+- **Severity 20 does not linger.** Over ten archived nights every tram *Service Closed* run
+  ended between 03:50 and 04:27 London, flipping to Good Service or a planned Part Closure;
+  across all lines the only runs alive after 06:00 were Waterloo & City on two mornings, by
+  at most 11 minutes (*measured*). A whole-line hatch for code 20 is literally true.
 - Why the production archive had never shown structured fields: production never asked for
   `detail=true`. Fixed by the recorder change in §12.
 
@@ -430,6 +446,14 @@ semantics with `to = today - 2`; the London date helper across the clock-change 
 and the proxy-route change kept separate because every TfL route goes through it and it has
 no tests today.
 
+**P0 status (2026-09-03).** Delivered on branch `feat/disruptions-p0` (recorder on the window
+form with a Mode-form fallback and a shadow comparison, shaping extracted to
+`backend/src/disruptions/tfl-status-shape.ts`, `londonDay()` in `backend/src/shared/`,
+`scripts/bake-route-patterns.mjs` with 20 validated pattern files and their loader) and on
+`feat/proxy-route-single-flight` (single-flight, 30 s back-off, `maxStaleMs`, `shape`, the
+first `proxy-route.test.ts`). Backend suite 158 → 223 tests on the first branch, 182 on the
+second. The one P0 done-criterion still open is the first archived production day.
+
 ## 12. Change log
 
 | Date | Change |
@@ -438,6 +462,11 @@ no tests today.
 | 2026-09-02 | Tube-status feed of `SnapshotRecorder` requests `?detail=true` and archives `c, ct, v, ar, as` alongside `s, d, r`. Older archive files remain byte-identical in shape. |
 | 2026-09-02 | After the adversarial review: whole-route stop lists (`e: true`) are archived without `st` (−30% per snapshot), and RealTime validity periods keep only their start, so the change-detection dedup survives TfL's rolling end times. 158/158 backend tests pass. The earlier claim that validity windows are stable is withdrawn. |
 | 2026-09-02 | Design complete: `DISRUPTION_GEOLOCATION_SPEC.md` (13 sections plus completeness critique); research under `disruption-geolocation/`; raw samples and prototypes in `~/bus-archive/disruption-research/2026-09-02/`. |
+| 2026-09-03 | P0 built by a 15-agent workflow: three implementers in isolated worktrees, a read-only probe agent, two reviewers per branch, a skeptic recomputing the bake from the raw files, one fix round each. Two HIGH findings fixed before merge: a thrown window fetch skipped the Mode-form fallback; an empty pattern file disabled Tier 1 silently. |
+| 2026-09-03 | Route patterns baked: 125 `orderedLineRoutes` over 20 lines, **0 dropped hops, 0 HUB ids in `naptanIds`** (HUB ids appear only in `stations[]`), 51 KB on disk, raw responses under `~/bus-archive/disruption-research/2026-09-03/route-sequence/`. Inbound patterns exist for every line and mirror outbound on 14; **dlr, elizabeth, metropolitan, mildmay, piccadilly and tram are asymmetric** (one-way loops at Heathrow T4 and Croydon, Metropolitan skip-stops, the co-located Clapham Junction pair). |
+| 2026-09-03 | Circle corrected: TfL's patterns are one 37-stop Hammersmith → Edgware Road → ring → Edgware Road run per direction in which only `940GZZLUERC` repeats; the "Aldgate 9/18, Victoria 19/8" shape in the spec's §5.4 describes `data/branches/circle.json`, not the patterns. Closest-pair still resolves Edgware Road; a new hazard is recorded for P1: *Edgware Road–Paddington* yields 2-stop slices to different co-located Paddington ids on either side of Edgware Road. |
+| 2026-09-03 | Spec §5.4 table re-pinned on the baked files: Metropolitan Harrow-on-the-Hill–Aldgate is 14 (15 only on the outbound Amersham pattern) and Baker Street–Harrow 6 (7 outbound only) because no inbound all-stations pattern exists; Piccadilly Acton Town–T4 is 10 inbound / 11 outbound; every other row reproduced exactly. |
+| 2026-09-03 | Window-form semantics, key echo in error bodies and severity-20 persistence measured (§3.1). `backend/package.json` engines aligned to the Node 22 runtime; `data/**/leaderboard/` ignored so the dev server's day archives never enter a commit. |
 
 ## 13. Risk-control checklist
 
@@ -464,18 +493,26 @@ no tests today.
 
 ## 14. Open questions and to-verify list
 
-- [ ] `orderedLineRoutes` for all 20 lines in both directions; only two outbound samples exist,
-      so every path count in the spec's table is provisional until the bake.
-- [ ] Whether Circle `orderedLineRoutes` repeat the endpoint the way the baked branches do
-      (the closest-pair rule's premise).
-- [ ] Window-form overlap semantics: does a live incident that began before `from` stay in
-      the body? Probe with `to = today - 2`.
-- [ ] Whether severity 20 persists after tram service resumes (answerable from the archive).
+- [x] `orderedLineRoutes` for all 20 lines in both directions: baked 2026-09-03, 125
+      patterns, 0 dropped hops, six asymmetric lines (§12).
+- [x] Circle `orderedLineRoutes` do **not** repeat the endpoint the way the branches do; only
+      Edgware Road repeats, and the closest-pair rule still holds for it (§12).
+- [x] Window-form semantics: overlap with validity periods, `to` exclusive, `from == to` a
+      400 (§3.1). The recorder's shadow comparison stands guard in production.
+- [x] Severity 20 never outlives the overnight closure on tram; the whole-line hatch is
+      literal (§3.1).
+- [ ] Recorder shadow comparison (`tube-status: window-miss`): remove, or put behind a flag,
+      after one clean week in production. It costs one 19 KB Mode-form fetch per poll.
+- [ ] P1: decide which concrete Paddington the §5.4 "Edgware Road–Paddington, 2 stops" row
+      means; on the real Circle pattern the two candidates end at different co-located ids.
+- [ ] P1: whether step 3 collapses Piccadilly Acton Town–T4 (10 inbound / 11 outbound) and
+      the Metropolitan 14/15 and 6/7 pairs into one section each.
 - [ ] Structured-field population on tram, DLR and the deep-tube lines during real incidents.
 - [ ] First archived production day: bytes per day and rows per day with `detail=true`.
 - [ ] `cf-cache-status` for the new route after deploy.
 - [ ] Real Darwin call rate in production against the ≈ 17/min headroom.
 - [ ] Whether the *"changes at X"* wording exists in TfL text (0 of 604 sentences).
 - [ ] Bus-stop gazetteer bake, if the stop-level bus tier is ever scheduled.
-- [ ] Node engines: `backend/package.json` pins ≥ 24 while `CLAUDE.md` and `nixpacks.toml`
-      say 22; unrelated to this feature, noted for the P0 documentation pass.
+- [x] Node engines: `backend/package.json` now says ≥ 22, matching `nixpacks.toml`
+      (2026-09-03). The ignored local `CLAUDE.md` still says there is no backend test suite
+      and no `npm test` script; its lines 17, 33 and 145 need refreshing by hand.

@@ -282,6 +282,11 @@ A PRIMARY sentence containing `between`/` - `/bare `to` that no rule consumes �
 
 ### 5.4 Line-graph path rule — route-pattern slices only
 
+> **P0 correction (2026-09-03):** the Circle shape described in step 1 below is
+> `data/branches/circle.json`, not TfL's `orderedLineRoutes`. See §13.1 rows 2 and 3 for the
+> measured shapes, the re-pinned Metropolitan and Piccadilly counts, and the co-located
+> Paddington hazard P1 must resolve before the pinned "2 stops" row can be trusted.
+
 Built once per line at boot: (i) `edges`: every consecutive `stops[i], stops[i+1]` pair across all branches with the first `(branchId, i)` that carries its polyline (*measured*: 25 lines; District 60 nodes / 59 edges is a tree; Circle 36/36, Central 49/49, Metropolitan 35/35, Piccadilly 53/53 one cycle each; Northern 52/53 two; Tram 39/40 two; DLR 45/47 three); (ii) `patterns`: `orderedLineRoutes` from `data/route-patterns/<line>.json`, each validated hop-by-hop against `edges` (dropped + logged otherwise). **A line without a valid pattern file has no Tier 1 geometry** (`disruptionsLinesWithoutPatterns` on `/health`). The synthesized design's fragment fallback is withdrawn: *measured D1*, fragments-only draws 413 sections / 340 items vs 560 / 386 on chain-joined fragments (every cross-fragment pair fails F3: Archway→High Barnet, Poplar→Bank, Edgware Road→Wimbledon, Hayes & Harlington→T4/T5, Leytonstone→Epping, Hammersmith→Baker Street, Highbury→West Croydon, Cockfosters→Uxbridge), and chain-joining is unsafe (Camden Town→Kennington via Bank 12 stops incl. Mornington Crescent vs 11 real; Colindale→Battersea Power Station via Charing Cross ambiguous 4/4 on chains vs a unique 20 on real; Morden→Camden Town via Bank 23 vs 22). Baking all 20 pattern files is a **hard P0 gate**.
 
 Why patterns and not graph search (*measured*): TfL splits each direction into fragments at every fork (`stopPointSequences`, baked as `branches`), and on the Northern line fragment 14 is `Euston > Mornington Crescent > Camden Town` (Charing Cross trains) while fragment 15 is `Euston > Camden Town` (Bank trains). Against `orderedLineRoutes` (sample 09b) "between Camden Town and Kennington via Bank" yields exactly one slice (11 stops), and *"Colindale–Battersea Power Station via Charing Cross"* (32 corpus occ) exactly one 20-stop slice (*measured D1* `probe-real.txt`).
@@ -694,6 +699,22 @@ Net effect on the fail-closed rule: five marks that could have been wrong are re
 | 18 | Node engines mismatch (`backend/package.json` `>= 24` vs CLAUDE.md Node 22 / `nixpacks.toml`) | noted, unrelated | P0 doc pass: confirm the Railway runtime version and align the docs |
 | 19 | `Battersea Power Station` id `940GZZBPSUST` on the Northern gazetteer after the suffix change | verified id in `data/stations/northern.json` (this session); behaviour **untested** | P1: gazetteer test row |
 | 20 | `LONDON_DATE` export from `leaderboard.ts:117` produces the same `YYYY-MM-DD` as TfL expects across the BST/GMT boundary | `en-CA` format verified in code; boundary **untested** | P0: unit test with `now` at 2026-10-25T00:30Z (BST end) and 2026-03-29T01:30Z |
+
+### 13.1 P0 measurements (2026-09-03)
+
+| # | Result |
+|---|---|
+| 1 | **Verified.** 125 patterns over 20 lines, 0 dropped hops, 0 HUB ids in `naptanIds` (HUB ids appear only in the same responses' `stations[]`); the loader and `route-patterns.test.ts` pin it. Inbound is the exact reverse of outbound on 14 lines; **dlr, elizabeth, metropolitan, mildmay, piccadilly and tram are asymmetric**, so the cross-direction collapse of step 3 is load-bearing, not theoretical. |
+| 2 | **Re-pinned on the baked files.** Metropolitan Harrow-on-the-Hill → Aldgate = 14 (15 only on the outbound *Amersham ↔ Aldgate* pattern, the only one calling at Willesden Green); Baker Street → Harrow = 6 (7 outbound only). Every other row reproduces. **Circle correction:** TfL's patterns are one 37-stop Hammersmith → Edgware Road → ring → Edgware Road run per direction; only `940GZZLUERC` repeats (inbound indices 0 and 27, outbound 9 and 36); Aldgate and Victoria appear once. *Edgware Road – Paddington* yields two 2-stop slices to **different** co-located Paddington ids (`940GZZLUPAC` on one side of Edgware Road, `940GZZLUPAH` on the other); under step 2(a) they are non-nested and fail closed. P1 must say which concrete Paddington the pinned "2 stops" row means. |
+| 3 | **Verified.** DLR Stratford International → Woolwich Arsenal 12, Canning Town → Stratford International 7. Piccadilly Acton Town → Heathrow T4 is **10 inbound / 11 outbound** (outbound passes Terminals 2 & 3 first); whether step 3 collapses them is a P1 test. |
+| 7 | **Verified: overlap semantics.** A window opening 2026-09-06 returned the District closure whose `fromDate` is 09-05T02:30Z with periods clipped to the window; three strictly past two-day windows returned 0 RealTime statuses while the Mode form carried 3 live ones. Boundaries are London midnights, `to` is exclusive, `from == to` is a 400. The recorder nevertheless shadows every window body against the no-detail Mode form and logs `tube-status: window-miss` (once per distinct miss set, `window-miss cleared` when it ends). That is an always-on 19 KB fetch per poll; remove it or flag it after a clean week. |
+| 11 | Unit-verified: 10 concurrent `inject` calls make 1 upstream call and 1 `tryConsume`; a rejected shared flight fails all 10 and arms the back-off once. The live curl and the `/health` counter belong to P2. |
+| 18 | `backend/package.json` engines set to `>=22` to match `nixpacks.toml`. The ignored local `CLAUDE.md` still claims there is no backend test suite. |
+| 20 | **Verified** by `backend/src/shared/london-date.test.ts` (2026-10-25T00:30Z → the 25th, 2026-03-29T01:30Z → the 29th). `LONDON_DATE` no longer exists in `leaderboard.ts`; every reference to it in §2.1, §3.1 and §12 now means `londonDay()` in `backend/src/shared/london-date.ts`. |
+| R16 | **Key echo confirmed:** both the 404 for an unknown line id and the 400 for `from == to` carry the app key in `ApiError.relativeUri`. |
+| §14.2 | **Severity 20:** on 10 archived nights every tram *Service Closed* run ended 03:50–04:27 London; across all lines only Waterloo & City outlived 06:00, by at most 11 minutes. The whole-line hatch for code 20 is literally true. |
+| §3.3 | **Sizes, 2026-09-03 evening:** window `today−1 .. today+7` 512 KB raw / 19.5 KB gzip; Mode form with detail 246 KB / 8 KB; the shadow Mode form without detail 18.6 KB raw. |
+| drift | Found by the implementers: §2.1 K and §8 say 155 existing tests (158 at the base, 223 after P0); §3.1's "else 429/502" for a back-off miss with no stale is 502 only; §13 #7's log line is `tube-status: window-miss` because every recorder line carries the feed label; the two shaping changes §14.4-1 calls uncommitted were already in the base commit. |
 
 ---
 
