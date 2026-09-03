@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { LeaderboardTracker, londonPeriodKeys, openBucketKeys } from './leaderboard';
+import { LeaderboardTracker, loadBranchData, londonPeriodKeys, openBucketKeys } from './leaderboard';
 
 describe('openBucketKeys', () => {
   const NOW = Date.UTC(2026, 8, 2, 9, 0);
@@ -121,5 +121,47 @@ describe('closed-day archiving', () => {
     } finally {
       lb.stop();
     }
+  });
+});
+
+describe('loadBranchData', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'branch-data-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  test('maps each manifest line to its TfL mode so callers can pick lines by mode', () => {
+    writeFileSync(
+      join(dataDir, 'manifest.json'),
+      JSON.stringify({
+        lines: [
+          { id: 'victoria', name: 'Victoria', mode: 'tube' },
+          { id: 'rb1', name: 'RB1', mode: 'river-bus' },
+          { id: 'legacy', name: 'No mode field' },
+        ],
+      }),
+    );
+
+    const data = loadBranchData(dataDir, () => {});
+
+    expect(data.lineIds).toEqual(['legacy', 'rb1', 'victoria']);
+    expect(data.lineModeById).toEqual(
+      new Map([
+        ['victoria', 'tube'],
+        ['rb1', 'river-bus'],
+      ]),
+    );
+  });
+
+  test('yields no lines and no modes when the manifest is unreadable', () => {
+    const data = loadBranchData(dataDir, () => {});
+
+    expect(data.lineIds).toEqual([]);
+    expect(data.lineModeById.size).toBe(0);
   });
 });

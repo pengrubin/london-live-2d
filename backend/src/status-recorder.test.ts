@@ -1,5 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { compactDisruptions, compactStatus, shouldWrite } from './status-recorder';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { loadBranchData } from './leaderboard';
+import {
+  compactDisruptions,
+  compactStatus,
+  makeTubeStatusFeed,
+  shouldWrite,
+  SnapshotRecorder,
+  STARTUP_DELAY_MS,
+  STATUS_MODES,
+  statusLineIds,
+} from './status-recorder';
 
 const GOOD_SERVICE = {
   id: 'victoria',
@@ -341,5 +355,296 @@ describe('compactStatus archive-size guards', () => {
       ]);
 
     expect(JSON.stringify(poll('2026-09-03T00:54:21Z'))).toBe(JSON.stringify(poll('2026-09-03T00:56:30Z')));
+  });
+});
+
+// --- dedup guard on the window form (spec §14.4 item 1) ---------------------
+
+describe('compactStatus dedup guard, two window-form polls 5 minutes apart', () => {
+  // One live suspension (RealTime, rolling toDate) and one planned closure
+  // (PlannedWork, fixed window), both with the structured fields the window
+  // form returns — the archive row a real poll produces.
+  const windowPoll = (realTimeToDate: string, plannedToDate: string) =>
+    compactStatus([
+      {
+        id: 'windrush',
+        lineStatuses: [
+          {
+            statusSeverity: 3,
+            statusSeverityDescription: 'Part Suspended',
+            reason: 'Windrush Line: No service between Clapham Junction and Surrey Quays.',
+            validityPeriods: [{ fromDate: '2026-09-02T21:03:01Z', toDate: realTimeToDate, isNow: true }],
+            disruption: {
+              category: 'RealTime',
+              closureText: 'partSuspended',
+              affectedRoutes: [
+                {
+                  id: '4',
+                  name: 'Highbury & Islington - Clapham Junction',
+                  isEntireRouteSection: true,
+                  routeSectionNaptanEntrySequence: [{ stopPoint: stop('910GHIGHBYA', 'Highbury & Islington') }],
+                },
+                {
+                  id: '5',
+                  isEntireRouteSection: false,
+                  routeSectionNaptanEntrySequence: [
+                    { stopPoint: stop('910GCLPHMJC', 'Clapham Junction') },
+                    { stopPoint: stop('910GWNDSWRD', 'Wandsworth Road') },
+                  ],
+                },
+              ],
+              affectedStops: [stop('910GCLPHMJC', 'Clapham Junction'), stop('910GSURREYQ', 'Surrey Quays')],
+            },
+          },
+        ],
+      },
+      {
+        id: 'district',
+        lineStatuses: [
+          {
+            statusSeverity: 5,
+            statusSeverityDescription: 'Part Closure',
+            reason: 'District Line: No service between Edgware Road and Wimbledon.',
+            validityPeriods: [{ fromDate: '2026-09-05T02:30:00Z', toDate: plannedToDate, isNow: false }],
+            disruption: {
+              category: 'PlannedWork',
+              closureText: 'partClosure',
+              affectedRoutes: [
+                {
+                  id: '9',
+                  isEntireRouteSection: false,
+                  routeSectionNaptanEntrySequence: [
+                    { stopPoint: stop('940GZZLUERC', 'Edgware Road') },
+                    { stopPoint: stop('940GZZLUPAC', 'Paddington') },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ]);
+
+  it('serializes identically when only the RealTime toDate rolled forward between the polls', () => {
+    const first = windowPoll('2026-09-03T00:54:21Z', '2026-09-07T00:29:00Z');
+    const fiveMinutesLater = windowPoll('2026-09-03T00:59:21Z', '2026-09-07T00:29:00Z');
+
+    expect(JSON.stringify(fiveMinutesLater)).toBe(JSON.stringify(first));
+  });
+
+  it('serializes differently when a PlannedWork toDate changed — an edit the archive must keep', () => {
+    const first = windowPoll('2026-09-03T00:54:21Z', '2026-09-07T00:29:00Z');
+    const fiveMinutesLater = windowPoll('2026-09-03T00:54:21Z', '2026-09-08T00:29:00Z');
+
+    expect(JSON.stringify(fiveMinutesLater)).not.toBe(JSON.stringify(first));
+  });
+});
+
+// --- tube-status feed on the window form (spec §2.1 A, §14.4 item 2) --------
+
+const DATA_DIR = fileURLToPath(new URL('../../data/', import.meta.url));
+
+/** The 20 rail lines of data/manifest.json, sorted as loadBranchData yields them. */
+const RAIL_LINE_IDS = [
+  'bakerloo',
+  'central',
+  'circle',
+  'district',
+  'dlr',
+  'elizabeth',
+  'hammersmith-city',
+  'jubilee',
+  'liberty',
+  'lioness',
+  'metropolitan',
+  'mildmay',
+  'northern',
+  'piccadilly',
+  'suffragette',
+  'tram',
+  'victoria',
+  'waterloo-city',
+  'weaver',
+  'windrush',
+];
+
+const MODE_PATH = `/Line/Mode/${STATUS_MODES.join(',')}/Status`;
+const windowPath = (from: string, to: string): string =>
+  `/Line/${RAIL_LINE_IDS.join(',')}/Status/${from}/to/${to}`;
+
+const WINDOW_BODY = [
+  {
+    id: 'district',
+    lineStatuses: [
+      {
+        statusSeverity: 5,
+        statusSeverityDescription: 'Part Closure',
+        reason: 'District Line: No service between Edgware Road and Wimbledon.',
+        validityPeriods: [{ fromDate: '2026-09-05T02:30:00Z', toDate: '2026-09-07T00:29:00Z', isNow: false }],
+        disruption: {
+          category: 'PlannedWork',
+          closureText: 'partClosure',
+          affectedRoutes: [
+            {
+              id: '9',
+              isEntireRouteSection: false,
+              routeSectionNaptanEntrySequence: [
+                { stopPoint: stop('940GZZLUERC', 'Edgware Road') },
+                { stopPoint: stop('940GZZLUPAC', 'Paddington') },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  },
+];
+
+const MODE_BODY = [{ id: 'victoria', lineStatuses: [{ statusSeverity: 10, statusSeverityDescription: 'Good Service' }] }];
+
+const NOT_FOUND = { status: 404, body: { httpStatusCode: 404, message: 'not found' } };
+
+/**
+ * Routes fetch by pathname. An unlisted path answers 404, so a wrong URL fails
+ * the test instead of passing by accident. Plain objects rather than Response
+ * keep the body read free of stream machinery under fake timers.
+ */
+function stubFetchByPath(routes: Record<string, { status: number; body: unknown }>): URL[] {
+  const urls: URL[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: URL | string) => {
+      const url = new URL(String(input));
+      urls.push(url);
+      const route = routes[url.pathname] ?? NOT_FOUND;
+      return { status: route.status, json: async () => route.body } as unknown as Response;
+    }),
+  );
+  return urls;
+}
+
+describe('makeTubeStatusFeed', () => {
+  const noLog = (): void => {};
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('keeps the feed identity the archive layout and the log lines depend on', () => {
+    const feed = makeTubeStatusFeed(RAIL_LINE_IDS);
+
+    expect(feed.label).toBe('tube-status');
+    expect(feed.subdir).toBe('tube-status');
+    expect(feed.payloadKey).toBe('lines');
+    expect(feed.pollMs).toBe(2 * 60_000);
+    expect(feed.heartbeatMs).toBe(30 * 60_000);
+    expect(feed.compact).toBe(compactStatus);
+  });
+
+  it('asks the window form for every rail line from yesterday to a week ahead, with detail', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-03T12:00:00Z'));
+    const expectedPath = windowPath('2026-09-02', '2026-09-10');
+    const urls = stubFetchByPath({ [expectedPath]: { status: 200, body: WINDOW_BODY } });
+    const logs: string[] = [];
+
+    const response = await makeTubeStatusFeed(RAIL_LINE_IDS).fetchSnapshot('test-key', (msg) => logs.push(msg));
+
+    expect(response).toEqual({ status: 200, body: WINDOW_BODY });
+    expect(urls).toHaveLength(1);
+    expect(urls[0]?.pathname).toBe(expectedPath);
+    expect(urls[0]?.searchParams.get('detail')).toBe('true');
+    expect(logs).toEqual([]);
+  });
+
+  it('bounds the window by the London calendar day, not the UTC one', async () => {
+    // 23:30Z on 15 July is already 16 July in London; a UTC slice would ask 07-14 → 07-22.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-15T23:30:00Z'));
+    const expectedPath = windowPath('2026-07-15', '2026-07-23');
+    const urls = stubFetchByPath({ [expectedPath]: { status: 200, body: WINDOW_BODY } });
+
+    await makeTubeStatusFeed(RAIL_LINE_IDS).fetchSnapshot('test-key', noLog);
+
+    expect(urls[0]?.pathname).toBe(expectedPath);
+  });
+
+  it('falls back once to the Mode form when the window form is refused, and logs the refusal', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-03T12:00:00Z'));
+    const urls = stubFetchByPath({ [MODE_PATH]: { status: 200, body: MODE_BODY } });
+    const logs: string[] = [];
+
+    const response = await makeTubeStatusFeed(RAIL_LINE_IDS).fetchSnapshot('test-key', (msg) => logs.push(msg));
+
+    expect(response).toEqual({ status: 200, body: MODE_BODY });
+    expect(urls.map((u) => u.pathname)).toEqual([windowPath('2026-09-02', '2026-09-10'), MODE_PATH]);
+    expect(urls[1]?.searchParams.get('detail')).toBe('true');
+    expect(logs).toEqual([`tube-status: window form returned 404, falling back to ${MODE_PATH}`]);
+  });
+
+  it("reaches the recorder's existing skip path when both forms fail, writing nothing", async () => {
+    vi.useFakeTimers();
+    stubFetchByPath({ [MODE_PATH]: { status: 503, body: { httpStatusCode: 503 } } });
+    const dir = await mkdtemp(join(tmpdir(), 'tube-status-test-'));
+    const logs: string[] = [];
+    const recorder = new SnapshotRecorder(dir, 'test-key', (msg) => logs.push(msg), makeTubeStatusFeed(RAIL_LINE_IDS));
+
+    try {
+      recorder.start();
+      await vi.advanceTimersByTimeAsync(STARTUP_DELAY_MS);
+
+      expect(logs).toEqual([
+        `tube-status: window form returned 404, falling back to ${MODE_PATH}`,
+        'tube-status: TfL returned 503, skipping snapshot',
+      ]);
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      recorder.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('compacts a window body into the same LineSnapshot shape the Mode form produced', () => {
+    const lines = makeTubeStatusFeed(RAIL_LINE_IDS).compact(WINDOW_BODY);
+
+    expect(lines).toEqual([
+      {
+        id: 'district',
+        st: [
+          {
+            s: 5,
+            d: 'Part Closure',
+            r: 'District Line: No service between Edgware Road and Wimbledon.',
+            v: [{ f: '2026-09-05T02:30:00Z', t: '2026-09-07T00:29:00Z' }],
+            c: 'PlannedWork',
+            ct: 'partClosure',
+            ar: [{ id: '9', e: false, st: ['940GZZLUERC', '940GZZLUPAC'] }],
+          },
+        ],
+      },
+    ]);
+  });
+});
+
+describe('statusLineIds', () => {
+  it('selects exactly the 20 rail lines of data/manifest.json — no cable car, no river bus', () => {
+    const branchData = loadBranchData(DATA_DIR, () => {});
+
+    const ids = statusLineIds(branchData.lineIds, branchData.lineModeById);
+
+    expect(ids).toEqual(RAIL_LINE_IDS);
+  });
+
+  it('drops a line whose mode is unknown rather than guessing', () => {
+    const modeById = new Map([
+      ['victoria', 'tube'],
+      ['rb1', 'river-bus'],
+    ]);
+
+    const ids = statusLineIds(['rb1', 'unlisted', 'victoria'], modeById);
+
+    expect(ids).toEqual(['victoria']);
   });
 });

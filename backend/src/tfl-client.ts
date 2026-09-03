@@ -69,6 +69,55 @@ export async function fetchLineStatusByModes(
   return fetchTfl(`/Line/Mode/${modes.join(',')}/Status`, appKey, timeoutMs, params);
 }
 
+/**
+ * Service status for explicit lines over a date window (YYYY-MM-DD, Europe/London
+ * days), always with detail. Unlike the Mode form this returns planned works days
+ * ahead with their affectedRoutes — the only TfL form that does. Measured
+ * 2026-09-02: all 20 rail lines incl. tram in one URL, 607 KB raw / 23 KB gzipped,
+ * ≈ 0.7 s (Node's fetch asks for gzip), so the default timeout holds; the Mode
+ * form of this path returns 404.
+ */
+export async function fetchLineStatusWindow(
+  lineIds: readonly string[],
+  fromDate: string,
+  toDate: string,
+  appKey: string,
+  timeoutMs: number = UPSTREAM_TIMEOUT_MS,
+): Promise<TflResponse> {
+  return fetchTfl(`/Line/${lineIds.join(',')}/Status/${fromDate}/to/${toDate}`, appKey, timeoutMs, {
+    detail: 'true',
+  });
+}
+
+/**
+ * Station-scoped disruptions (closures, lifts, "trains not stopping") for the
+ * given modes — an array keyed by atcoCode. Measured 2026-09-02: 46 KB raw.
+ */
+export async function fetchStopPointDisruptions(
+  modes: readonly string[],
+  appKey: string,
+  timeoutMs: number = UPSTREAM_TIMEOUT_MS,
+): Promise<TflResponse> {
+  return fetchTfl(`/StopPoint/Mode/${modes.join(',')}/Disruption`, appKey, timeoutMs);
+}
+
+/**
+ * /Line/Mode/bus/Status bodies measured 760 KB in 4.6 s on 2026-09-02 — over
+ * half the default upstream timeout, so this call gets its own.
+ */
+export const BUS_STATUS_TIMEOUT_MS = 20_000;
+
+/**
+ * Status of every bus route, without detail: the detail form is 10 MB and its
+ * affected routes are all whole routes (zero localisation value).
+ */
+export async function fetchBusLineStatus(
+  appKey: string,
+  timeoutMs: number = BUS_STATUS_TIMEOUT_MS,
+): Promise<TflResponse> {
+  return fetchTfl('/Line/Mode/bus/Status', appKey, timeoutMs);
+}
+
 /** Full stop point detail (zones, facilities, lines) — a large object. */
 export async function fetchStopDetail(
   naptanId: string,
