@@ -20,9 +20,17 @@ export class TtlCache<T> {
     return now - entry.storedAt < this.ttlMs ? entry.value : undefined;
   }
 
-  /** Returns the value regardless of age (for stale-serving fallbacks). */
-  getStale(key: string): T | undefined {
-    return this.entries.get(key)?.value;
+  /**
+   * Returns the value past its TTL (for stale-serving fallbacks). With
+   * `maxAgeMs` the entry is served only while younger than that bound — the
+   * same `<` boundary as `getFresh` — so a payload whose meaning decays (a
+   * lifted suspension) is never served hours old; absent, any age is served.
+   */
+  getStale(key: string, maxAgeMs?: number, now: number = Date.now()): T | undefined {
+    const entry = this.entries.get(key);
+    if (entry === undefined) return undefined;
+    if (maxAgeMs === undefined) return entry.value;
+    return now - entry.storedAt < maxAgeMs ? entry.value : undefined;
   }
 
   set(key: string, value: T, now: number = Date.now()): void {
