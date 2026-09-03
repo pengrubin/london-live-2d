@@ -41,6 +41,7 @@ export function buildCapabilities(
   config: AppConfig,
   bakedDataDir: string,
   busDataDir: string,
+  railLineIds: readonly string[],
 ): Capabilities {
   const { region } = config;
   const hasTfl = config.tflAppKey !== undefined;
@@ -65,6 +66,13 @@ export function buildCapabilities(
   // "can I draw the network" depend on holding one particular company's key.
   const hasTransitLines = existsSync(join(bakedDataDir, 'manifest.json'));
 
+  // The rail lines app.ts actually asks TfL about — the SAME list the
+  // disruptions route gates its own registration on. Deriving the flag from
+  // the manifest's mere existence would advertise a route that was never
+  // registered (a bus-only or empty manifest yields zero rail lines), and the
+  // frontend would poll a permanent 404 with nothing on the server saying so.
+  const hasRailLines = railLineIds.length > 0;
+
   // Live train dots are the part that genuinely needs the operator feed. Kept a
   // strict subset of transitLines so a deployment can never render moving
   // vehicles with no track beneath them.
@@ -86,6 +94,10 @@ export function buildCapabilities(
       transitLines: hasTransitLines,
       // Live vehicle dots inferred from operator arrival predictions.
       trainPositions: hasTrainPositions,
+      // Disruption sections and rings. Needs the operator feed for the notices
+      // AND the baked network to validate every id and hop against — with only
+      // one of the two there is nothing that could honestly be drawn.
+      disruptions: hasTfl && hasRailLines,
       // TfL Unified API extras.
       lineStatus: hasTfl,
       stopArrivals: hasTfl,
@@ -113,8 +125,9 @@ export function registerCapabilitiesRoute(
   config: AppConfig,
   bakedDataDir: string,
   busDataDir: string,
+  railLineIds: readonly string[],
 ): void {
-  let payload = buildCapabilities(config, bakedDataDir, busDataDir);
+  let payload = buildCapabilities(config, bakedDataDir, busDataDir, railLineIds);
   app.get('/api/capabilities', async () => {
     // busCoverage and busDiversions are the two flags that can flip mid-
     // process on a fresh volume, days after boot: coverage when the writer's

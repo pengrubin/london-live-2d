@@ -51,6 +51,8 @@ import { registerBusRoutesRoute } from './routes/bus-routes';
 import { registerCoverageRoute } from './routes/coverage';
 import { registerDataExportRoute } from './routes/data-export';
 import { registerDiversionsRoute } from './routes/diversions';
+import { DISRUPTIONS_TTL_MS, registerDisruptionsRoute } from './routes/disruptions';
+import { buildHopIndex } from './disruptions/line-graph';
 import { registerShipPhotoRoute } from './routes/ship-photo';
 
 /** Repo layout anchors — data/ and scripts/ sit beside backend/. */
@@ -206,6 +208,9 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   // recorder below and the leaderboard further down — loaded once, here.
   const log = (msg: string): void => app.log.info(msg);
   const branchData = loadBranchData(DATA_DIR, log);
+  // The manifest's rail lines, shared by the status archive and the disruption
+  // map: both ask TfL about exactly the lines this deployment has geometry for.
+  const railLineIds = statusLineIds(branchData.lineIds, branchData.lineModeById);
 
   // Permanent archives of TfL feeds with no historical endpoint (line status
   // + road disruptions) — kept from the day this ships. A few MB per year;
@@ -213,7 +218,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   // bus diversion detection. The status window names its lines explicitly:
   // the manifest's rail lines, never the cable car or the river buses.
   if (config.tflAppKey) {
-    const tubeStatusFeed = makeTubeStatusFeed(statusLineIds(branchData.lineIds, branchData.lineModeById));
+    const tubeStatusFeed = makeTubeStatusFeed(railLineIds);
     for (const feed of [tubeStatusFeed, ROAD_DISRUPTIONS_FEED]) {
       const recorder = new SnapshotRecorder(busDataDir, config.tflAppKey, log, feed);
       recorder.start();
@@ -252,9 +257,11 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const crowdingCache = new TtlCache<unknown>(CROWDING_TTL_MS);
   const liftDisruptionsCache = new TtlCache<unknown>(LIFT_DISRUPTIONS_TTL_MS);
   const bikePointsCache = new TtlCache<unknown>(BIKE_POINTS_TTL_MS);
+  // One entry forever: /api/disruptions has no query parameters by design.
+  const disruptionsCache = new TtlCache<unknown>(DISRUPTIONS_TTL_MS);
   const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
 
-  registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir);
+  registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir, railLineIds);
   registerArrivalsRoute(app, { config, cache: arrivalsCache, budget: tflBudget });
   registerStopArrivalsRoute(app, { config, cache: stopArrivalsCache, budget: tflBudget });
   registerVehicleArrivalsRoute(app, { config, cache: vehicleArrivalsCache, budget: tflBudget });
@@ -263,6 +270,20 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   registerCrowdingRoute(app, { config, cache: crowdingCache, budget: tflBudget });
   registerLiftDisruptionsRoute(app, { config, cache: liftDisruptionsCache, budget: tflBudget });
   registerBikePointsRoute(app, { config, cache: bikePointsCache, budget: tflBudget });
+  // Structured disruption geometry: TfL's own NaPTAN ids, validated against the
+  // baked branches. Nothing here reads a sentence for a location.
+  const disruptionCounters = registerDisruptionsRoute(
+    app,
+    { config, cache: disruptionsCache, budget: tflBudget },
+    {
+      lineIds: railLineIds,
+      resolve: {
+        hops: buildHopIndex(branchData.branchesByLine),
+        modeById: branchData.lineModeById,
+        log,
+      },
+    },
+  );
 
   // ── vehicle distance leaderboard ──
   // Tube positions come from the SAME arrivals cache + TfL budget as
@@ -319,6 +340,8 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     cacheCrowding: crowdingCache.size,
     cacheLiftDisruptions: liftDisruptionsCache.size,
     cacheBikePoints: bikePointsCache.size,
+    cacheDisruptions: disruptionsCache.size,
+    ...disruptionCounters(),
   }));
   app.addHook('onClose', () => leaderboard.stop());
   registerLeaderboardRoute(app, leaderboard);

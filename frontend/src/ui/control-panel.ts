@@ -13,6 +13,13 @@ import { addAbout } from './about';
 import { addLeaderboard, type VehicleLocator } from './leaderboard';
 import { addBusFilter } from './bus-filter';
 import { addLegend, type LegendLine, type OverlayToggle } from './legend';
+import {
+  disruptionsConnectionLost,
+  disruptionsExpired,
+  onDisruptionsUpdate,
+  serviceStripRows,
+  STALE_SUFFIX,
+} from '../layers/disruptions';
 import { hasLayer } from '../region';
 
 // Phones (portrait) start the panel collapsed so the map stays visible; tapping
@@ -87,7 +94,12 @@ export function addControlPanel(
   const filterSection = sectionByKey.get('filter');
   if (filterSection) addBusFilter(filterSection, map);
   const linesSection = sectionByKey.get('lines');
-  if (linesSection) addLegend(linesSection, map, lines, overlays);
+  if (linesSection) {
+    // Above the legend: line-scope disruptions draw nothing on the map by
+    // design, so this strip is their only path to a phone screen.
+    if (hasLayer('disruptions')) addServiceStrip(linesSection);
+    addLegend(linesSection, map, lines, overlays);
+  }
   const aboutSection = sectionByKey.get('about');
   if (aboutSection) addAbout(aboutSection);
 
@@ -105,4 +117,55 @@ export function addControlPanel(
 
   panel.append(header, tabStrip, cpBody);
   map.getContainer().append(panel);
+}
+
+/**
+ * Compact Service strip: one row per item TfL localised to no place at all.
+ * Every string is written with textContent and every attribute set as a DOM
+ * property — the escape helpers here do not escape apostrophes.
+ */
+function addServiceStrip(container: HTMLElement): void {
+  const strip = document.createElement('div');
+  strip.className = 'svc-strip';
+  strip.hidden = true;
+  container.append(strip);
+
+  function paint(): void {
+    strip.replaceChildren();
+    strip.hidden = false;
+    if (disruptionsExpired()) {
+      const row = document.createElement('div');
+      row.className = 'svc-row svc-dim';
+      // An outage and a genuine all-clear must never read the same.
+      row.textContent = disruptionsConnectionLost()
+        ? 'Disruption data unavailable'
+        : 'No current disruption data';
+      strip.append(row);
+      return;
+    }
+    const rows = serviceStripRows();
+    strip.hidden = rows.length === 0;
+    for (const item of rows) {
+      const row = document.createElement('div');
+      row.className = item.stale ? 'svc-row svc-dim' : 'svc-row';
+      row.title = item.reason;
+      const swatch = document.createElement('span');
+      swatch.className = 'legend-swatch';
+      swatch.style.background = item.color;
+      const label = document.createElement('span');
+      label.className = 'svc-label';
+      label.textContent = `${item.lineName}: ${item.text}`;
+      const when = document.createElement('span');
+      when.className = 'svc-when';
+      // The map has already greyed this item's bands; say so here too.
+      when.textContent = item.stale ? `${item.when}${STALE_SUFFIX}` : item.when;
+      row.append(swatch, label, when);
+      strip.append(row);
+    }
+  }
+
+  // The layer publishes its first snapshot before the panel mounts, so paint
+  // once now rather than waiting up to a minute for the next tick.
+  paint();
+  onDisruptionsUpdate(paint);
 }

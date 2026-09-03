@@ -5,8 +5,23 @@
 
 import type { Map as MaplibreMap, FilterSpecification } from 'maplibre-gl';
 import { isMobile, isPowerSaver, onPowerSaverChange, setPowerSaver } from '../util/lifecycle';
+import { linePip, onDisruptionsUpdate } from '../layers/disruptions';
 
-const FILTERED_LAYERS = ['transit-lines-casing', 'transit-lines-line', 'trains-dots'];
+// Hiding a line hides its disruption bands and rings too. Ids are spelled out
+// rather than imported so this list stays a plain string table, as it was for
+// the transit layers — and because applyFilter REPLACES a layer's filter, none
+// of these layers may carry a filter of its own.
+const FILTERED_LAYERS = [
+  'transit-lines-casing',
+  'transit-lines-line',
+  'trains-dots',
+  'disruptions-wash',
+  'disruptions-core',
+  'disruptions-hatch',
+  'disruptions-stations-ring',
+  'disruptions-planned',
+  'disruptions-stations-planned',
+];
 
 export interface LegendLine {
   id: string;
@@ -63,6 +78,7 @@ export function addLegend(
   // Every line row and every overlay row, so Select all / Unselect all can flip
   // them in one pass.
   const lineRows: { id: string; row: HTMLElement }[] = [];
+  const pips: { id: string; pip: HTMLElement }[] = [];
   const overlayRows: { overlay: OverlayToggle; row: HTMLElement }[] = [];
 
   /** Toggle one overlay's row state + its map layers (or its custom handler). */
@@ -132,7 +148,15 @@ export function addLegend(
     swatch.style.background = line.displayColor ?? line.color;
     const label = document.createElement('span');
     label.textContent = line.name;
-    row.append(swatch, label);
+    // Disruption pip: the only trace a line-scope item leaves outside the
+    // Lines tab. Colour says the worst class on this line, blue says the only
+    // items are planned works.
+    const pip = document.createElement('span');
+    pip.className = 'legend-pip';
+    pip.hidden = true;
+    paintPip(pip, line.id);
+    pips.push({ id: line.id, pip });
+    row.append(swatch, label, pip);
     row.addEventListener('click', () => {
       if (hidden.has(line.id)) hidden.delete(line.id);
       else hidden.add(line.id);
@@ -167,7 +191,22 @@ export function addLegend(
     }
   }
 
+  onDisruptionsUpdate(() => {
+    for (const entry of pips) paintPip(entry.pip, entry.id);
+  });
+
   addBatterySaver(body);
+}
+
+/** `title` and colour are set as DOM properties: the escape helpers in this
+ * codebase leave `'` alone, so no upstream string is ever interpolated into
+ * markup. */
+function paintPip(pip: HTMLElement, lineId: string): void {
+  const state = linePip(lineId);
+  pip.hidden = state === null;
+  if (!state) return;
+  pip.style.background = state.color;
+  pip.title = state.title;
 }
 
 /**

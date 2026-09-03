@@ -33,7 +33,9 @@ const CASING_COLOR: ExpressionSpecification = [
 ];
 const LINE_OPACITY = 1;
 // Zoom → width ramps (px). Casing stays ~2px wider than the coloured line.
-const LINE_WIDTH_RAMP: ExpressionSpecification = [
+// Exported: the disruption bands reuse the network's own width and offset
+// ramps so a band sits on its line's corridor, not beside it.
+export const LINE_WIDTH_RAMP: ExpressionSpecification = [
   'interpolate',
   ['exponential', 1.4],
   ['zoom'],
@@ -82,7 +84,7 @@ const OFFSET_BY_LINE: ExpressionSpecification = [
   -4.5,
   0,
 ];
-const LINE_OFFSET_RAMP: ExpressionSpecification = [
+export const LINE_OFFSET_RAMP: ExpressionSpecification = [
   'interpolate',
   ['linear'],
   ['zoom'],
