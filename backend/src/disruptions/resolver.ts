@@ -87,6 +87,14 @@ export interface ResolveContext {
 const GOOD_SEVERITIES: ReadonlySet<number> = new Set([10, 18]);
 /** Severities that are line-wide by definition: Closed, Suspended, Service Closed. */
 const WHOLE_LINE_SEVERITIES: ReadonlySet<number> = new Set([1, 2, 20]);
+/** Planned Closure — the ONE severity for which "every route entire" is line-wide (§4). */
+const PLANNED_CLOSURE_SEVERITY = 4;
+/**
+ * Share of a line's baked stops that `affectedStops` must cover before a
+ * closure with no drawable slice is treated as the whole line (§4). Windrush's
+ * Planned Closure listed 29 of 29.
+ */
+const WHOLE_LINE_STOP_COVERAGE = 0.9;
 
 /**
  * TfL's /Line/Meta/Severity table (0..20, measured 2026-09-02), the ONLY input
@@ -271,26 +279,59 @@ interface PointsResult {
   readonly dropped: number;
 }
 
-/** `affectedStops` ids the line actually calls at; the rest are counted and dropped. */
+/**
+ * `affectedStops` ids the line actually calls at. A refused id is logged the
+ * same way a refused route entry is: a silent tally cannot tell an operator
+ * WHICH id drifted, and a thinning ring set is otherwise invisible (§5.1-c).
+ */
 function resolvePoints(lineId: string, entry: LineStatusEntry, ctx: ResolveContext): PointsResult {
-  const ids = entry.as ?? [];
-  const kept = ids.filter((id) => isLineStop(ctx.hops, lineId, id));
-  return {
-    points: kept.map((id) => ({ id, role: 'stop' })),
-    dropped: ids.length - kept.length,
-  };
+  const points: DisruptionPoint[] = [];
+  let dropped = 0;
+  for (const id of entry.as ?? []) {
+    if (!isLineStop(ctx.hops, lineId, id)) {
+      dropped += 1;
+      ctx.log(`disruptions: bake-drift line=${lineId} stop=${id} is not a stop of the line`);
+      continue;
+    }
+    points.push({ id, role: 'stop' });
+  }
+  return { points, dropped };
+}
+
+/** Whether `as` names all but a tenth of the stops the line is baked with. */
+function coversWholeLine(lineId: string, ids: readonly string[], hops: HopIndex): boolean {
+  const stops = hops.stopsByLine.get(lineId);
+  if (stops === undefined || stops.size === 0) return false;
+  const onLine = new Set(ids.filter((id) => stops.has(id)));
+  return onLine.size >= stops.size * WHOLE_LINE_STOP_COVERAGE;
 }
 
 /**
- * Whole line when the severity says the line is closed outright, or when every
- * route TfL attached is an ENTIRE route section — a status about the line as a
- * whole. An absent or empty `ar` is not evidence of either: it is the ordinary
- * shape of a status with no structured field, which must fall back to text.
+ * The §4 whole-line rule, and no wider. A hatch over every hop of a line is the
+ * broadest claim this feature can make, so all three routes to it require the
+ * CLOSED class first: TfL routinely attaches its whole route list to a Minor
+ * Delays status (measured 2026-09-03: Central sent 26 entire routes under
+ * "Minor delays due to train cancellations"), and hatching the Central line for
+ * that would say something TfL did not. Such a status keeps its sentence and
+ * draws nothing, which is the fail-closed outcome.
+ *
+ * An absent or empty `ar` is never evidence: it is the ordinary shape of a
+ * status with no structured field at all.
  */
-function isWholeLine(entry: LineStatusEntry): boolean {
+function isWholeLine(
+  lineId: string,
+  entry: LineStatusEntry,
+  k: RenderClass,
+  sections: readonly DisruptionSection[],
+  hops: HopIndex,
+): boolean {
+  if (k !== 'closed') return false;
   if (WHOLE_LINE_SEVERITIES.has(entry.s)) return true;
   const routes = entry.ar ?? [];
-  return routes.length > 0 && routes.every((route) => route.e === true);
+  if (entry.s === PLANNED_CLOSURE_SEVERITY && routes.length > 0 && routes.every((r) => r.e === true)) {
+    return true;
+  }
+  return sections.length === 0 && coversWholeLine(lineId, entry.as ?? [], hops);
 }
 
 interface StatusResolution {
@@ -307,9 +348,11 @@ const EMPTY_RESOLUTION = { sections: [], points: [], sectionsDropped: 0, stopsDr
 
 function resolveStatus(lineId: string, entry: LineStatusEntry, ctx: ResolveContext): StatusResolution {
   const k = renderClass(entry.s);
-  // A hatched line carries no sections and no rings: the whole line is the mark.
-  if (isWholeLine(entry)) return { entry, k, wholeLine: true, ...EMPTY_RESOLUTION };
   const sections = resolveSections(lineId, entry, k, ctx);
+  // A hatched line carries no sections and no rings: the whole line is the mark.
+  if (isWholeLine(lineId, entry, k, sections.sections, ctx.hops)) {
+    return { entry, k, wholeLine: true, ...EMPTY_RESOLUTION, sectionsDropped: sections.dropped };
+  }
   const points = resolvePoints(lineId, entry, ctx);
   return {
     entry,

@@ -76,6 +76,32 @@ const UPSTREAM_BODY = [
 
 const branchData = loadBranchData(DATA_DIR, () => {});
 
+/** Bank — a real station, on the Central/Northern/W&C rings but not District. */
+const NOT_ON_DISTRICT = '940GZZLUBNK';
+
+/** The same District status with one extra id appended to affectedStops. */
+const withStopAdded = (naptanId: string): unknown[] => [
+  {
+    id: 'district',
+    lineStatuses: [
+      {
+        statusSeverity: 5,
+        statusSeverityDescription: 'Part Closure',
+        reason: 'District Line: Saturday 5 September, no service between Earl’s Court and West Brompton.',
+        disruption: {
+          category: 'PlannedWork',
+          affectedStops: [
+            stopPoint(EARLS_COURT),
+            stopPoint(WEST_BROMPTON),
+            stopPoint(ALDGATE_EAST),
+            stopPoint(naptanId),
+          ],
+        },
+      },
+    ],
+  },
+];
+
 interface Harness {
   readonly app: FastifyInstance;
   readonly fetchWindow: ReturnType<typeof vi.fn>;
@@ -207,9 +233,40 @@ describe('GET /api/disruptions payload contract', () => {
     expect(h.counters()).toEqual({
       disruptionsItems: 1,
       disruptionsSections: 1,
+      disruptionsStops: 3,
       disruptionsSectionsDropped: 0,
+      disruptionsStopsDropped: 0,
+      disruptionsLinesDropped: 0,
       disruptionsLastParseMs: 0,
     });
+  });
+
+  it('counts an affectedStops id the line does not call at, so a thinning ring set is visible', async () => {
+    // Arrange — Bank is a real NaPTAN id, but not a District stop.
+    const body = withStopAdded(NOT_ON_DISTRICT);
+    const h = harness([ok(body)]);
+
+    // Act
+    await h.get();
+
+    // Assert — the three on-line stops become rings, the fourth is refused.
+    expect(h.counters()).toMatchObject({ disruptionsStops: 3, disruptionsStopsDropped: 1 });
+  });
+
+  it('counts a line whose statuses TfL sent unreadably, instead of calling it Good Service', async () => {
+    // Arrange — victoria's only status has no numeric statusSeverity, so the
+    // whole line drops out of a body that otherwise parses fine.
+    const body: unknown[] = [
+      ...UPSTREAM_BODY.slice(0, 1),
+      { id: 'victoria', lineStatuses: [{ statusSeverityDescription: 'Good Service' }] },
+    ];
+    const h = harness([ok(body)]);
+
+    // Act
+    await h.get();
+
+    // Assert — two drops: the status entry, then the line left with none.
+    expect(h.counters()).toMatchObject({ disruptionsItems: 1, disruptionsLinesDropped: 2 });
   });
 });
 

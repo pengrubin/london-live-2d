@@ -125,29 +125,72 @@ describe('resolveSnapshot on the real 2026-09-03 snapshot', () => {
     expect(district).toMatchObject({ k: 'closed', sc: 'section', src: 's', wl: 0, c: 'P', n: 0 });
   });
 
-  it('makes the Central minor delays whole-line with no geometry at all', () => {
-    // Arrange — 10 affectedRoutes, every one isEntireRouteSection: true.
+  it('leaves the Central minor delays at line scope, drawing nothing at all', () => {
+    // Arrange — 10 affectedRoutes, every one isEntireRouteSection: true. TfL
+    // attaches its whole route list to routine Minor Delays, so "every route
+    // entire" is NOT evidence of a line-wide closure: §4 gates every route to
+    // `wl` behind the CLOSED class, and §8.1 pins minor delays at `sc: line`.
+    // Hatching the Central line for train cancellations would over-claim.
     // Act
     const { items } = resolveSnapshot(FIXTURE.lines, realCtx());
     const central = item(items, 'central', 9);
 
     // Assert
-    expect(central).toMatchObject({ wl: 1, k: 'minor', sc: 'section', src: 's', n: 1 });
+    expect(central).toMatchObject({ wl: 0, k: 'minor', sc: 'line', src: 'f', n: 1 });
     expect(central.sec).toEqual([]);
     expect(central.pts).toEqual([]);
+    // The sentence still travels — as text, which is the whole fallback.
+    expect(central.r).toContain('Minor delays');
   });
 
   it('makes the Waterloo & City weekend closure whole-line (spec §8.1)', () => {
-    // Two affectedRoutes, both entire — the same structured evidence as
-    // Central, so it hatches the line rather than falling back to text.
-    // (The task brief called this one a fallback item; the spec's own test
-    // table pins `wl: 1`, and its `ar` really is all-entire, so wl it is.)
+    // Two affectedRoutes, both entire, AND severity 4 (Planned Closure) —
+    // the two conjuncts §4 requires. Central has the same all-entire route
+    // list but severity 9, which is exactly why the class gate exists.
     const { items } = resolveSnapshot(FIXTURE.lines, realCtx());
     const wc = item(items, 'waterloo-city', 4);
 
     expect(wc).toMatchObject({ wl: 1, k: 'closed', src: 's', c: 'I' });
     expect(wc.sec).toEqual([]);
     expect(wc.pts).toEqual([]);
+  });
+
+  it('hatches a closure whose affectedStops cover the line but whose slices drew nothing', () => {
+    // Arrange — §4's third route to `wl`: a closed status with no drawable
+    // section whose `as` names all but a tenth of the line's baked stops.
+    const stops = [...(realCtx().hops.stopsByLine.get('waterloo-city') ?? [])];
+    const snapshot = [
+      {
+        id: 'waterloo-city',
+        st: [{ s: 3, d: 'Part Suspended', r: 'Waterloo & City line: no service.', as: stops }],
+      },
+    ];
+
+    // Act
+    const { items } = resolveSnapshot(snapshot, realCtx());
+
+    // Assert
+    expect(items[0]).toMatchObject({ wl: 1, k: 'closed', sc: 'section' });
+    expect(items[0]?.pts).toEqual([]);
+  });
+
+  it('does NOT hatch a line-wide stop list when the severity is not a closure', () => {
+    // Arrange — the same full stop list under Minor Delays. A rider must not
+    // see the whole line hatched because TfL listed every station.
+    const stops = [...(realCtx().hops.stopsByLine.get('waterloo-city') ?? [])];
+    const snapshot = [
+      {
+        id: 'waterloo-city',
+        st: [{ s: 9, d: 'Minor Delays', r: 'Waterloo & City line: minor delays.', as: stops }],
+      },
+    ];
+
+    // Act
+    const { items } = resolveSnapshot(snapshot, realCtx());
+
+    // Assert — rings at the stops TfL named, and no whole-line claim.
+    expect(items[0]).toMatchObject({ wl: 0, k: 'minor', sc: 'station' });
+    expect(items[0]?.pts.length).toBe(stops.length);
   });
 
   it('validates every structured id and hop TfL sent — nothing is dropped', () => {
@@ -226,6 +269,17 @@ describe('structured section validation', () => {
 
     expect(items[0]?.pts).toEqual([{ id: 'C', role: 'stop' }]);
     expect(stats.stopsDropped).toBe(1);
+  });
+
+  it('names the refused stop in the log, so a drift is diagnosable without a repro', () => {
+    // Arrange
+    const logs: string[] = [];
+
+    // Act
+    resolveSnapshot(sectioned(['A', 'B'], ['C', 'Z']), syntheticCtx((m) => logs.push(m)));
+
+    // Assert
+    expect(logs.join('\n')).toContain('bake-drift line=testline stop=Z');
   });
 
   it('collapses an inbound/outbound pair of the same slice into one both-ways section', () => {

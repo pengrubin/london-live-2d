@@ -1,0 +1,765 @@
+{
+ "t": 1788467422,
+ "w": [
+  "2026-09-02",
+  "2026-09-10"
+ ],
+ "pf": 0,
+ "items": [
+  {
+   "id": "central:c0c711de:minorDelays",
+   "l": "central",
+   "m": "tube",
+   "s": 9,
+   "d": "Minor Delays",
+   "k": "minor",
+   "c": "R",
+   "n": 1,
+   "v": [
+    {
+     "f": "2026-09-03T19:07:54Z"
+    }
+   ],
+   "sc": "line",
+   "src": "f",
+   "wl": 0,
+   "sec": [],
+   "pts": [],
+   "r": "Central Line: Minor delays due to train cancellations."
+  },
+  {
+   "id": "district:9afcac98:partClosure",
+   "l": "district",
+   "m": "tube",
+   "s": 5,
+   "d": "Part Closure",
+   "k": "closed",
+   "c": "P",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-05T02:30:00Z",
+     "t": "2026-09-07T00:29:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 0,
+   "sec": [
+    {
+     "st": [
+      "940GZZLUECT",
+      "940GZZLUWBN",
+      "940GZZLUFBY",
+      "940GZZLUPSG",
+      "940GZZLUPYB",
+      "940GZZLUEPY",
+      "940GZZLUSFS",
+      "940GZZLUWIP",
+      "940GZZLUWIM"
+     ],
+     "k": "closed",
+     "dir": "b"
+    },
+    {
+     "st": [
+      "940GZZLUERC",
+      "940GZZLUPAC",
+      "940GZZLUBWT",
+      "940GZZLUNHG",
+      "940GZZLUHSK",
+      "940GZZLUECT"
+     ],
+     "k": "closed",
+     "dir": "b"
+    }
+   ],
+   "pts": [
+    {
+     "id": "940GZZLUECT",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUEPY",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUFBY",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUPSG",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUPYB",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUSFS",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUWBN",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUWIM",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUWIP",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUBWT",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUERC",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUHSK",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUNHG",
+     "role": "stop"
+    },
+    {
+     "id": "940GZZLUPAC",
+     "role": "stop"
+    }
+   ],
+   "r": "District Line: Saturday 5 and Sunday 6 September, no service between Edgware Road and Wimbledon. Rail Replacement bus services will operate. If travelling to/from Fulham vs Crystal Palace on Saturday, it may be easier to walk to/from Hammersmith."
+  },
+  {
+   "id": "elizabeth:b75972b8:partClosure",
+   "l": "elizabeth",
+   "m": "elizabeth-line",
+   "s": 5,
+   "d": "Part Closure",
+   "k": "closed",
+   "c": "P",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-06T03:30:00Z",
+     "t": "2026-09-06T06:45:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 0,
+   "sec": [
+    {
+     "st": [
+      "910GEALINGB",
+      "910GACTONML",
+      "910GPADTLL"
+     ],
+     "k": "closed",
+     "dir": "b"
+    },
+    {
+     "st": [
+      "910GEALINGB",
+      "910GACTONML",
+      "910GPADTON"
+     ],
+     "k": "closed",
+     "dir": "b"
+    }
+   ],
+   "pts": [
+    {
+     "id": "910GACTONML",
+     "role": "stop"
+    },
+    {
+     "id": "910GEALINGB",
+     "role": "stop"
+    },
+    {
+     "id": "910GPADTLL",
+     "role": "stop"
+    },
+    {
+     "id": "910GPADTON",
+     "role": "stop"
+    }
+   ],
+   "r": "ELIZABETH LINE: Sunday 6 September, until 0745, no service between Paddington and Ealing Broadway."
+  },
+  {
+   "id": "elizabeth:d262e2f3:severeDelays",
+   "l": "elizabeth",
+   "m": "elizabeth-line",
+   "s": 6,
+   "d": "Severe Delays",
+   "k": "severe",
+   "c": "R",
+   "n": 1,
+   "v": [
+    {
+     "f": "2026-09-03T16:11:41Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 0,
+   "sec": [
+    {
+     "st": [
+      "910GHTRWAPT",
+      "910GHAYESAH"
+     ],
+     "k": "severe",
+     "dir": "b"
+    },
+    {
+     "st": [
+      "910GHTRWTM5",
+      "910GHTRWAPT",
+      "910GHAYESAH"
+     ],
+     "k": "severe",
+     "dir": "b"
+    }
+   ],
+   "pts": [
+    {
+     "id": "910GHAYESAH",
+     "role": "stop"
+    },
+    {
+     "id": "910GHTRWAPT",
+     "role": "stop"
+    },
+    {
+     "id": "910GHTRWTM5",
+     "role": "stop"
+    }
+   ],
+   "r": "Severe delays between Hayes & Harlington and Heathrow Terminal 5 while we fix a signal system failure at Heathrow Terminal 5. Tickets are being accepted on London Underground and London Buses. Customers are advised to use the Piccadilly line or Heathrow Express to travel to Heathrow Terminal 5. GOOD SERVICE on the rest of the line."
+  },
+  {
+   "id": "suffragette:4276230a:partClosure",
+   "l": "suffragette",
+   "m": "overground",
+   "s": 5,
+   "d": "Part Closure",
+   "k": "closed",
+   "c": "P",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-06T03:30:00Z",
+     "t": "2026-09-07T00:29:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 0,
+   "sec": [
+    {
+     "st": [
+      "910GWDGRNPK",
+      "910GWNSTDPK",
+      "910GLYTNSHR",
+      "910GLEYTNMR",
+      "910GWLTHQRD",
+      "910GBLCHSRD",
+      "910GSTOTNHM",
+      "910GHRGYGL",
+      "910GCROUCHH",
+      "910GUPRHLWY",
+      "910GGOSPLOK"
+     ],
+     "k": "closed",
+     "dir": "b"
+    }
+   ],
+   "pts": [
+    {
+     "id": "910GBLCHSRD",
+     "role": "stop"
+    },
+    {
+     "id": "910GCROUCHH",
+     "role": "stop"
+    },
+    {
+     "id": "910GGOSPLOK",
+     "role": "stop"
+    },
+    {
+     "id": "910GHRGYGL",
+     "role": "stop"
+    },
+    {
+     "id": "910GLEYTNMR",
+     "role": "stop"
+    },
+    {
+     "id": "910GLYTNSHR",
+     "role": "stop"
+    },
+    {
+     "id": "910GSTOTNHM",
+     "role": "stop"
+    },
+    {
+     "id": "910GUPRHLWY",
+     "role": "stop"
+    },
+    {
+     "id": "910GWDGRNPK",
+     "role": "stop"
+    },
+    {
+     "id": "910GWLTHQRD",
+     "role": "stop"
+    },
+    {
+     "id": "910GWNSTDPK",
+     "role": "stop"
+    }
+   ],
+   "r": "SUFFRAGETTE LINE: Sunday 6 September, no service between Gospel Oak and Woodgrange Park. Use VICTORIA LINE connections between Seven Sisters (for South Tottenham), Blackhorse Road and Walthamstow Central (for Walthamstow Queens Road). Replacement buses operate."
+  },
+  {
+   "id": "suffragette:68a4dc27:reducedService",
+   "l": "suffragette",
+   "m": "overground",
+   "s": 7,
+   "d": "Reduced Service",
+   "k": "minor",
+   "c": "P",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-06T03:30:00Z",
+     "t": "2026-09-07T00:29:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 0,
+   "sec": [
+    {
+     "st": [
+      "910GBARKRIV",
+      "910GBARKING",
+      "910GWDGRNPK"
+     ],
+     "k": "minor",
+     "dir": "b"
+    }
+   ],
+   "pts": [
+    {
+     "id": "910GBARKING",
+     "role": "stop"
+    },
+    {
+     "id": "910GBARKRIV",
+     "role": "stop"
+    },
+    {
+     "id": "910GWDGRNPK",
+     "role": "stop"
+    }
+   ],
+   "r": "SUFFRAGETTE LINE: Sunday 6 September, a reduced service operates between Woodgrange Park and Barking Riverside. Trains run every 30 minutes."
+  },
+  {
+   "id": "waterloo-city:2255eb4d:plannedClosure",
+   "l": "waterloo-city",
+   "m": "tube",
+   "s": 4,
+   "d": "Planned Closure",
+   "k": "closed",
+   "c": "I",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-05T03:15:00Z",
+     "t": "2026-09-05T22:59:00Z"
+    },
+    {
+     "f": "2026-09-05T23:00:00Z",
+     "t": "2026-09-06T00:15:00Z"
+    },
+    {
+     "f": "2026-09-06T03:15:00Z",
+     "t": "2026-09-06T22:59:00Z"
+    },
+    {
+     "f": "2026-09-06T23:00:00Z",
+     "t": "2026-09-06T23:45:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 1,
+   "sec": [],
+   "pts": [],
+   "r": "Waterloo & City line: service operates 06:00 until 00:30, Monday to Friday only. There is no service on Saturdays, Sundays and on bank/public holidays."
+  },
+  {
+   "id": "weaver:3379de8e:partClosure",
+   "l": "weaver",
+   "m": "overground",
+   "s": 5,
+   "d": "Part Closure",
+   "k": "closed",
+   "c": "P",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-01T23:00:00Z",
+     "t": "2026-09-02T00:29:00Z"
+    },
+    {
+     "f": "2026-09-02T21:45:00Z",
+     "t": "2026-09-02T22:59:00Z"
+    },
+    {
+     "f": "2026-09-02T23:00:00Z",
+     "t": "2026-09-03T00:29:00Z"
+    },
+    {
+     "f": "2026-09-03T21:45:00Z",
+     "t": "2026-09-03T22:59:00Z"
+    },
+    {
+     "f": "2026-09-03T23:00:00Z",
+     "t": "2026-09-04T00:29:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 0,
+   "sec": [
+    {
+     "st": [
+      "910GCHESHNT",
+      "910GTHBLDSG",
+      "910GTURKYST",
+      "910GSBURY",
+      "910GEDMNGRN",
+      "910GSIVRST",
+      "910GWHHRTLA",
+      "910GBRUCGRV",
+      "910GSEVNSIS",
+      "910GSTMFDHL",
+      "910GSTKNWNG",
+      "910GRCTRYRD",
+      "910GHAKNYNM"
+     ],
+     "k": "closed",
+     "dir": "b"
+    },
+    {
+     "st": [
+      "910GENFLDTN",
+      "910GBHILLPK",
+      "910GEDMNGRN",
+      "910GSIVRST",
+      "910GWHHRTLA",
+      "910GBRUCGRV",
+      "910GSEVNSIS",
+      "910GSTMFDHL",
+      "910GSTKNWNG",
+      "910GRCTRYRD",
+      "910GHAKNYNM"
+     ],
+     "k": "closed",
+     "dir": "b"
+    }
+   ],
+   "pts": [
+    {
+     "id": "910GBRUCGRV",
+     "role": "stop"
+    },
+    {
+     "id": "910GCHESHNT",
+     "role": "stop"
+    },
+    {
+     "id": "910GEDMNGRN",
+     "role": "stop"
+    },
+    {
+     "id": "910GHAKNYNM",
+     "role": "stop"
+    },
+    {
+     "id": "910GRCTRYRD",
+     "role": "stop"
+    },
+    {
+     "id": "910GSBURY",
+     "role": "stop"
+    },
+    {
+     "id": "910GSEVNSIS",
+     "role": "stop"
+    },
+    {
+     "id": "910GSIVRST",
+     "role": "stop"
+    },
+    {
+     "id": "910GSTKNWNG",
+     "role": "stop"
+    },
+    {
+     "id": "910GSTMFDHL",
+     "role": "stop"
+    },
+    {
+     "id": "910GTHBLDSG",
+     "role": "stop"
+    },
+    {
+     "id": "910GTURKYST",
+     "role": "stop"
+    },
+    {
+     "id": "910GWHHRTLA",
+     "role": "stop"
+    },
+    {
+     "id": "910GBHILLPK",
+     "role": "stop"
+    },
+    {
+     "id": "910GENFLDTN",
+     "role": "stop"
+    }
+   ],
+   "r": "WEAVER LINE: Monday 31 August, Tuesday 1, Wednesday 2 and Thursday 3 September, after 2245 each evening, no service between Hackney Downs and Enfield Town / Cheshunt. Last through trains operate at 2243 from Liverpool Street to Cheshunt, 2250 from Enfield Town to Liverpool Street, 2258 from Liverpool Street to Enfield Town and 2259 from Cheshunt to Liverpool Street. Use Clapton for Rectory Road and Stoke Newington, and local London Buses services for Stamford Hill. Replacement buses operate. The limited number of southbound GREATER ANGLIA and STANSTED EXPRESS trains after midnight which usual…"
+  },
+  {
+   "id": "windrush:96349ff1:partClosure",
+   "l": "windrush",
+   "m": "overground",
+   "s": 5,
+   "d": "Part Closure",
+   "k": "closed",
+   "c": "P",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-05T03:30:00Z",
+     "t": "2026-09-06T18:15:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 0,
+   "sec": [
+    {
+     "st": [
+      "910GCLPHMJ1",
+      "910GWNDSWRD",
+      "910GCLPHHS",
+      "910GDENMRKH",
+      "910GPCKHMRY",
+      "910GPCKHMQD",
+      "910GSURREYQ"
+     ],
+     "k": "closed",
+     "dir": "b"
+    }
+   ],
+   "pts": [
+    {
+     "id": "910GSURREYQ",
+     "role": "stop"
+    },
+    {
+     "id": "910GCLPHHS",
+     "role": "stop"
+    },
+    {
+     "id": "910GCLPHMJ1",
+     "role": "stop"
+    },
+    {
+     "id": "910GDENMRKH",
+     "role": "stop"
+    },
+    {
+     "id": "910GPCKHMQD",
+     "role": "stop"
+    },
+    {
+     "id": "910GPCKHMRY",
+     "role": "stop"
+    },
+    {
+     "id": "910GWNDSWRD",
+     "role": "stop"
+    }
+   ],
+   "r": "WINDRUSH LINE: Saturday 5, all day, and Sunday 6 September, until 1915, no service between Surrey Quays and Clapham Junction / Battersea Park. Replacement bus service M operates between Canada Water and Clapham Junction via Surrey Quays, Queens Road Peckham, Peckham Rye, Denmark Hill, Clapham High Street and Wandsworth Road."
+  },
+  {
+   "id": "windrush:dcb0ef4d:partClosure",
+   "l": "windrush",
+   "m": "overground",
+   "s": 5,
+   "d": "Part Closure",
+   "k": "closed",
+   "c": "P",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-06T03:30:00Z",
+     "t": "2026-09-06T18:15:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 0,
+   "sec": [
+    {
+     "st": [
+      "910GWCROYDN",
+      "910GNORWDJ",
+      "910GANERLEY",
+      "910GPENEW",
+      "910GSYDENHM"
+     ],
+     "k": "closed",
+     "dir": "b"
+    }
+   ],
+   "pts": [
+    {
+     "id": "910GANERLEY",
+     "role": "stop"
+    },
+    {
+     "id": "910GNORWDJ",
+     "role": "stop"
+    },
+    {
+     "id": "910GPENEW",
+     "role": "stop"
+    },
+    {
+     "id": "910GSYDENHM",
+     "role": "stop"
+    },
+    {
+     "id": "910GWCROYDN",
+     "role": "stop"
+    }
+   ],
+   "r": "WINDRUSH LINE: Sunday 6 September, until 1915, no service between Sydenham and West Croydon. Change at Crystal Palace for trains to/from Norwood Junction and connections to/from West Croydon. Use local London Buses services for Penge West and Anerley."
+  },
+  {
+   "id": "windrush:81891d21:plannedClosure",
+   "l": "windrush",
+   "m": "overground",
+   "s": 4,
+   "d": "Planned Closure",
+   "k": "closed",
+   "c": "P",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-06T18:15:00Z",
+     "t": "2026-09-07T00:29:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 1,
+   "sec": [],
+   "pts": [],
+   "r": "WINDRUSH LINE: Sunday 6 September, from 1915, no service between Highbury & Islington and Battersea Park / Clapham Junction / Crystal Palace / New Cross Gate / West Croydon. Use MILDMAY LINE services between Highbury & Islington, Canonbury and Dalston Kingsland. Use SOUTHERN connections for stations south of New Cross Gate, and local buses for New Cross, Penge West and Anerley. Replacement buses operate."
+  },
+  {
+   "id": "windrush:e5e91da4:partClosure",
+   "l": "windrush",
+   "m": "overground",
+   "s": 5,
+   "d": "Part Closure",
+   "k": "closed",
+   "c": "P",
+   "n": 0,
+   "v": [
+    {
+     "f": "2026-09-07T21:15:00Z",
+     "t": "2026-09-07T22:59:00Z"
+    },
+    {
+     "f": "2026-09-07T23:00:00Z",
+     "t": "2026-09-08T00:29:00Z"
+    },
+    {
+     "f": "2026-09-08T21:15:00Z",
+     "t": "2026-09-08T22:59:00Z"
+    },
+    {
+     "f": "2026-09-08T23:00:00Z",
+     "t": "2026-09-09T00:29:00Z"
+    },
+    {
+     "f": "2026-09-09T21:15:00Z",
+     "t": "2026-09-09T22:59:00Z"
+    },
+    {
+     "f": "2026-09-09T23:00:00Z",
+     "t": "2026-09-10T00:29:00Z"
+    }
+   ],
+   "sc": "section",
+   "src": "s",
+   "wl": 0,
+   "sec": [
+    {
+     "st": [
+      "910GWCROYDN",
+      "910GNORWDJ",
+      "910GANERLEY",
+      "910GPENEW",
+      "910GSYDENHM"
+     ],
+     "k": "closed",
+     "dir": "b"
+    }
+   ],
+   "pts": [
+    {
+     "id": "910GANERLEY",
+     "role": "stop"
+    },
+    {
+     "id": "910GNORWDJ",
+     "role": "stop"
+    },
+    {
+     "id": "910GPENEW",
+     "role": "stop"
+    },
+    {
+     "id": "910GSYDENHM",
+     "role": "stop"
+    },
+    {
+     "id": "910GWCROYDN",
+     "role": "stop"
+    }
+   ],
+   "r": "WINDRUSH LINE: Monday 7, Tuesday 8, Wednesday 9 and Thursday 10 September, after 2215 each evening, no service between Sydenham and West Croydon. West Croydon trains will divert to and depart from Crystal Palace after 2215. Use local buses via any reasonable route or Southern Railway trains between Sydenham and Norwood Junction. Tickets will also be accepted on Southern Railway trains between Crystal Palace and East Croydon (via Norwood Junction), and on two Southern Railway rail replacement buses departing Norwood Junction at 2318 and 0013 for West Croydon via Selhurst (and onward to Sutton)…"
+  }
+ ]
+}

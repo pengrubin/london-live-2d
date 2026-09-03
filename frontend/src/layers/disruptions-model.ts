@@ -555,6 +555,18 @@ export interface Snapshot {
   readonly names: ReadonlyMap<string, string>;
   readonly colors: ReadonlyMap<string, string>;
   readonly expired: boolean;
+  /**
+   * The payload is 5–10 minutes old. The map already greys its bands for this;
+   * the text surfaces must say so too, or a rider reading only the Lines tab
+   * on a phone sees a full-confidence "Severe delays" the map has stopped
+   * standing behind.
+   */
+  readonly stale: boolean;
+  /**
+   * Several polls in a row failed. An outage must not look like "no
+   * disruptions": an empty strip and a silent one are the same picture.
+   */
+  readonly connectionLost: boolean;
 }
 
 export const EMPTY_SNAPSHOT: Snapshot = {
@@ -562,6 +574,8 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   names: new Map(),
   colors: new Map(),
   expired: true,
+  stale: false,
+  connectionLost: false,
 };
 
 let snapshot: Snapshot = EMPTY_SNAPSHOT;
@@ -574,6 +588,12 @@ const stats = {
   sectionsDroppedMissingHop: 0,
   staleCleared: 0,
   lastPayloadAt: 0,
+  /** Polls that threw or answered non-2xx, ever. */
+  pollFailures: 0,
+  /** Failures since the last success — what the "connection lost" state reads. */
+  consecutiveFailures: 0,
+  /** Message of the most recent failure; '' while healthy. */
+  lastPollError: '',
 };
 
 /** Live counters for acceptance tooling (spec §6.4). */
@@ -597,6 +617,19 @@ export function disruptionsExpired(): boolean {
   return snapshot.expired;
 }
 
+/** True while consecutive polls are failing — an outage, not an all-clear. */
+export function disruptionsConnectionLost(): boolean {
+  return snapshot.connectionLost;
+}
+
+/** True while the payload on screen is 5–10 minutes old. */
+export function disruptionsStale(): boolean {
+  return snapshot.stale;
+}
+
+/** Suffix every text surface appends while the payload is stale. */
+export const STALE_SUFFIX = ' (may be stale)';
+
 /** Items that touch this station: a section through it, or one of its points. */
 export function disruptionsForStation(naptanId: string): DisruptionItem[] {
   if (!naptanId || snapshot.expired) return [];
@@ -615,8 +648,9 @@ export interface StationNoticeLine {
 /** One plain-text notice per item at this station. Plain text on purpose: the
  * station popup escapes and truncates it with its own helpers. */
 export function stationDisruptionLines(naptanId: string): StationNoticeLine[] {
+  const suffix = snapshot.stale ? STALE_SUFFIX : '';
   return disruptionsForStation(naptanId).map((item) => ({
-    headline: `${SEVERITY_WORDS[item.k ?? 'info']} · ${snapshot.names.get(item.l ?? '') ?? item.l ?? ''}`,
+    headline: `${SEVERITY_WORDS[item.k ?? 'info']} · ${snapshot.names.get(item.l ?? '') ?? item.l ?? ''}${suffix}`,
     reason: item.r ?? '',
   }));
 }
@@ -628,6 +662,8 @@ export interface ServiceRow {
   readonly text: string;
   readonly when: string;
   readonly reason: string;
+  /** The map has already greyed this item's bands; the row must agree. */
+  readonly stale: boolean;
 }
 
 /** Line-scope items only — the ones that deliberately draw nothing, and would
@@ -645,6 +681,7 @@ export function serviceStripRows(): ServiceRow[] {
         text: item.d ?? SEVERITY_WORDS[item.k ?? 'info'],
         when: isPlannedItem(item) ? 'PLANNED' : whenLabel(item),
         reason: item.r ?? '',
+        stale: snapshot.stale,
       };
     });
 }
@@ -666,11 +703,18 @@ export function linePip(lineId: string): { color: string; title: string } | null
   const worst = items.reduce((a, b) =>
     CLASS_RANK[b.k ?? 'info'] > CLASS_RANK[a.k ?? 'info'] ? b : a,
   );
+  const title = items
+    .map((item) => item.d ?? '')
+    .filter(Boolean)
+    .join(' · ');
   return {
-    color: items.every(isPlannedItem) ? PLANNED_COLOR : classColor(worst.k ?? 'info'),
-    title: items
-      .map((item) => item.d ?? '')
-      .filter(Boolean)
-      .join(' · '),
+    // Greyed like the bands: a pip that keeps its full severity colour while
+    // the map has stopped standing behind the payload is the same lie twice.
+    color: snapshot.stale
+      ? STALE_COLOR
+      : items.every(isPlannedItem)
+        ? PLANNED_COLOR
+        : classColor(worst.k ?? 'info'),
+    title: snapshot.stale ? `${title}${STALE_SUFFIX}` : title,
   };
 }

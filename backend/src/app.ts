@@ -261,7 +261,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const disruptionsCache = new TtlCache<unknown>(DISRUPTIONS_TTL_MS);
   const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
 
-  registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir);
+  registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir, railLineIds);
   registerArrivalsRoute(app, { config, cache: arrivalsCache, budget: tflBudget });
   registerStopArrivalsRoute(app, { config, cache: stopArrivalsCache, budget: tflBudget });
   registerVehicleArrivalsRoute(app, { config, cache: vehicleArrivalsCache, budget: tflBudget });

@@ -38,6 +38,7 @@ import {
   startDisruptions,
   setDisruptionsVisible,
   setPlannedWorksVisible,
+  raiseDisruptions,
   DISRUPTIONS_LAYER_IDS,
   DISRUPTIONS_PLANNED_IDS,
 } from './layers/disruptions';
@@ -542,7 +543,22 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
   ];
 
   const available = LAYERS.filter((layer) => hasLayer(layer.name));
-  await Promise.allSettled(available.map((layer) => layer.start()));
+  const started = await Promise.allSettled(available.map((layer) => layer.start()));
+  // A start that throws takes its whole layer down — map features AND the
+  // Lines-tab row, because the row list is filtered on the layer existing.
+  // Swallowing the rejection would leave a capability advertising a feature
+  // that silently produced nothing, with no console line saying why.
+  for (const [index, result] of started.entries()) {
+    if (result.status === 'rejected') {
+      console.error(`[layer:${available[index]?.name ?? 'unknown'}]`, result.reason);
+    }
+  }
+
+  // Every overlay wash anchors below 'stations-circle', so among themselves the
+  // last one started wins the top. Bus diversions start after the rail bands,
+  // which would put a bus wash over a rail closure; this makes the order
+  // explicit instead of leaving it to the array (spec §6.1).
+  if (hasLayer('disruptions')) raiseDisruptions(target);
 
   // Filter-driven, not user-togglable, so deliberately NOT a LAYERS entry —
   // every entry there mints a Lines-tab row. Started after the registry so the

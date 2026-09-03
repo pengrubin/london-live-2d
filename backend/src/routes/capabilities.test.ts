@@ -21,6 +21,10 @@ const CONFIG = {
   },
 } as unknown as AppConfig;
 
+/** What statusLineIds() hands the route in app.ts: the manifest's rail lines. */
+const RAIL_LINES = ['district', 'victoria'] as const;
+const NO_RAIL_LINES: readonly string[] = [];
+
 describe('capabilities busCoverage flag', () => {
   let app: FastifyInstance;
   let busDataDir: string;
@@ -33,7 +37,7 @@ describe('capabilities busCoverage flag', () => {
   beforeEach(async () => {
     busDataDir = await mkdtemp(join(tmpdir(), 'caps-test-'));
     app = Fastify();
-    registerCapabilitiesRoute(app, CONFIG, join(busDataDir, 'no-baked-data'), busDataDir);
+    registerCapabilitiesRoute(app, CONFIG, join(busDataDir, 'no-baked-data'), busDataDir, RAIL_LINES);
   });
 
   afterEach(async () => {
@@ -97,7 +101,7 @@ describe('capabilities disruptions flag', () => {
   it('is false with the operator key but no baked network to validate ids against', async () => {
     // Arrange — a key, but no manifest.json: nothing could be drawn honestly.
     // Act
-    const caps = buildCapabilities(withKey, join(dir, 'no-baked-data'), dir);
+    const caps = buildCapabilities(withKey, join(dir, 'no-baked-data'), dir, NO_RAIL_LINES);
 
     // Assert
     expect(caps.layers['disruptions']).toBe(false);
@@ -106,15 +110,28 @@ describe('capabilities disruptions flag', () => {
   it('is false with the baked network but no operator key', async () => {
     await writeFile(join(dir, 'manifest.json'), '{"lines":[]}');
 
-    expect(buildCapabilities(CONFIG, dir, dir).layers['disruptions']).toBe(false);
+    expect(buildCapabilities(CONFIG, dir, dir, RAIL_LINES).layers['disruptions']).toBe(false);
   });
 
   it('is true only with both, like trainPositions', async () => {
     await writeFile(join(dir, 'manifest.json'), '{"lines":[]}');
 
-    const caps = buildCapabilities(withKey, dir, dir);
+    const caps = buildCapabilities(withKey, dir, dir, RAIL_LINES);
 
     expect(caps.layers['disruptions']).toBe(true);
     expect(caps.layers['trainPositions']).toBe(true);
+  });
+
+  it('is false on a manifest with no rail line, because the route is not registered', async () => {
+    // Arrange — a key and a manifest, but statusLineIds() found no rail line
+    // (an empty or bus-only manifest). registerDisruptionsRoute returns early
+    // in exactly this case, so the flag must not advertise the route.
+    await writeFile(join(dir, 'manifest.json'), '{"lines":[]}');
+
+    // Act
+    const caps = buildCapabilities(withKey, dir, dir, NO_RAIL_LINES);
+
+    // Assert
+    expect(caps.layers['disruptions']).toBe(false);
   });
 });

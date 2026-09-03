@@ -43,7 +43,13 @@ export interface DisruptionsPayload {
 export interface DisruptionsCounters {
   readonly disruptionsItems: number;
   readonly disruptionsSections: number;
+  readonly disruptionsStops: number;
+  /** Route slices refused by the hop gate — bake/feed drift on a corridor. */
   readonly disruptionsSectionsDropped: number;
+  /** affectedStops ids refused by the id gate — bake/feed drift on a station. */
+  readonly disruptionsStopsDropped: number;
+  /** Lines or status entries the shaping step could not read at all. */
+  readonly disruptionsLinesDropped: number;
   readonly disruptionsLastParseMs: number;
 }
 
@@ -63,7 +69,10 @@ export interface DisruptionsContext {
 const ZERO_COUNTERS: DisruptionsCounters = {
   disruptionsItems: 0,
   disruptionsSections: 0,
+  disruptionsStops: 0,
   disruptionsSectionsDropped: 0,
+  disruptionsStopsDropped: 0,
+  disruptionsLinesDropped: 0,
   disruptionsLastParseMs: 0,
 };
 
@@ -114,7 +123,14 @@ export function registerDisruptionsRoute(
 
   const shape = (body: unknown): DisruptionsPayload => {
     const startedAt = now();
-    const snapshot = compactStatus(body);
+    // A whole-body failure throws below, but ONE line losing its statuses in a
+    // 200 body would otherwise be invisible: the map would say "no disruption"
+    // on that line during an incident. Every such drop is logged and counted.
+    let linesDropped = 0;
+    const snapshot = compactStatus(body, (reason) => {
+      linesDropped += 1;
+      ctx.resolve.log(`disruptions: unreadable upstream entry, ${reason}`);
+    });
     // An unparseable body must not become an empty "all clear" map: throwing
     // keeps the last good payload on screen until it ages out.
     if (snapshot === null) throw new Error('TfL line status body was not a line array');
@@ -122,7 +138,10 @@ export function registerDisruptionsRoute(
     counters = {
       disruptionsItems: stats.items,
       disruptionsSections: stats.sections,
+      disruptionsStops: stats.stops,
       disruptionsSectionsDropped: stats.sectionsDropped,
+      disruptionsStopsDropped: stats.stopsDropped,
+      disruptionsLinesDropped: linesDropped,
       disruptionsLastParseMs: now() - startedAt,
     };
     return { t: fetched.t, w: fetched.w, pf: PARSED_SECTIONS_DISABLED, items };

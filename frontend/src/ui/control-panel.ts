@@ -14,9 +14,11 @@ import { addLeaderboard, type VehicleLocator } from './leaderboard';
 import { addBusFilter } from './bus-filter';
 import { addLegend, type LegendLine, type OverlayToggle } from './legend';
 import {
+  disruptionsConnectionLost,
   disruptionsExpired,
   onDisruptionsUpdate,
   serviceStripRows,
+  STALE_SUFFIX,
 } from '../layers/disruptions';
 import { hasLayer } from '../region';
 
@@ -134,7 +136,10 @@ function addServiceStrip(container: HTMLElement): void {
     if (disruptionsExpired()) {
       const row = document.createElement('div');
       row.className = 'svc-row svc-dim';
-      row.textContent = 'No current disruption data';
+      // An outage and a genuine all-clear must never read the same.
+      row.textContent = disruptionsConnectionLost()
+        ? 'Disruption data unavailable'
+        : 'No current disruption data';
       strip.append(row);
       return;
     }
@@ -142,7 +147,7 @@ function addServiceStrip(container: HTMLElement): void {
     strip.hidden = rows.length === 0;
     for (const item of rows) {
       const row = document.createElement('div');
-      row.className = 'svc-row';
+      row.className = item.stale ? 'svc-row svc-dim' : 'svc-row';
       row.title = item.reason;
       const swatch = document.createElement('span');
       swatch.className = 'legend-swatch';
@@ -152,7 +157,8 @@ function addServiceStrip(container: HTMLElement): void {
       label.textContent = `${item.lineName}: ${item.text}`;
       const when = document.createElement('span');
       when.className = 'svc-when';
-      when.textContent = item.when;
+      // The map has already greyed this item's bands; say so here too.
+      when.textContent = item.stale ? `${item.when}${STALE_SUFFIX}` : item.when;
       row.append(swatch, label, when);
       strip.append(row);
     }

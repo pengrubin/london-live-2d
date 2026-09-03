@@ -8,18 +8,50 @@ vi.mock('maplibre-gl', () => ({ Popup: class {} }));
 const {
   currencyOf,
   disruptionPopupHtml,
+  disruptionsConnectionLost,
+  linePip,
   payloadAgeMs,
   sectionGeometry,
   serverAgeMs,
+  serviceStripRows,
+  stationDisruptionLines,
   toFeatures,
 } = await import('./disruptions');
 
+// The layer's only writer of the shared snapshot; the model is a singleton, so
+// publishing here is exactly what a rebuild does at runtime.
+import { publishSnapshot } from './disruptions-model';
+
 import type {
   DisruptionItem,
+  DisruptionSection,
   DisruptionsPayload,
   FeatureContext,
 } from './disruptions';
 import type { LineBranches } from '../realtime/types';
+
+import LIVE_JSON from './fixtures/disruptions-live.json';
+
+const LIVE = LIVE_JSON as unknown as DisruptionsPayload;
+
+/**
+ * The repo's baked branch geometry — the very files the browser downloads.
+ * Pulled in with import.meta.glob rather than node:fs so the frontend's own
+ * `tsc` (types: vite/client, no node types) still typechecks this file.
+ */
+const BAKED_BRANCHES = import.meta.glob<LineBranches>('../../../data/branches/*.json', {
+  eager: true,
+  import: 'default',
+});
+
+const bakedBranchesFor = (lineId: string): LineBranches | null =>
+  BAKED_BRANCHES[`../../../data/branches/${lineId}.json`] ?? null;
+
+/** Every (line, section) pair in the captured payload, flattened. */
+const liveSections = (): { lineId: string; section: DisruptionSection }[] =>
+  (LIVE.items ?? []).flatMap((item) =>
+    (item.sec ?? []).map((section) => ({ lineId: item.l ?? '', section })),
+  );
 
 // ── fixtures: a four-stop line whose hops have distinctive coordinates ──
 
@@ -422,5 +454,122 @@ describe('disruptionPopupHtml', () => {
     expect(html).toContain('Since ');
     expect(html).toContain('LIVE');
     expect(html).not.toContain('–');
+  });
+});
+
+
+// ── the snapshot's currency must reach the text surfaces, not just the map ──
+
+describe('a stale snapshot on the Lines tab, the pips and the station popup', () => {
+  const NAMES = new Map([['district', 'District']]);
+  const COLORS = new Map([['district', '#007D32']]);
+  const LINE_ITEM: DisruptionItem = {
+    ...CLOSURE,
+    sc: 'line',
+    src: 'f',
+    sec: [],
+    pts: [],
+    d: 'Severe Delays',
+    k: 'severe',
+  };
+
+  const publish = (over: Partial<Parameters<typeof publishSnapshot>[0]> = {}): void =>
+    publishSnapshot({
+      items: [LINE_ITEM],
+      names: NAMES,
+      colors: COLORS,
+      expired: false,
+      stale: false,
+      connectionLost: false,
+      ...over,
+    });
+
+  test('a fresh snapshot says nothing about staleness anywhere', () => {
+    // Arrange / Act
+    publish();
+
+    // Assert
+    expect(serviceStripRows()[0]?.stale).toBe(false);
+    expect(linePip('district')?.title).toBe('Severe Delays');
+  });
+
+  test('a stale snapshot marks the Service strip row, so the strip cannot outrank the map', () => {
+    // Arrange / Act
+    publish({ stale: true });
+
+    // Assert
+    expect(serviceStripRows()[0]?.stale).toBe(true);
+  });
+
+  test('a stale snapshot greys the legend pip and says so in its title', () => {
+    publish({ stale: true });
+
+    const pip = linePip('district');
+
+    expect(pip?.title).toContain('may be stale');
+    expect(pip?.color).toBe('#8a94a0');
+  });
+
+  test('a stale snapshot marks the station popup headline', () => {
+    publish({ stale: true, items: [CLOSURE] });
+
+    expect(stationDisruptionLines(ERC)[0]?.headline).toContain('may be stale');
+  });
+
+  test('a lost connection is distinguishable from a genuine all-clear', () => {
+    // Arrange — nothing to draw either way; only the flag separates them.
+    publish({ items: [], expired: true, connectionLost: true });
+
+    // Assert
+    expect(disruptionsConnectionLost()).toBe(true);
+  });
+});
+
+
+// ── the real payload through the real geometry builder ──
+//
+// disruptions-live.json is a key-scrubbed capture of GET /api/disruptions taken
+// against the live TfL feed on 2026-09-03, and data/branches/*.json is the
+// geometry the browser actually holds. If a real section stops building here,
+// the map has silently stopped drawing a real closure — which is the one
+// failure this whole feature exists to prevent.
+
+describe('every section of a real /api/disruptions payload builds geometry', () => {
+  test('the capture still carries real disrupted sections to test with', () => {
+    // A payload that went empty, or a glob that loaded no branch file, would
+    // make the assertions below vacuous rather than green.
+    expect((LIVE.items ?? []).length).toBeGreaterThan(0);
+    expect(liveSections().length).toBeGreaterThan(0);
+    for (const { lineId } of liveSections()) {
+      expect(bakedBranchesFor(lineId)?.branches.length ?? 0).toBeGreaterThan(0);
+    }
+  });
+
+  test('sections producing geometry equals sections in the payload', () => {
+    // Arrange
+    const failures: string[] = [];
+
+    // Act
+    for (const { lineId, section } of liveSections()) {
+      const geometry = sectionGeometry(section, bakedBranchesFor(lineId));
+      if (geometry === null || geometry.length === 0) {
+        failures.push(`${lineId}: ${(section.st ?? []).join(' > ')}`);
+      }
+    }
+
+    // Assert — the failure list is the message, so a data gap names itself.
+    expect(failures).toEqual([]);
+    expect(liveSections().length - failures.length).toBe(liveSections().length);
+  });
+
+  test('every id of every real section is a stop of its own line', () => {
+    const strays: string[] = [];
+    for (const { lineId, section } of liveSections()) {
+      const branches = bakedBranchesFor(lineId);
+      const ids = new Set((branches?.branches ?? []).flatMap((b) => b.stops.map((s) => s.id)));
+      for (const id of section.st ?? []) if (!ids.has(id)) strays.push(`${lineId}/${id}`);
+    }
+
+    expect(strays).toEqual([]);
   });
 });

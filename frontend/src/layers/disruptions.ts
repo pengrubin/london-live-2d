@@ -65,7 +65,9 @@ export type {
 export {
   currencyOf,
   disruptionPopupHtml,
+  disruptionsConnectionLost,
   disruptionsExpired,
+  disruptionsStale,
   disruptionsForStation,
   disruptionsStats,
   linePip,
@@ -74,6 +76,7 @@ export {
   sectionGeometry,
   serverAgeMs,
   serviceStripRows,
+  STALE_SUFFIX,
   stationDisruptionLines,
   toFeatures,
 } from './disruptions-model';
@@ -121,6 +124,14 @@ const POLL_INTERVAL_MS = 90_000;
 const TICK_INTERVAL_MS = 60_000;
 const DISRUPTIONS_URL = '/api/disruptions';
 const RING_MIN_ZOOM = 10;
+/**
+ * Failed polls before the UI calls the feed lost. Two 90 s polls is ~3 min —
+ * well inside the 10 min un-draw, so the strip says "unavailable" long before
+ * the map silently empties.
+ */
+const CONNECTION_LOST_AFTER_FAILURES = 2;
+/** Layer the bands and rings sit under, in every insertion and in raise. */
+const DOTS_ANCHOR_LAYER_ID = 'stations-circle';
 const PLANNED_MIN_ZOOM = 11;
 
 // ── paint ──
@@ -229,7 +240,7 @@ function addLiveBandLayers(map: MaplibreMap): void {
         'line-offset': LINE_OFFSET_RAMP,
       },
     },
-    below(map, 'stations-circle'),
+    below(map, DOTS_ANCHOR_LAYER_ID),
   );
   // Line-coloured core: on the shared Circle / District / H&C / Met corridor
   // the wash alone cannot say WHICH line is shut.
@@ -245,7 +256,7 @@ function addLiveBandLayers(map: MaplibreMap): void {
         'line-offset': LINE_OFFSET_RAMP,
       },
     },
-    below(map, 'stations-circle'),
+    below(map, DOTS_ANCHOR_LAYER_ID),
   );
   map.addLayer(
     {
@@ -261,7 +272,7 @@ function addLiveBandLayers(map: MaplibreMap): void {
         'line-offset': LINE_OFFSET_RAMP,
       },
     },
-    below(map, 'stations-circle'),
+    below(map, DOTS_ANCHOR_LAYER_ID),
   );
 }
 
@@ -281,7 +292,7 @@ function addPlannedBandLayer(map: MaplibreMap): void {
         'line-offset': LINE_OFFSET_RAMP,
       },
     },
-    below(map, 'stations-circle'),
+    below(map, DOTS_ANCHOR_LAYER_ID),
   );
 }
 
@@ -302,7 +313,7 @@ function addRingLayer(map: MaplibreMap, layerId: string, sourceId: string, plann
       },
     },
     // Under the station dots: a tap on a dot must still open the station popup.
-    below(map, 'stations-circle'),
+    below(map, DOTS_ANCHOR_LAYER_ID),
   );
 }
 
@@ -369,6 +380,22 @@ export function setPlannedWorksVisible(map: MaplibreMap, visible: boolean): void
   if (visible) refresh?.();
 }
 
+/**
+ * Re-anchors every disruption layer just under the station dots (spec §6.1).
+ * Insertion order alone cannot settle this: the three overlay washes (rail
+ * disruptions, roadworks, bus diversions) all insert `below('stations-circle')`
+ * and MapLibre gives the LAST inserted the highest z, so whichever layer
+ * happens to start last wins. Bus diversions start after this one, which would
+ * put a translucent bus wash on top of a rail closure. main.ts calls this once
+ * after every layer has settled, which makes the stacking explicit.
+ */
+export function raiseDisruptions(map: MaplibreMap): void {
+  const anchor = below(map, DOTS_ANCHOR_LAYER_ID);
+  for (const id of [...DISRUPTIONS_LAYER_IDS, ...DISRUPTIONS_PLANNED_IDS]) {
+    if (map.getLayer(id)) map.moveLayer(id, anchor);
+  }
+}
+
 function setData(map: MaplibreMap, sourceId: string, features: GeoJSON.Feature[]): void {
   const src = map.getSource(sourceId);
   if (src && 'setData' in src) {
@@ -427,15 +454,35 @@ export async function startDisruptions(map: MaplibreMap, deps: DisruptionsDeps):
   let payload: DisruptionsPayload | null = null;
   let arrival: PayloadArrival = { serverAgeMs: 0, receivedAt: 0 };
 
+  /** True once enough polls in a row have failed to call the feed lost. */
+  function connectionLost(): boolean {
+    return stats.consecutiveFailures >= CONNECTION_LOST_AFTER_FAILURES;
+  }
+
   function clearEverything(): void {
     payload = null;
     stats.staleCleared += 1;
     for (const id of ALL_SOURCE_IDS) setData(map, id, []);
-    publishSnapshot({ ...EMPTY_SNAPSHOT, names: deps.nameByLine, colors: deps.colorByLine });
+    publishSnapshot({
+      ...EMPTY_SNAPSHOT,
+      names: deps.nameByLine,
+      colors: deps.colorByLine,
+      connectionLost: connectionLost(),
+    });
   }
 
   async function rebuild(): Promise<void> {
-    if (!payload) return;
+    // No payload yet: still publish, so a failing first poll shows as an
+    // outage in the Service strip rather than as a silent empty map.
+    if (!payload) {
+      publishSnapshot({
+        ...EMPTY_SNAPSHOT,
+        names: deps.nameByLine,
+        colors: deps.colorByLine,
+        connectionLost: connectionLost(),
+      });
+      return;
+    }
     const age = payloadAgeMs(arrival, Date.now());
     const currency = currencyOf(age);
     // A hatch that never clears is worse than an empty map: a non-OK response
@@ -450,6 +497,10 @@ export async function startDisruptions(map: MaplibreMap, deps: DisruptionsDeps):
       names: deps.nameByLine,
       colors: deps.colorByLine,
       expired: false,
+      // The same currency the bands are greyed by, so the strip, the pips and
+      // the station popup cannot disagree with the map about one hiccup.
+      stale: currency === 'stale',
+      connectionLost: connectionLost(),
     });
     const shown =
       isLayerShown(map, DISRUPTIONS_WASH_LAYER_ID) ||
@@ -487,9 +538,18 @@ export async function startDisruptions(map: MaplibreMap, deps: DisruptionsDeps):
         receivedAt: Date.now(),
       };
       stats.polls += 1;
+      stats.consecutiveFailures = 0;
+      stats.lastPollError = '';
       stats.lastPayloadAt = body.t ?? 0;
-    } catch {
+    } catch (error) {
       // Keep the previous picture; rebuild() clears it once it is 10 min old.
+      // But NEVER swallow the reason: a permanently 404ing route and a genuine
+      // all-clear look identical on the map, and only this line tells them
+      // apart. Modelled on diversions.ts's own catch.
+      stats.pollFailures += 1;
+      stats.consecutiveFailures += 1;
+      stats.lastPollError = error instanceof Error ? error.message : String(error);
+      console.error('[disruptions]', error);
     }
     await rebuild();
   }
