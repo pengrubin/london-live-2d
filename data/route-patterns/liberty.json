@@ -1,0 +1,8 @@
+{
+  "lineId": "liberty",
+  "bakedAt": "2026-09-03T18:41:06.933Z",
+  "patterns": [
+    {"dir":"inbound","name":"Upminster  &harr;  Romford ","ids":["910GUPMNSTR","910GEMRSPKH","910GROMFORD"]},
+    {"dir":"outbound","name":"Romford  &harr;  Upminster ","ids":["910GROMFORD","910GEMRSPKH","910GUPMNSTR"]}
+  ]
+}
