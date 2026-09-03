@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Fastify proxy for the TfL Unified API (london-live-2d P2)",
   "engines": {
-    "node": ">=24"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
