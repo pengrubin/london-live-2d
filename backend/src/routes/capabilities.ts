@@ -86,6 +86,10 @@ export function buildCapabilities(
       transitLines: hasTransitLines,
       // Live vehicle dots inferred from operator arrival predictions.
       trainPositions: hasTrainPositions,
+      // Disruption sections and rings. Needs the operator feed for the notices
+      // AND the baked network to validate every id and hop against — with only
+      // one of the two there is nothing that could honestly be drawn.
+      disruptions: hasTfl && hasTransitLines,
       // TfL Unified API extras.
       lineStatus: hasTfl,
       stopArrivals: hasTfl,

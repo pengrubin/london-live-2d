@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { registerCapabilitiesRoute } from './capabilities';
+import { buildCapabilities, registerCapabilitiesRoute } from './capabilities';
 import { startDiversionDetector } from '../diversion-detector';
 import type { AppConfig } from '../config';
 
@@ -78,5 +78,43 @@ describe('capabilities busCoverage flag', () => {
     } finally {
       detector.stop();
     }
+  });
+});
+
+describe('capabilities disruptions flag', () => {
+  let dir: string;
+
+  const withKey = { ...CONFIG, tflAppKey: 'test-key' } as unknown as AppConfig;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'caps-disruptions-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('is false with the operator key but no baked network to validate ids against', async () => {
+    // Arrange — a key, but no manifest.json: nothing could be drawn honestly.
+    // Act
+    const caps = buildCapabilities(withKey, join(dir, 'no-baked-data'), dir);
+
+    // Assert
+    expect(caps.layers['disruptions']).toBe(false);
+  });
+
+  it('is false with the baked network but no operator key', async () => {
+    await writeFile(join(dir, 'manifest.json'), '{"lines":[]}');
+
+    expect(buildCapabilities(CONFIG, dir, dir).layers['disruptions']).toBe(false);
+  });
+
+  it('is true only with both, like trainPositions', async () => {
+    await writeFile(join(dir, 'manifest.json'), '{"lines":[]}');
+
+    const caps = buildCapabilities(withKey, dir, dir);
+
+    expect(caps.layers['disruptions']).toBe(true);
+    expect(caps.layers['trainPositions']).toBe(true);
   });
 });
