@@ -450,8 +450,8 @@ no tests today.
 form with a Mode-form fallback and a shadow comparison, shaping extracted to
 `backend/src/disruptions/tfl-status-shape.ts`, `londonDay()` in `backend/src/shared/`,
 `scripts/bake-route-patterns.mjs` with 20 validated pattern files and their loader) and on
-`feat/proxy-route-single-flight` (single-flight, 30 s back-off, `maxStaleMs`, `shape`, the
-first `proxy-route.test.ts`). Backend suite 158 → 223 tests on the first branch, 182 on the
+`feat/proxy-single-flight` (single-flight, 30 s back-off, `maxStaleMs`, `shape`, the
+first `proxy-route.test.ts`). Backend suite 158 → 223 tests on the first branch, 151 → 175 on the
 second. The one P0 done-criterion still open is the first archived production day.
 
 ## 12. Change log
