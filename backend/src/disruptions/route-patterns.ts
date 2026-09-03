@@ -92,11 +92,18 @@ function judge(candidate: unknown, hops: ReadonlySet<string>): Verdict {
   return { pattern: candidate, reason: null };
 }
 
+/**
+ * A file is usable only if `patterns` is a NON-EMPTY array: a well-formed
+ * `{ "patterns": [] }` would otherwise pass every check, contribute 0/0 to the
+ * counters and disable Tier 1 for the line without a single log line — which
+ * is exactly the silent failure §13 item 1 forbids.
+ */
 function readPatternFile(dataDir: string, lineId: string): FileRead {
   const path = join(dataDir, ROUTE_PATTERNS_DIR, `${lineId}.json`);
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as { patterns?: unknown };
     if (!Array.isArray(parsed.patterns)) return { ok: false, reason: '`patterns` is not an array' };
+    if (parsed.patterns.length === 0) return { ok: false, reason: '`patterns` is empty' };
     return { ok: true, patterns: parsed.patterns };
   } catch (err) {
     return { ok: false, reason: String(err) };
@@ -107,8 +114,10 @@ function readPatternFile(dataDir: string, lineId: string): FileRead {
  * Reads data/route-patterns/<lineId>.json for every line in `branchesByLine`
  * and keeps only patterns whose every consecutive pair is a consecutive-stop
  * pair of some baked branch of that line (undirected). Anything else is
- * dropped and logged with the offending pair; a line with no usable file is
- * logged once and gets no entry.
+ * dropped and logged with the offending pair; a line with no usable file
+ * (missing, unparsable, `patterns` absent or empty) is logged once and gets
+ * no entry. Because an empty file never reaches validation, a line that ends
+ * up with zero patterns has always produced at least one log line.
  */
 export function loadRoutePatterns(
   dataDir: string,

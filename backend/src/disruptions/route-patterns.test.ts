@@ -210,6 +210,23 @@ describe('loadRoutePatterns hop validation (synthetic data)', () => {
     expect(logged).toHaveLength(1);
     expect(logged[0]).toContain('synthetic');
   });
+
+  it('treats a well-formed file with an empty patterns array as no usable file and says Tier 1 is disabled', async () => {
+    // Arrange — valid JSON, valid shape, nothing to slice: this must never be
+    // silent, or a bad re-bake would look identical to a healthy run (§13 item 1).
+    await writePatterns([]);
+
+    // Act
+    const result = loadRoutePatterns(dataDir, branchesByLine, log);
+
+    // Assert — same outward behaviour as a missing file: no entry, 0/0, one log line.
+    expect(result.patterns.has('synthetic')).toBe(false);
+    expect(result.loaded).toBe(0);
+    expect(result.dropped).toBe(0);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain('synthetic');
+    expect(logged[0]).toContain('Tier 1 disabled');
+  });
 });
 
 describe('committed data/route-patterns against data/branches', () => {
