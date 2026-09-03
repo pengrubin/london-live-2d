@@ -433,12 +433,47 @@ Refutations that changed the design:
 | Phase | Adds or changes | Effort | Done when |
 |---|---|---|---|
 | **P0 prerequisites** | commit the recorder change; extract the status shaping into `backend/src/disruptions/tfl-status-shape.ts`; window, StopPoint and bus fetchers; recorder on the window form via a feed factory; `scripts/bake-route-patterns.mjs` and `data/route-patterns/*.json` for all 20 lines, both directions, hop-validated; proxy-route single-flight, back-off, max-stale and shape hook as its own PR with a new test file | 1 to 1.5 days | 20 pattern files with zero dropped hops; the path table re-pinned on baked files; first archived production day measured |
-| **P1 pure core** | gazetteer, line graph, grammar, resolver, National Rail messages, and their tests; corpus fixture | 3 days | corpus regression FULL ≥ 505/604 with zero wrong-location signatures; the 9 sectional oracles of the window sample match exactly |
+| **P1 pure core** — **deferred 2026-09-03, evidence-gated** | gazetteer, line graph, grammar, resolver, and their tests; corpus fixture | 3 days | **not scheduled.** Built only if `scripts/disruption-coverage.mjs` shows a material `textOnly` share over a week of production archive (§11.1). The first sample was 0 of 35 |
 | **P2 route, wiring, harness** | `/api/disruptions`, capability flag, `/health` counters, Darwin messages kept in the cache, the archive evaluation harness | 1 to 1.5 days | live curl matches the contract; mocked 404 serves stale or 502; ten parallel cold requests make one upstream call |
 | **P3 map layer** | Tier 0 sections, whole-line hatches, own-line cause pins, station rings, planned toggle, Service strip, popups | 2 days | screenshots checklist; zero prose-derived geometry in the payload; an 11-minute outage clears the map |
 | **P4 gate and bus** | flip the parsed-sections flag after ≥ 30 structured statuses with no disjoint or superset disagreement; station notices; bus route-level notices | 1.5 days plus the wait | a live incident with no structured fields draws from prose with `src: p` |
 | **P5 National Rail** | hub messages as text, self-naming ring, board-age greying | 0.5 day | a Horsham message on Clapham Junction shows as text with no ring |
 | **Post-ship** | weekly harness over the archive; each new high-occurrence skeleton becomes a rule with a corpus-sentence test | 0.5 day a week for a month | four weeks with no disagreement |
+
+### 11.1 Why P1 is deferred (2026-09-03)
+
+The parser exists to place notices TfL does **not** state as ids. Whether that population
+is worth three days of the hardest, most wrong-attachment-prone code in the design is an
+empirical question, so it is now measured rather than assumed.
+`scripts/disruption-coverage.mjs` reads the archive and sorts every non-Good status entry
+into exactly one bucket:
+
+| Bucket | Meaning | Who draws it |
+|---|---|---|
+| `section` | an `affectedRoutes` entry with `e: false` and ≥ 2 stop ids | Tier 0 draws the track |
+| `stops` | no slice, but `affectedStops` ids | Tier 0 rings the stations |
+| `wholeLine` | severity 1/2/20, or every route is a whole route | line-level, and that is the truth |
+| `textOnly` | none of the above | **only P1 could place this** |
+
+First sample (2026-09-03 evening, 6 snapshots, 35 non-Good entries, 15 distinct sentences):
+
+| Bucket | Entries | Share |
+|---|---|---|
+| section | 25 | 71.4% |
+| stops | 2 | 5.7% |
+| wholeLine | 8 | 22.9% |
+| **textOnly** | **0** | **0.0%** |
+
+77.1% lands on the map from TfL's own ids and the rest is honestly line-wide, so on this
+sample a parser would add nothing. One evening is not a week: the sample carries no deep-tube
+point incident (*"signal failure at Highbury & Islington"* is the shape that would land in
+`textOnly`), and it was taken before any weekday morning peak. The gate is re-read after a
+week of production archive; a `textOnly` share that stays near zero closes P1 permanently,
+and the map keeps the property that **no sentence is ever parsed to place a mark**.
+
+Run it with `node scripts/disruption-coverage.mjs ~/bus-archive/tube-status --by-sentence`;
+`--by-sentence` prints the most frequent `textOnly` sentences, which is the P1 backlog if
+one ever forms.
 
 The critic's recommended first PR carries no user-visible change: the recorder commit, the
 recorder on the window form, the route-pattern bake, two cheap probes (window overlap
@@ -467,6 +502,7 @@ second. The one P0 done-criterion still open is the first archived production da
 | 2026-09-03 | Circle corrected: TfL's patterns are one 37-stop Hammersmith → Edgware Road → ring → Edgware Road run per direction in which only `940GZZLUERC` repeats; the "Aldgate 9/18, Victoria 19/8" shape in the spec's §5.4 describes `data/branches/circle.json`, not the patterns. Closest-pair still resolves Edgware Road; a new hazard is recorded for P1: *Edgware Road–Paddington* yields 2-stop slices to different co-located Paddington ids on either side of Edgware Road. |
 | 2026-09-03 | Spec §5.4 table re-pinned on the baked files: Metropolitan Harrow-on-the-Hill–Aldgate is 14 (15 only on the outbound Amersham pattern) and Baker Street–Harrow 6 (7 outbound only) because no inbound all-stations pattern exists; Piccadilly Acton Town–T4 is 10 inbound / 11 outbound; every other row reproduced exactly. |
 | 2026-09-03 | Window-form semantics, key echo in error bodies and severity-20 persistence measured (§3.1). `backend/package.json` engines aligned to the Node 22 runtime; `data/**/leaderboard/` ignored so the dev server's day archives never enter a commit. |
+| 2026-09-03 | **P1 deferred by the owner and made evidence-gated** (§11.1). `scripts/disruption-coverage.mjs` measures the share of notices TfL does not state as ids; the first sample is 0 of 35. P2 and P3 proceed on Tier 0 alone, so the shipped map places marks from NaPTAN ids only — no sentence parsing anywhere in the running system. |
 
 ## 13. Risk-control checklist
 
@@ -503,10 +539,13 @@ second. The one P0 done-criterion still open is the first archived production da
       literal (§3.1).
 - [ ] Recorder shadow comparison (`tube-status: window-miss`): remove, or put behind a flag,
       after one clean week in production. It costs one 19 KB Mode-form fetch per poll.
-- [ ] P1: decide which concrete Paddington the §5.4 "Edgware Road–Paddington, 2 stops" row
-      means; on the real Circle pattern the two candidates end at different co-located ids.
-- [ ] P1: whether step 3 collapses Piccadilly Acton Town–T4 (10 inbound / 11 outbound) and
-      the Metropolitan 14/15 and 6/7 pairs into one section each.
+- [ ] **The P1 gate:** re-run `scripts/disruption-coverage.mjs` after a week of production
+      archive. A `textOnly` share near zero closes P1 for good; a material share turns the
+      table's top sentences into its backlog. First sample: 0 of 35 entries (§11.1).
+- [ ] (only if P1 is ever revived) which concrete Paddington the §5.4 "Edgware Road–Paddington,
+      2 stops" row means; on the real Circle pattern the candidates end at different
+      co-located ids. And whether step 3 collapses Piccadilly Acton Town–T4 (10 inbound /
+      11 outbound) and the Metropolitan 14/15 and 6/7 pairs into one section each.
 - [ ] Structured-field population on tram, DLR and the deep-tube lines during real incidents.
 - [ ] First archived production day: bytes per day and rows per day with `detail=true`.
 - [ ] `cf-cache-status` for the new route after deploy.
