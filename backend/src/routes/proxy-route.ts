@@ -222,7 +222,10 @@ export function registerProxyRoute(
 
     const stale = (): unknown => cache.getStale(key, spec.maxStaleMs, state.now());
     const joining = state.inflight.has(key);
-    if (!joining && isBackingOff(state, key)) return sendStaleOrFailure(reply, stale());
+    if (!joining && isBackingOff(state, key)) {
+      request.log.info({ path: spec.path, key }, 'upstream TfL in failure back-off, not retried');
+      return sendStaleOrFailure(reply, stale());
+    }
     if (!joining && !budget.tryConsume(state.now())) {
       const value = stale();
       if (value !== undefined) return sendCached(reply, 'stale', value);
