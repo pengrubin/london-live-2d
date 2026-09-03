@@ -13,6 +13,7 @@ import {
   STARTUP_DELAY_MS,
   STATUS_MODES,
   statusLineIds,
+  windowMisses,
 } from './status-recorder';
 
 const GOOD_SERVICE = {
@@ -504,12 +505,18 @@ const MODE_BODY = [{ id: 'victoria', lineStatuses: [{ statusSeverity: 10, status
 
 const NOT_FOUND = { status: 404, body: { httpStatusCode: 404, message: 'not found' } };
 
+/** What fetch rejects with when AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) fires. */
+const TIMEOUT = new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+
+/** A stubbed upstream answer: a status + body, or a rejection (network failure, timeout). */
+type StubRoute = { status: number; body: unknown } | { throws: unknown };
+
 /**
  * Routes fetch by pathname. An unlisted path answers 404, so a wrong URL fails
  * the test instead of passing by accident. Plain objects rather than Response
  * keep the body read free of stream machinery under fake timers.
  */
-function stubFetchByPath(routes: Record<string, { status: number; body: unknown }>): URL[] {
+function stubFetchByPath(routes: Record<string, StubRoute>): URL[] {
   const urls: URL[] = [];
   vi.stubGlobal(
     'fetch',
@@ -517,6 +524,7 @@ function stubFetchByPath(routes: Record<string, { status: number; body: unknown 
       const url = new URL(String(input));
       urls.push(url);
       const route = routes[url.pathname] ?? NOT_FOUND;
+      if ('throws' in route) throw route.throws;
       return { status: route.status, json: async () => route.body } as unknown as Response;
     }),
   );
@@ -542,19 +550,23 @@ describe('makeTubeStatusFeed', () => {
     expect(feed.compact).toBe(compactStatus);
   });
 
-  it('asks the window form for every rail line from yesterday to a week ahead, with detail', async () => {
+  it('asks the window form for every rail line from yesterday to a week ahead, with detail, then shadows it with the Mode form', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-03T12:00:00Z'));
     const expectedPath = windowPath('2026-09-02', '2026-09-10');
-    const urls = stubFetchByPath({ [expectedPath]: { status: 200, body: WINDOW_BODY } });
+    const urls = stubFetchByPath({
+      [expectedPath]: { status: 200, body: WINDOW_BODY },
+      [MODE_PATH]: { status: 200, body: MODE_BODY },
+    });
     const logs: string[] = [];
 
     const response = await makeTubeStatusFeed(RAIL_LINE_IDS).fetchSnapshot('test-key', (msg) => logs.push(msg));
 
     expect(response).toEqual({ status: 200, body: WINDOW_BODY });
-    expect(urls).toHaveLength(1);
-    expect(urls[0]?.pathname).toBe(expectedPath);
+    expect(urls.map((u) => u.pathname)).toEqual([expectedPath, MODE_PATH]);
     expect(urls[0]?.searchParams.get('detail')).toBe('true');
+    // The shadow is the 19 KB form: no detail, it only has to name the live statuses.
+    expect(urls[1]?.searchParams.get('detail')).toBeNull();
     expect(logs).toEqual([]);
   });
 
@@ -563,7 +575,10 @@ describe('makeTubeStatusFeed', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-15T23:30:00Z'));
     const expectedPath = windowPath('2026-07-15', '2026-07-23');
-    const urls = stubFetchByPath({ [expectedPath]: { status: 200, body: WINDOW_BODY } });
+    const urls = stubFetchByPath({
+      [expectedPath]: { status: 200, body: WINDOW_BODY },
+      [MODE_PATH]: { status: 200, body: MODE_BODY },
+    });
 
     await makeTubeStatusFeed(RAIL_LINE_IDS).fetchSnapshot('test-key', noLog);
 
@@ -606,6 +621,115 @@ describe('makeTubeStatusFeed', () => {
     }
   });
 
+  it('falls back to the Mode form when the window fetch throws (timeout), and logs the failure', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-03T12:00:00Z'));
+    const urls = stubFetchByPath({
+      [windowPath('2026-09-02', '2026-09-10')]: { throws: TIMEOUT },
+      [MODE_PATH]: { status: 200, body: MODE_BODY },
+    });
+    const logs: string[] = [];
+
+    const response = await makeTubeStatusFeed(RAIL_LINE_IDS).fetchSnapshot('test-key', (msg) => logs.push(msg));
+
+    expect(response).toEqual({ status: 200, body: MODE_BODY });
+    expect(urls.map((u) => u.pathname)).toEqual([windowPath('2026-09-02', '2026-09-10'), MODE_PATH]);
+    expect(urls[1]?.searchParams.get('detail')).toBe('true');
+    expect(logs).toEqual([
+      `tube-status: window form failed: TimeoutError: The operation was aborted due to timeout, falling back to ${MODE_PATH}`,
+    ]);
+  });
+
+  it("a fallback that throws too reaches the recorder's existing failure path, writing nothing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-03T12:00:00Z'));
+    stubFetchByPath({
+      [windowPath('2026-09-02', '2026-09-10')]: { throws: TIMEOUT },
+      [MODE_PATH]: { throws: new TypeError('fetch failed') },
+    });
+    const dir = await mkdtemp(join(tmpdir(), 'tube-status-test-'));
+    const logs: string[] = [];
+    const recorder = new SnapshotRecorder(dir, 'test-key', (msg) => logs.push(msg), makeTubeStatusFeed(RAIL_LINE_IDS));
+
+    try {
+      recorder.start();
+      await vi.advanceTimersByTimeAsync(STARTUP_DELAY_MS);
+
+      expect(logs).toEqual([
+        `tube-status: window form failed: TimeoutError: The operation was aborted due to timeout, falling back to ${MODE_PATH}`,
+        'tube-status: poll failed: TypeError: fetch failed',
+      ]);
+      expect(await readdir(dir)).toEqual([]);
+    } finally {
+      recorder.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --- shadow comparison against the Mode form (spec §13 #7) ---
+
+  const LIVE_MODE_BODY = [GOOD_SERVICE, PART_SUSPENDED];
+  const MISS_LINES = [
+    'tube-status: window-miss district s=4 "DISTRICT LINE: No service between Tower Hill and Barking due to a signal failure."',
+    'tube-status: window-miss district s=9 "Minor Delays"',
+  ];
+
+  it('logs a window-miss per live Mode-form status the window body lacks, once, until the set changes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-03T12:00:00Z'));
+    const expectedPath = windowPath('2026-09-02', '2026-09-10');
+    stubFetchByPath({
+      [expectedPath]: { status: 200, body: WINDOW_BODY },
+      [MODE_PATH]: { status: 200, body: LIVE_MODE_BODY },
+    });
+    const logs: string[] = [];
+    const feed = makeTubeStatusFeed(RAIL_LINE_IDS);
+    const log = (msg: string): number => logs.push(msg);
+
+    const first = await feed.fetchSnapshot('test-key', log);
+    await feed.fetchSnapshot('test-key', log);
+    // The window catches up: the next poll returns the suspension too.
+    stubFetchByPath({
+      [expectedPath]: { status: 200, body: [...WINDOW_BODY, PART_SUSPENDED] },
+      [MODE_PATH]: { status: 200, body: LIVE_MODE_BODY },
+    });
+    await feed.fetchSnapshot('test-key', log);
+    await feed.fetchSnapshot('test-key', log);
+
+    expect(first).toEqual({ status: 200, body: WINDOW_BODY });
+    expect(logs).toEqual([...MISS_LINES, 'tube-status: window-miss cleared']);
+  });
+
+  it('logs a refused shadow and keeps the window snapshot', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-03T12:00:00Z'));
+    stubFetchByPath({
+      [windowPath('2026-09-02', '2026-09-10')]: { status: 200, body: WINDOW_BODY },
+      [MODE_PATH]: { status: 503, body: { httpStatusCode: 503 } },
+    });
+    const logs: string[] = [];
+
+    const response = await makeTubeStatusFeed(RAIL_LINE_IDS).fetchSnapshot('test-key', (msg) => logs.push(msg));
+
+    expect(response).toEqual({ status: 200, body: WINDOW_BODY });
+    expect(logs).toEqual(['tube-status: window shadow returned 503']);
+  });
+
+  it('logs a shadow fetch that throws and keeps the window snapshot', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-03T12:00:00Z'));
+    stubFetchByPath({
+      [windowPath('2026-09-02', '2026-09-10')]: { status: 200, body: WINDOW_BODY },
+      [MODE_PATH]: { throws: TIMEOUT },
+    });
+    const logs: string[] = [];
+
+    const response = await makeTubeStatusFeed(RAIL_LINE_IDS).fetchSnapshot('test-key', (msg) => logs.push(msg));
+
+    expect(response).toEqual({ status: 200, body: WINDOW_BODY });
+    expect(logs).toEqual(['tube-status: window shadow failed: TimeoutError: The operation was aborted due to timeout']);
+  });
+
   it('compacts a window body into the same LineSnapshot shape the Mode form produced', () => {
     const lines = makeTubeStatusFeed(RAIL_LINE_IDS).compact(WINDOW_BODY);
 
@@ -625,6 +749,53 @@ describe('makeTubeStatusFeed', () => {
         ],
       },
     ]);
+  });
+});
+
+describe('windowMisses', () => {
+  const live = (id: string, s: number, reason?: string) => ({
+    id,
+    lineStatuses: [{ statusSeverity: s, statusSeverityDescription: 'Severe Delays', ...(reason ? { reason } : {}) }],
+  });
+
+  it('finds nothing when every live status is in the window body', () => {
+    expect(windowMisses([PART_SUSPENDED, GOOD_SERVICE], [PART_SUSPENDED, GOOD_SERVICE])).toEqual([]);
+  });
+
+  it('names a live status the window body lacks, whether its line is absent or only that status is', () => {
+    const misses = windowMisses([GOOD_SERVICE, live('central', 6, 'Central Line: Severe delays.')], [
+      GOOD_SERVICE,
+      live('central', 6, 'Central Line: Severe delays.'),
+      live('central', 9, 'Central Line: Minor delays.'),
+      live('jubilee', 6, 'Jubilee Line: Severe delays.'),
+    ]);
+
+    expect(misses).toEqual(['central s=9 "Central Line: Minor delays."', 'jubilee s=6 "Jubilee Line: Severe delays."']);
+  });
+
+  it('ignores Good Service and No Issues rows: their absence loses no incident', () => {
+    expect(windowMisses([PART_SUSPENDED], [PART_SUSPENDED, GOOD_SERVICE, live('dlr', 18)])).toEqual([]);
+  });
+
+  it('does not count a planned status only the window form returns', () => {
+    expect(windowMisses([...WINDOW_BODY, GOOD_SERVICE], [GOOD_SERVICE])).toEqual([]);
+  });
+
+  it('keys on severity as well as reason, so a re-graded status is a miss', () => {
+    expect(windowMisses([live('central', 9, 'Central Line: delays.')], [live('central', 6, 'Central Line: delays.')])).toEqual([
+      'central s=6 "Central Line: delays."',
+    ]);
+  });
+
+  it('quotes at most 100 reason characters and falls back to the description when there is no reason', () => {
+    const misses = windowMisses([GOOD_SERVICE], [live('central', 6, 'X'.repeat(150)), live('dlr', 6)]);
+
+    expect(misses).toEqual([`central s=6 "${'X'.repeat(100)}"`, 'dlr s=6 "Severe Delays"']);
+  });
+
+  it('returns null when either body is not a status array, so nothing is compared', () => {
+    expect(windowMisses({ httpStatusCode: 429 }, [GOOD_SERVICE])).toBeNull();
+    expect(windowMisses([GOOD_SERVICE], '<html>Bad Gateway</html>')).toBeNull();
   });
 });
 

@@ -7,7 +7,9 @@
 //                       (a quiet network costs a handful of lines per day);
 //                       fetched through the date-window form with detail=true
 //                       so each reason sentence is archived next to the NaPTAN
-//                       ids TfL says it covers, planned works days ahead included
+//                       ids TfL says it covers, planned works days ahead included;
+//                       every window body is shadow-compared with the Mode form
+//                       and a live status the window lacks is logged (spec §13 #7)
 //   road-disruptions  — roadworks/closures every 6 h, written unconditionally
 //                       (the gold standard for validating bus diversion
 //                       detection: was there a known event on that road?)
@@ -16,7 +18,7 @@
 
 import { appendFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { compactStatus } from './disruptions/tfl-status-shape';
+import { compactStatus, type LineStatusEntry } from './disruptions/tfl-status-shape';
 import { londonDay, MS_PER_DAY } from './shared/london-date';
 import {
   fetchLineStatusByModes,
@@ -52,6 +54,13 @@ const WINDOW_LOOKBACK_DAYS = 1;
 const WINDOW_LOOKAHEAD_DAYS = 7;
 
 const TUBE_STATUS_LABEL = 'tube-status';
+const MODE_FORM_PATH = `/Line/Mode/${STATUS_MODES.join(',')}/Status`;
+
+/** TfL severity codes that mean nothing is wrong (/Line/Meta/Severity: 10 Good Service, 18 No Issues). */
+const GOOD_SERVICE_SEVERITY = 10;
+const NO_ISSUES_SEVERITY = 18;
+/** Reason characters quoted in a window-miss log line: enough to find the status, not the whole sentence. */
+const MISS_REASON_MAX = 100;
 
 /** How a feed reports; the recorder's own logger, prefixed by the feed label. */
 export type FeedLog = (msg: string) => void;
@@ -151,20 +160,98 @@ export function statusLineIds(lineIds: readonly string[], modeById: ReadonlyMap<
 }
 
 /**
- * Window form first; the Mode form only when TfL refuses the window (its
- * body is live statuses only, so the archive would lose planned works). The
- * refusal is logged on purpose: a window form that fails every poll — a
- * changed TfL route, a bad id list — must show up, not hide behind a
- * working fallback.
+ * The window body when TfL served it, else null after logging why so the
+ * caller falls back to the Mode form (live statuses only, so the archive
+ * would lose planned works — hence window first). A thrown fetch (network
+ * failure, the timeout on a ~600 KB body) is a reason to fall back exactly
+ * like a refused status: it must not skip the fallback and leave the poll to
+ * the recorder's generic catch. Both are logged on purpose: a window form that
+ * fails every poll — a changed TfL route, a bad id list — must show up, not
+ * hide behind a working fallback.
  */
-async function fetchTubeStatus(lineIds: readonly string[], appKey: string, log: FeedLog): Promise<TflResponse> {
+async function fetchWindowForm(lineIds: readonly string[], appKey: string, log: FeedLog): Promise<TflResponse | null> {
   const nowMs = Date.now();
   const fromDate = londonDay(new Date(nowMs - WINDOW_LOOKBACK_DAYS * MS_PER_DAY));
   const toDate = londonDay(new Date(nowMs + WINDOW_LOOKAHEAD_DAYS * MS_PER_DAY));
-  const window = await fetchLineStatusWindow(lineIds, fromDate, toDate, appKey);
-  if (window.status === HTTP_OK) return window;
-  log(`${TUBE_STATUS_LABEL}: window form returned ${window.status}, falling back to /Line/Mode/${STATUS_MODES.join(',')}/Status`);
-  return fetchLineStatusByModes(STATUS_MODES, appKey, undefined, true);
+  try {
+    const response = await fetchLineStatusWindow(lineIds, fromDate, toDate, appKey);
+    if (response.status === HTTP_OK) return response;
+    log(`${TUBE_STATUS_LABEL}: window form returned ${response.status}, falling back to ${MODE_FORM_PATH}`);
+  } catch (err) {
+    log(`${TUBE_STATUS_LABEL}: window form failed: ${String(err)}, falling back to ${MODE_FORM_PATH}`);
+  }
+  return null;
+}
+
+const statusKey = (lineId: string, entry: LineStatusEntry): string => `${lineId}|${entry.s}|${entry.r ?? ''}`;
+
+/**
+ * Statuses the Mode form reports that the window body lacks, as log-ready
+ * descriptors. Spec §13 #7: the window filter is per-validity-period overlap
+ * (measured 2026-09-03: a PlannedWork period starting a full London day
+ * before `from` was returned), but that is one probe on planned works, not a
+ * week of live incidents, and compactStatus cannot tell a missing status from
+ * a resolved one — so every poll compares the two forms and a miss is logged,
+ * never archived away in silence. Good Service and No Issues rows are not
+ * compared: their absence loses no incident. Null when either body is not a
+ * status array — nothing to compare.
+ */
+export function windowMisses(windowBody: unknown, modeBody: unknown): string[] | null {
+  const windowLines = compactStatus(windowBody);
+  const modeLines = compactStatus(modeBody);
+  if (windowLines === null || modeLines === null) return null;
+  const present = new Set(windowLines.flatMap((line) => line.st.map((entry) => statusKey(line.id, entry))));
+  const misses: string[] = [];
+  for (const line of modeLines) {
+    for (const entry of line.st) {
+      if (entry.s === GOOD_SERVICE_SEVERITY || entry.s === NO_ISSUES_SEVERITY) continue;
+      if (present.has(statusKey(line.id, entry))) continue;
+      misses.push(`${line.id} s=${entry.s} "${(entry.r ?? entry.d).slice(0, MISS_REASON_MAX)}"`);
+    }
+  }
+  return misses;
+}
+
+/** Logs only when the miss set changed, so a persistent miss costs one line, not one per poll. */
+function logMissChanges(misses: readonly string[], lastMisses: readonly string[], log: FeedLog): void {
+  if (misses.join('\n') === lastMisses.join('\n')) return;
+  if (misses.length === 0) {
+    log(`${TUBE_STATUS_LABEL}: window-miss cleared`);
+    return;
+  }
+  for (const miss of misses) log(`${TUBE_STATUS_LABEL}: window-miss ${miss}`);
+}
+
+/**
+ * Shadow comparison of a served window body against the Mode form without
+ * detail (measured 2026-09-03: 18.6 KB, 0.17 s). Returns the misses found,
+ * or `lastMisses` when the shadow itself could not run — a shadow failure is
+ * logged but never touches the snapshot, which is the window body regardless.
+ */
+async function shadowAgainstModeForm(
+  windowBody: unknown,
+  appKey: string,
+  log: FeedLog,
+  lastMisses: readonly string[],
+): Promise<readonly string[]> {
+  let mode: TflResponse;
+  try {
+    mode = await fetchLineStatusByModes(STATUS_MODES, appKey);
+  } catch (err) {
+    log(`${TUBE_STATUS_LABEL}: window shadow failed: ${String(err)}`);
+    return lastMisses;
+  }
+  if (mode.status !== HTTP_OK) {
+    log(`${TUBE_STATUS_LABEL}: window shadow returned ${mode.status}`);
+    return lastMisses;
+  }
+  const misses = windowMisses(windowBody, mode.body);
+  if (misses === null) {
+    log(`${TUBE_STATUS_LABEL}: window shadow: unrecognised payload, nothing compared`);
+    return lastMisses;
+  }
+  logMissChanges(misses, lastMisses, log);
+  return misses;
 }
 
 /**
@@ -173,6 +260,8 @@ async function fetchTubeStatus(lineIds: readonly string[], appKey: string, log: 
  * data/manifest.json, which app.ts owns.
  */
 export function makeTubeStatusFeed(lineIds: readonly string[]): RecorderFeed {
+  // What the last shadow comparison found, so a persistent miss is logged once.
+  let lastMisses: readonly string[] = [];
   return {
     label: TUBE_STATUS_LABEL,
     subdir: 'tube-status',
@@ -182,7 +271,12 @@ export function makeTubeStatusFeed(lineIds: readonly string[]): RecorderFeed {
     // detail=true pairs each reason sentence with TfL's own affectedRoutes /
     // affectedStops (NaPTAN ids): the ground truth the disruption-geolocation
     // parser is evaluated against. Without it the archive holds only prose.
-    fetchSnapshot: (appKey, log) => fetchTubeStatus(lineIds, appKey, log),
+    fetchSnapshot: async (appKey, log) => {
+      const windowResponse = await fetchWindowForm(lineIds, appKey, log);
+      if (windowResponse === null) return fetchLineStatusByModes(STATUS_MODES, appKey, undefined, true);
+      lastMisses = await shadowAgainstModeForm(windowResponse.body, appKey, log, lastMisses);
+      return windowResponse;
+    },
     compact: compactStatus,
   };
 }
