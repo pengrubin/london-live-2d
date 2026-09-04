@@ -24,7 +24,7 @@ import { LearnerScheduler } from './learner-scheduler';
 import { loadNrGraph, makeCachedNrBoardFetcher, NrSampler } from './nr-sampler';
 import { RateBudget } from './rate-budget';
 import { RollupWriter } from './rollup-writer';
-import { ROAD_DISRUPTIONS_FEED, SnapshotRecorder, TUBE_STATUS_FEED } from './status-recorder';
+import { makeTubeStatusFeed, ROAD_DISRUPTIONS_FEED, SnapshotRecorder, statusLineIds } from './status-recorder';
 import { TraceWriter } from './trace-writer';
 import { registerArrivalsRoute } from './routes/arrivals';
 import { registerCapabilitiesRoute } from './routes/capabilities';
@@ -202,14 +202,20 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   app.addHook('onClose', () => coverage.stop());
   registerCoverageRoute(app, join(busDataDir, 'coverage'));
 
+  // Baked line data (manifest + branches) is shared by the tube-status
+  // recorder below and the leaderboard further down — loaded once, here.
+  const log = (msg: string): void => app.log.info(msg);
+  const branchData = loadBranchData(DATA_DIR, log);
+
   // Permanent archives of TfL feeds with no historical endpoint (line status
   // + road disruptions) — kept from the day this ships. A few MB per year;
   // never pruned. Road disruptions double as the gold standard for validating
-  // bus diversion detection.
+  // bus diversion detection. The status window names its lines explicitly:
+  // the manifest's rail lines, never the cable car or the river buses.
   if (config.tflAppKey) {
-    for (const feed of [TUBE_STATUS_FEED, ROAD_DISRUPTIONS_FEED]) {
-      const recorder = new SnapshotRecorder(busDataDir, config.tflAppKey, (msg) =>
-        app.log.info(msg), feed);
+    const tubeStatusFeed = makeTubeStatusFeed(statusLineIds(branchData.lineIds, branchData.lineModeById));
+    for (const feed of [tubeStatusFeed, ROAD_DISRUPTIONS_FEED]) {
+      const recorder = new SnapshotRecorder(busDataDir, config.tflAppKey, log, feed);
       recorder.start();
       app.addHook('onClose', () => recorder.stop());
     }
@@ -262,8 +268,6 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   // Tube positions come from the SAME arrivals cache + TfL budget as
   // /api/arrivals (identical cache key), so the sampler piggybacks on frontend
   // polling and never double-spends the budget.
-  const log = (msg: string): void => app.log.info(msg);
-  const branchData = loadBranchData(DATA_DIR, log);
 
   // National Rail boards — Darwin fair use is generous, but boards are heavy:
   // long-ish cache and a dedicated budget keep us a polite consumer. The cache
@@ -315,6 +319,15 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     cacheCrowding: crowdingCache.size,
     cacheLiftDisruptions: liftDisruptionsCache.size,
     cacheBikePoints: bikePointsCache.size,
+    // Evictions on the caches keyed by an id space larger than any working
+    // set. Zero means the ceiling is never reached and costs nothing; a number
+    // that climbs steadily means it is too low and every eviction is a cache
+    // miss a viewer paid for. These are the caches whose unbounded growth
+    // filled the heap on 2026-09-04.
+    evictStopArrivals: stopArrivalsCache.evictions,
+    evictVehicleArrivals: vehicleArrivalsCache.evictions,
+    evictStopDetail: stopDetailCache.evictions,
+    evictCrowding: crowdingCache.evictions,
   }));
   app.addHook('onClose', () => leaderboard.stop());
   registerLeaderboardRoute(app, leaderboard);
