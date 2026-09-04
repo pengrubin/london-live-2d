@@ -353,4 +353,81 @@ describe('poll gating', () => {
     warn.mockRestore();
     setBusStopClosuresVisible(map, false);
   });
+
+  test('counts and logs a failure on the re-filter tick instead of losing it', async () => {
+    // Arrange — a healthy first poll, then the map goes out from under the
+    // layer. The minute tick fetches nothing, so poll()'s try/catch can never
+    // see this: unguarded it becomes an untagged throw inside setInterval,
+    // with no counter, no [bus-stop-closures] line and a clean-looking
+    // busStopClosuresStats() while the layer has stopped re-deriving state.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { map, painted } = fakeMap();
+    await startBusStopClosures(map);
+    setBusStopClosuresVisible(map, true);
+    await vi.waitFor(() => expect(painted).toHaveLength(1));
+    const before = busStopClosuresStats().pollFailures;
+    (map as unknown as { getSource: () => unknown }).getSource = () => {
+      throw new Error('style reloaded under the layer');
+    };
+
+    // Act — registerPoll call 0 is the fetch poll, call 1 is the re-filter tick.
+    const tick = registerPoll.mock.calls[1]?.[0] as () => void;
+    expect(() => tick()).not.toThrow();
+
+    // Assert
+    expect(busStopClosuresStats().pollFailures).toBe(before + 1);
+    expect(busStopClosuresStats().lastPollError).toContain('style reloaded');
+    expect(error).toHaveBeenCalledWith('[bus-stop-closures]', expect.any(Error));
+    error.mockRestore();
+    setBusStopClosuresVisible(map, false);
+  });
+
+  test('registers the re-filter tick on its own interval', async () => {
+    // Arrange / Act
+    const { map } = fakeMap();
+    await startBusStopClosures(map);
+
+    // Assert — two pollers: the fetch and the fetch-less re-filter.
+    expect(registerPoll).toHaveBeenCalledTimes(2);
+    expect(registerPoll.mock.calls[1]?.[1]).toBe(60_000);
+  });
+});
+
+describe('a row that states no type', () => {
+  test('is never worded as closed, because the row never said so', () => {
+    // Arrange — `ty` is optional in the contract, and an absent one claims
+    // nothing. Defaulting it to "Closure" would make the map say the single
+    // most specific thing it can about a row that said nothing at all.
+    const untyped = propsOf(buildClosureFeatures([stop({ ty: undefined })], NOW).features[0]);
+
+    // Act
+    const html = closurePopupHtml(untyped);
+
+    // Assert
+    expect(untyped.ty).toBe('');
+    expect(html).not.toContain('Bus stop closed');
+    expect(html).not.toContain('⛔');
+    expect(html).toContain('Disruption');
+  });
+
+  test('still draws, and still carries its name, routes and window', () => {
+    // Arrange — the row is in force and positioned; only its type is missing,
+    // so hiding it would lose a disruption TfL is actually reporting.
+    const built = buildClosureFeatures([stop({ ty: undefined })], NOW);
+
+    // Act
+    const html = closurePopupHtml(propsOf(built.features[0]));
+
+    // Assert
+    expect(built.features).toHaveLength(1);
+    expect(html).toContain('Trafalgar Square');
+    expect(html).toContain('24, 29, 176');
+    expect(html).toContain('Since');
+  });
+
+  test('keeps an empty-string type neutral too', () => {
+    const blank = propsOf(buildClosureFeatures([stop({ ty: '' })], NOW).features[0]);
+    expect(closurePopupHtml(blank)).not.toContain('Bus stop closed');
+    expect(closurePopupHtml(blank)).toContain('Disruption');
+  });
 });

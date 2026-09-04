@@ -99,6 +99,8 @@ const apps: FastifyInstance[] = [];
 interface HarnessOptions {
   readonly gazetteer?: ReadonlyMap<string, BusStop>;
   readonly stopPoints?: () => Promise<TflResponse>;
+  /** The shared TfL budget, so a test can starve the gazetteer top-up. */
+  readonly budget?: RateBudget;
 }
 
 function harness(responses: (() => Promise<TflResponse>)[], options: HarnessOptions = {}): Harness {
@@ -132,7 +134,7 @@ function harness(responses: (() => Promise<TflResponse>)[], options: HarnessOpti
     {
       config: CONFIG,
       cache: new TtlCache<unknown>(BUS_STOP_CLOSURES_TTL_MS),
-      budget: new RateBudget(BUDGET_LIMIT, BUDGET_WINDOW_MS),
+      budget: options.budget ?? new RateBudget(BUDGET_LIMIT, BUDGET_WINDOW_MS),
       now: () => clock,
     },
     ctx,
@@ -327,6 +329,7 @@ describe('GET /api/bus-stop-closures health counters', () => {
       busStopClosuresDropped: 1,
       busStopClosuresUnresolved: 1,
       busStopClosuresNotInForce: 1,
+      busStopClosuresBudgetDeferred: 0,
       busStopClosuresLastShapeMs: 0,
     });
   });
@@ -339,6 +342,7 @@ describe('GET /api/bus-stop-closures health counters', () => {
       busStopClosuresDropped: 0,
       busStopClosuresUnresolved: 0,
       busStopClosuresNotInForce: 0,
+      busStopClosuresBudgetDeferred: 0,
       busStopClosuresLastShapeMs: 0,
     });
   });
@@ -437,5 +441,56 @@ describe('GET /api/bus-stop-closures upstream failures', () => {
     // Assert
     expect(res.statusCode).toBe(503);
     expect(fetchFeed).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/bus-stop-closures gazetteer budget', () => {
+  it('spends the shared TfL budget on every StopPoint batch it fires', async () => {
+    // Arrange — room for the feed fetch and exactly one top-up batch.
+    const budget = new RateBudget(2, BUDGET_WINDOW_MS);
+    const h = harness([ok([row({ atcoCode: NEW_POLE })])], { budget });
+
+    // Act
+    const { stops } = (await h.get()).json() as { stops: { id: string }[] };
+
+    // Assert — resolved, and the budget is now empty.
+    expect(h.fetchStopPoints).toHaveBeenCalledTimes(1);
+    expect(stops.map((s) => s.id)).toEqual([NEW_POLE]);
+    expect(budget.tryConsume(T0)).toBe(false);
+    expect(h.counters().busStopClosuresBudgetDeferred).toBe(0);
+  });
+
+  it('defers the top-up instead of bursting past the app-wide budget', async () => {
+    // Arrange — one unit, which the feed fetch itself takes. A cold start with
+    // no baked gazetteer would otherwise fire 13+ ungated StopPoint calls.
+    const budget = new RateBudget(1, BUDGET_WINDOW_MS);
+    const h = harness([ok([row({ atcoCode: NEW_POLE })])], { budget });
+
+    // Act
+    const res = await h.get();
+
+    // Assert — no upstream call, nothing drawn from a guessed position, and
+    // the deferral is counted and logged rather than passing for "no closures".
+    expect(h.fetchStopPoints).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(HTTP_OK);
+    expect((res.json() as { stops: unknown[] }).stops).toEqual([]);
+    expect(h.counters().busStopClosuresBudgetDeferred).toBe(1);
+    expect(h.counters().busStopClosuresUnresolved).toBe(1);
+    expect(h.logs.some((entry) => /budget/i.test(entry))).toBe(true);
+  });
+
+  it('clears the deferral once a later cycle needs no lookup at all', async () => {
+    // Arrange — starved first, then a cycle whose poles are all known.
+    const budget = new RateBudget(1, BUDGET_WINDOW_MS);
+    const h = harness([ok([row({ atcoCode: NEW_POLE })]), ok([row()])], { budget });
+
+    // Act
+    await h.get();
+    h.advance(BUS_STOP_CLOSURES_TTL_MS + 1);
+    await h.get();
+
+    // Assert — /health must not keep reporting a rate limit that has cleared.
+    expect(h.counters().busStopClosuresBudgetDeferred).toBe(0);
+    expect(h.counters().busStopClosuresStops).toBe(1);
   });
 });

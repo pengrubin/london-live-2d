@@ -554,3 +554,146 @@ describe('resolveStops accounting', () => {
     });
   });
 });
+
+describe('resolveStops rate budget', () => {
+  it('asks the budget before every upstream batch', async () => {
+    // Arrange — 45 ids is three batches, and the budget allows them all.
+    const { ids, roots } = standalonePoles(45);
+    const stub = stubFetcher(roots);
+    let asked = 0;
+
+    // Act
+    const result = await resolveStops(ids, {
+      fetchStopPoints: stub.fetchStopPoints,
+      log: silent,
+      sleep: noWait,
+      tryConsume: () => {
+        asked += 1;
+        return true;
+      },
+    });
+
+    // Assert — one unit per call, and nothing deferred.
+    expect(asked).toBe(3);
+    expect(stub.calls).toHaveLength(3);
+    expect(result.stats.budgetDeferred).toBe(0);
+    expect(result.resolved.size).toBe(45);
+  });
+
+  it('makes no upstream call at all when the budget is already exhausted', async () => {
+    // Arrange
+    const { ids, roots } = standalonePoles(5);
+    const stub = stubFetcher(roots);
+    const logs: string[] = [];
+
+    // Act
+    const result = await resolveStops(ids, {
+      fetchStopPoints: stub.fetchStopPoints,
+      log: (message) => logs.push(message),
+      sleep: noWait,
+      tryConsume: () => false,
+    });
+
+    // Assert — deferred, not dropped silently: counted, reasoned and logged.
+    expect(stub.calls).toEqual([]);
+    expect(result.stats.upstreamCalls).toBe(0);
+    expect(result.stats.budgetDeferred).toBe(5);
+    expect(result.unresolved).toHaveLength(5);
+    expect(result.reasons.get(ids[0] as string)).toMatch(/budget/i);
+    expect(logs.some((entry) => /budget/i.test(entry))).toBe(true);
+  });
+
+  it('stops after the batch the budget refuses instead of firing the rest', async () => {
+    // Arrange — three batches, budget room for two.
+    const { ids, roots } = standalonePoles(45);
+    const stub = stubFetcher(roots);
+    let left = 2;
+
+    // Act
+    const result = await resolveStops(ids, {
+      fetchStopPoints: stub.fetchStopPoints,
+      log: silent,
+      sleep: noWait,
+      tryConsume: () => {
+        if (left === 0) return false;
+        left -= 1;
+        return true;
+      },
+    });
+
+    // Assert — 40 resolved, the last 5 deferred to the next cycle.
+    expect(stub.calls.map((c) => c.length)).toEqual([20, 20]);
+    expect(result.resolved.size).toBe(40);
+    expect(result.stats.budgetDeferred).toBe(5);
+    expect(result.unresolved).toHaveLength(5);
+  });
+
+  it('asks the budget again for each half a rejected batch is split into', async () => {
+    // Arrange — one poison id makes the batch fail; the halves need budget too.
+    const { ids, roots } = standalonePoles(4);
+    const poison = ids[1] as string;
+    const stub = stubFetcher(roots, poison);
+    let left = 1;
+
+    // Act
+    const result = await resolveStops(ids, {
+      fetchStopPoints: stub.fetchStopPoints,
+      log: silent,
+      sleep: noWait,
+      tryConsume: () => {
+        if (left === 0) return false;
+        left -= 1;
+        return true;
+      },
+    });
+
+    // Assert — only the first (failed) call went out; both halves deferred.
+    expect(stub.calls).toHaveLength(1);
+    expect(result.resolved.size).toBe(0);
+    expect(result.stats.budgetDeferred).toBe(4);
+  });
+
+  it('spends no budget on ids the cache already holds', async () => {
+    // Arrange
+    const { ids, roots } = standalonePoles(2);
+    const cached = new Map<string, BusStop>(
+      ids.map((id) => [id, { id, name: id, lat: 51.5, lon: -0.1, routes: [], match: 'exact' }]),
+    );
+    const stub = stubFetcher(roots);
+    let asked = 0;
+
+    // Act
+    const result = await resolveStops(ids, {
+      fetchStopPoints: stub.fetchStopPoints,
+      log: silent,
+      sleep: noWait,
+      cached,
+      tryConsume: () => {
+        asked += 1;
+        return true;
+      },
+    });
+
+    // Assert
+    expect(asked).toBe(0);
+    expect(result.resolved.size).toBe(2);
+    expect(result.stats.budgetDeferred).toBe(0);
+  });
+
+  it('spends budget freely when no budget is injected', async () => {
+    // Arrange — the dep is optional; omitting it must not block resolution.
+    const { ids, roots } = standalonePoles(3);
+    const stub = stubFetcher(roots);
+
+    // Act
+    const result = await resolveStops(ids, {
+      fetchStopPoints: stub.fetchStopPoints,
+      log: silent,
+      sleep: noWait,
+    });
+
+    // Assert
+    expect(result.resolved.size).toBe(3);
+    expect(result.stats.budgetDeferred).toBe(0);
+  });
+});

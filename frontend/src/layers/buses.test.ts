@@ -135,3 +135,69 @@ describe('setBusRouteShapeHook', () => {
     expect(() => setBusLineFilter(fakeMap(), new Set(['24']))).not.toThrow();
   });
 });
+
+describe('setBusRouteShapeHook with an async hook', () => {
+  test('logs a rejected async hook instead of letting it escape as unhandled', async () => {
+    // Arrange — the next listener in line (a stop-closure highlight scoped to
+    // the searched line) has to fetch, so it will be `async`. An async hook
+    // does NOT throw to its caller: it returns a rejected promise, which a
+    // plain try/catch never sees, and TypeScript allows the assignment because
+    // a Promise<void> returner satisfies a void-returning callback type.
+    const { setBusLineFilter, setBusRouteShapeHook } = await freshBuses();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const boom = new Error('closure fetch failed');
+    const failing = vi.fn(async () => {
+      await Promise.resolve();
+      throw boom;
+    });
+    const second = vi.fn();
+    setBusRouteShapeHook(failing);
+    setBusRouteShapeHook(second);
+
+    // Act
+    setBusLineFilter(fakeMap(), new Set(['24']));
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+
+    // Assert — same trail a synchronous throw leaves: index and cause.
+    expect(second).toHaveBeenCalledTimes(1);
+    const [message, logged] = warn.mock.calls[0];
+    expect(String(message)).toContain('[buses] route-shape hook 0 failed');
+    expect(logged).toBe(boom);
+  });
+
+  test('does not stop the fan-out reaching the hooks behind it', async () => {
+    // Arrange — the rejection must not be awaited either: a hook that never
+    // settles would otherwise hold up the white polyline behind it.
+    const { setBusLineFilter, setBusRouteShapeHook } = await freshBuses();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const pending = vi.fn(() => new Promise<void>(() => {}));
+    const second = vi.fn();
+    setBusRouteShapeHook(pending);
+    setBusRouteShapeHook(second);
+
+    // Act
+    setBusLineFilter(fakeMap(), new Set(['24']));
+
+    // Assert — synchronously, in the same turn as the filter change.
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  test('leaves a resolving async hook alone', async () => {
+    // Arrange
+    const { setBusLineFilter, setBusRouteShapeHook } = await freshBuses();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const hook = vi.fn(async () => {
+      await Promise.resolve();
+    });
+    setBusRouteShapeHook(hook);
+
+    // Act
+    setBusLineFilter(fakeMap(), new Set(['24']));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Assert
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});

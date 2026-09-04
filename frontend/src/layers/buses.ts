@@ -287,9 +287,20 @@ let activeTrackers: ReadonlyMap<string, BusTracker> | null = null;
 /** Forces an out-of-band /api/buses fetch — set by startBuses. */
 let refreshBuses: (() => void) | null = null;
 
-/** What a line-filter listener is handed: the map, and the new selection
- * (null when the filter was cleared). */
-type BusRouteShapeHook = (map: MaplibreMap, lines: ReadonlySet<string> | null) => void;
+/**
+ * What a line-filter listener is handed: the map, and the new selection
+ * (null when the filter was cleared).
+ *
+ * `Promise<void>` is spelled out rather than left to `void`, because it is
+ * allowed either way: TypeScript's void-returning-callback rule assigns an
+ * `async (…) => {…}` to a `=> void` slot with no complaint. Saying so here is
+ * what makes the rejection handling in notifyRouteShapeHooks visibly part of
+ * the contract instead of an accident nobody typed.
+ */
+type BusRouteShapeHook = (
+  map: MaplibreMap,
+  lines: ReadonlySet<string> | null,
+) => void | Promise<void>;
 
 /**
  * Everything that redraws when the bus line filter really changes — the white
@@ -310,14 +321,38 @@ export function setBusRouteShapeHook(hook: BusRouteShapeHook): void {
   routeShapeHooks = [...routeShapeHooks, hook];
 }
 
-/** Calls every registered hook. One that throws must not silence the rest, so
- * each is contained and the failure is logged with its registration index. */
+const logHookFailure = (index: number, error: unknown): void => {
+  console.warn(`[buses] route-shape hook ${index} failed`, error);
+};
+
+/** True for anything with a `.then` — an async hook's return value. */
+function isThenable(value: void | Promise<void>): value is Promise<void> {
+  return typeof (value as Promise<void> | undefined)?.then === 'function';
+}
+
+/**
+ * Calls every registered hook. One that fails must not silence the rest, so
+ * each is contained and the failure is logged with its registration index.
+ *
+ * TWO containments, because there are two ways to fail. A synchronous throw is
+ * caught below. An `async` hook is not: it returns a REJECTED PROMISE and
+ * throws nothing at all to this frame, so the try/catch would watch it sail
+ * past into an unhandled rejection — no index, no `[buses]` line, nothing to
+ * grep during the outage the layer exists to show. The next listener in line
+ * (the stop-closure highlight, which must fetch) is exactly that shape, so the
+ * returned value is guarded too.
+ *
+ * The call itself stays synchronous and the rejection is only *observed*, never
+ * awaited: a hook must reach the map in the same turn as the filter change, and
+ * one that never settles must not hold up the hooks behind it.
+ */
 function notifyRouteShapeHooks(map: MaplibreMap, lines: ReadonlySet<string> | null): void {
   routeShapeHooks.forEach((hook, index) => {
     try {
-      hook(map, lines);
+      const result = hook(map, lines);
+      if (isThenable(result)) result.catch((error: unknown) => logHookFailure(index, error));
     } catch (error) {
-      console.warn(`[buses] route-shape hook ${index} failed`, error);
+      logHookFailure(index, error);
     }
   });
 }

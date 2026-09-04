@@ -69,6 +69,19 @@ export interface GazetteerDeps {
   /** Ids already known; a hit is never re-fetched. */
   readonly cached?: ReadonlyMap<string, BusStop>;
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * One unit of the app-wide TfL budget, taken before EVERY outbound batch —
+   * including each half a rejected batch is split into. Omitted, the walk is
+   * ungated, which only a test may choose.
+   *
+   * A cold start with no baked cache asks for ~260 poles at once: 13 batches,
+   * more once any of them degrades, all paced only by BATCH_GAP_MS. Un-gated
+   * that bursts straight past the ~1 req/s the whole app shares with arrivals,
+   * disruptions and every other layer, and TfL throttles the key for all of
+   * them. So a refusal is not an error: the ids stay unresolved, are counted
+   * and named, and the next TTL window asks again.
+   */
+  readonly tryConsume?: () => boolean;
 }
 
 export interface ResolveStats {
@@ -96,6 +109,13 @@ export interface ResolveStats {
   readonly withRoutes: number;
   readonly upstreamCalls: number;
   readonly failedBatches: number;
+  /**
+   * Ids not even attempted because the shared TfL budget was exhausted. Not a
+   * failure and not a loss — they are simply still missing, so the next cycle
+   * asks for them again — but it must never be invisible: without this number
+   * a budget-starved server and a TfL outage look identical from the outside.
+   */
+  readonly budgetDeferred: number;
 }
 
 export interface ResolveResult {
@@ -128,7 +148,14 @@ interface Counters {
   fetched: number;
   upstreamCalls: number;
   failedBatches: number;
+  budgetDeferred: number;
 }
+
+/** Why a deferred id has no position yet — recorded, never guessed at. */
+const BUDGET_REASON = 'deferred: TfL request budget exhausted, retried next cycle';
+
+/** Outcome of one batch: whether the walk may keep spending upstream calls. */
+type BatchOutcome = 'ok' | 'budget-exhausted';
 
 /**
  * Resolve ATCO ids to positioned stops, batching at STOPPOINT_BATCH_MAX,
@@ -157,7 +184,12 @@ export async function resolveStops(
   const batches = chunk(missing, STOPPOINT_BATCH_MAX);
   for (const [index, batch] of batches.entries()) {
     if (index > 0) await pause(deps);
-    await resolveBatch(batch, deps, resolved, reasons, counters);
+    const outcome = await resolveBatch(batch, deps, resolved, reasons, counters);
+    if (outcome === 'ok') continue;
+    // The budget said no. Every later batch would be refused too, so stop
+    // asking, name what is left, and let the next cycle try again.
+    defer(batches.slice(index + 1).flat(), deps, reasons, counters);
+    break;
   }
 
   const unresolved = wanted.filter((id) => !resolved.has(id));
@@ -180,7 +212,20 @@ export async function resolveStops(
 }
 
 function newCounters(): Counters {
-  return { fetched: 0, upstreamCalls: 0, failedBatches: 0 };
+  return { fetched: 0, upstreamCalls: 0, failedBatches: 0, budgetDeferred: 0 };
+}
+
+/** Records ids the budget would not let us ask about: counted, named, logged. */
+function defer(
+  ids: readonly string[],
+  deps: GazetteerDeps,
+  reasons: Map<string, string>,
+  counters: Counters,
+): void {
+  if (ids.length === 0) return;
+  for (const id of ids) reasons.set(id, BUDGET_REASON);
+  counters.budgetDeferred += ids.length;
+  deps.log(`bus-gazetteer: ${ids.length} id(s) not resolved — ${BUDGET_REASON}`);
 }
 
 /** Describe what was resolved, however it was resolved — cache hits included. */
@@ -200,15 +245,23 @@ function tally(resolved: ReadonlyMap<string, BusStop>): {
   return { exact, parent, withRoutes };
 }
 
-/** One upstream call; on failure, split and retry rather than drop the batch. */
+/**
+ * One upstream call; on failure, split and retry rather than drop the batch.
+ * The budget is asked FIRST, so no path here — the split retries included —
+ * can reach the network without a unit having been spent for it.
+ */
 async function resolveBatch(
   batch: readonly string[],
   deps: GazetteerDeps,
   resolved: Map<string, BusStop>,
   reasons: Map<string, string>,
   counters: Counters,
-): Promise<void> {
-  if (batch.length === 0) return;
+): Promise<BatchOutcome> {
+  if (batch.length === 0) return 'ok';
+  if (deps.tryConsume !== undefined && !deps.tryConsume()) {
+    defer(batch, deps, reasons, counters);
+    return 'budget-exhausted';
+  }
 
   counters.upstreamCalls += 1;
   let nodes: RawNode[];
@@ -218,8 +271,7 @@ async function resolveBatch(
     nodes = toNodes(response.body);
   } catch (error) {
     counters.failedBatches += 1;
-    await degrade(batch, describe(error), deps, resolved, reasons, counters);
-    return;
+    return await degrade(batch, describe(error), deps, resolved, reasons, counters);
   }
 
   const index = indexNodes(nodes);
@@ -233,6 +285,7 @@ async function resolveBatch(
     resolved.set(id, picked.stop);
     counters.fetched += 1;
   }
+  return 'ok';
 }
 
 /** Halve a rejected batch; a single id that still fails is recorded and named. */
@@ -243,20 +296,25 @@ async function degrade(
   resolved: Map<string, BusStop>,
   reasons: Map<string, string>,
   counters: Counters,
-): Promise<void> {
+): Promise<BatchOutcome> {
   const single = batch.length === 1 ? batch[0] : undefined;
   if (single) {
     const why = `upstream failed: ${reason}`;
     reasons.set(single, why);
     deps.log(`bus-gazetteer: ${single} unresolved — ${why}`);
-    return;
+    return 'ok';
   }
 
   deps.log(`bus-gazetteer: batch of ${batch.length} failed (${reason}) — splitting`);
   const mid = Math.ceil(batch.length / 2);
-  await resolveBatch(batch.slice(0, mid), deps, resolved, reasons, counters);
+  const rest = batch.slice(mid);
+  const first = await resolveBatch(batch.slice(0, mid), deps, resolved, reasons, counters);
+  if (first === 'budget-exhausted') {
+    defer(rest, deps, reasons, counters);
+    return 'budget-exhausted';
+  }
   await pause(deps);
-  await resolveBatch(batch.slice(mid), deps, resolved, reasons, counters);
+  return await resolveBatch(rest, deps, resolved, reasons, counters);
 }
 
 /** The node to trust for one requested id, or why there is none. */

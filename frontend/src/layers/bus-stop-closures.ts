@@ -214,7 +214,10 @@ function toProps(stop: BusStopClosure): ClosureProps {
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       .join(', '),
     towards: stop.towards ?? '',
-    ty: stop.ty ?? 'Closure',
+    // NOT defaulted to "Closure". An absent `ty` states nothing, and inventing
+    // the most specific claim the layer can make for a row that made none is
+    // exactly the mark the upstream data does not state.
+    ty: stop.ty ?? '',
     when: closureWindowLabel(stop),
     description: stop.d ?? '',
   };
@@ -266,7 +269,15 @@ export function buildClosureFeatures(
  * because the map must not claim more than the row states. */
 const TYPE_WORDS: Record<string, string> = { Closure: '⛔ Bus stop closed' };
 
-const titleFor = (props: ClosureProps): string => TYPE_WORDS[props.ty] ?? `⚠ ${props.ty}`;
+/** A row TfL gave no type at all. The pin is honest — the pole IS in the
+ * current-disruption feed with a window covering now — but the wording may go
+ * no further than that, so it names the fact and not a kind of disruption. */
+const UNTYPED_TITLE = '⚠ Disruption';
+
+const titleFor = (props: ClosureProps): string => {
+  if (!props.ty) return UNTYPED_TITLE;
+  return TYPE_WORDS[props.ty] ?? `⚠ ${props.ty}`;
+};
 
 const textLine = (text: string, className?: string): string =>
   text ? `<div${className ? ` class="${className}"` : ''}>${esc(text)}</div>` : '';
@@ -424,6 +435,29 @@ export async function startBusStopClosures(map: MaplibreMap): Promise<void> {
     setData(map, built.features);
   }
 
+  /** The one place a failure is recorded, so both call paths below leave the
+   * same trail: a counter, the reason, and a [bus-stop-closures] line. */
+  function noteFailure(error: unknown): void {
+    stats.pollFailures += 1;
+    stats.lastPollError = error instanceof Error ? error.message : String(error);
+    console.error('[bus-stop-closures]', error);
+  }
+
+  /**
+   * The minute tick's entry point. rebuild() throwing inside poll() is caught
+   * below, but the tick fetches nothing, so an unguarded throw there would land
+   * in the interval callback: no counter, no reason, no log line to grep, and
+   * busStopClosuresStats() still reporting a clean layer that has quietly
+   * stopped re-deriving its state.
+   */
+  function tickRebuild(): void {
+    try {
+      rebuild();
+    } catch (error) {
+      noteFailure(error);
+    }
+  }
+
   async function poll(): Promise<void> {
     if (!overlayOn) return;
     try {
@@ -447,9 +481,7 @@ export async function startBusStopClosures(map: MaplibreMap): Promise<void> {
       // Keep the previous picture; the next poll retries. But NEVER swallow the
       // reason: a permanently failing route and a genuine "nothing is closed"
       // look identical on the map, and only this line tells them apart.
-      stats.pollFailures += 1;
-      stats.lastPollError = error instanceof Error ? error.message : String(error);
-      console.error('[bus-stop-closures]', error);
+      noteFailure(error);
     }
   }
   refresh = () => void poll();
@@ -461,5 +493,5 @@ export async function startBusStopClosures(map: MaplibreMap): Promise<void> {
   await poll();
   registerPoll(() => void poll(), POLL_INTERVAL_MS);
   // The window is time-dependent, so it is re-derived without a fetch.
-  registerPoll(() => rebuild(), TICK_INTERVAL_MS);
+  registerPoll(tickRebuild, TICK_INTERVAL_MS);
 }

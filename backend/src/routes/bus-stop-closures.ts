@@ -70,6 +70,13 @@ export interface BusStopClosuresCounters {
    * reads zero, or nearly everything, the window test has stopped working.
    */
   readonly busStopClosuresNotInForce: number;
+  /**
+   * Poles the last top-up could not even ask TfL about because the shared
+   * budget was exhausted. Zero on every ordinary day; a non-zero reading is
+   * the one signal that the map is thin because the app is rate-limited rather
+   * than because London has fewer closures.
+   */
+  readonly busStopClosuresBudgetDeferred: number;
   readonly busStopClosuresLastShapeMs: number;
 }
 
@@ -90,6 +97,7 @@ const ZERO_COUNTERS: BusStopClosuresCounters = {
   busStopClosuresDropped: 0,
   busStopClosuresUnresolved: 0,
   busStopClosuresNotInForce: 0,
+  busStopClosuresBudgetDeferred: 0,
   busStopClosuresLastShapeMs: 0,
 };
 
@@ -113,14 +121,28 @@ export function registerBusStopClosuresRoute(
   let gazetteer = ctx.gazetteer;
   let counters = ZERO_COUNTERS;
   let fetchedAtMs = now();
+  /** Poles the last top-up deferred on the budget; folded into the counters. */
+  let deferred = 0;
 
   /**
    * Resolve the poles this feed names that nobody has resolved before, and
    * keep them: a stop's position never changes. Only IN-FORCE ids are looked
    * up — resolving a closure that starts next week spends calls on a pin the
    * overlay is forbidden to draw.
+   *
+   * Every batch takes a unit of the SHARED TfL budget, the same one arrivals
+   * and disruptions draw from. It has to: `loadGazetteer` deliberately starts
+   * empty when the baked cache is missing, so the first request after a cold
+   * start asks for every closed pole at once — 13+ batched calls, more once any
+   * of them degrades into halves — and un-gated that alone exceeds the whole
+   * app's ~1 req/s ceiling in a few seconds, for every layer and every viewer.
+   * A refusal defers those ids to the next TTL window; it never drops them.
    */
   const topUpGazetteer = async (body: unknown, appKey: string, atMs: number): Promise<void> => {
+    // Reset first: this describes the LAST top-up, so a cycle that needed no
+    // lookup at all must clear the previous cycle's deferral rather than
+    // leaving /health reporting a rate limit that has long since cleared.
+    deferred = 0;
     const missing = liveClosureIds(body, atMs).filter((id) => !gazetteer.has(id));
     if (missing.length === 0) return;
 
@@ -128,10 +150,12 @@ export function registerBusStopClosuresRoute(
       fetchStopPoints: (ids) => fetchPoints(ids, appKey),
       log: ctx.log,
       cached: gazetteer,
+      tryConsume: () => deps.budget.tryConsume(now()),
       ...(ctx.sleep === undefined ? {} : { sleep: ctx.sleep }),
     });
+    deferred = result.stats.budgetDeferred;
     ctx.log(
-      `bus-stop-closures: ${missing.length} new pole(s), ${result.resolved.size} resolved, ${result.unresolved.length} not`,
+      `bus-stop-closures: ${missing.length} new pole(s), ${result.resolved.size} resolved, ${result.unresolved.length} not (${deferred} deferred on the TfL budget)`,
     );
     if (result.resolved.size === 0) return;
 
@@ -178,6 +202,7 @@ export function registerBusStopClosuresRoute(
       busStopClosuresDropped: stats.dropped,
       busStopClosuresUnresolved: stats.unresolved,
       busStopClosuresNotInForce: stats.notInForce,
+      busStopClosuresBudgetDeferred: deferred,
       busStopClosuresLastShapeMs: now() - startedAt,
     };
     ctx.log(
