@@ -19,6 +19,16 @@
 // rollup pass, so a layer nobody is looking at polling anyway would be pure
 // egress waste. Becoming active refreshes immediately since the last picture
 // may be a whole off-interval stale.
+//
+// A FAILED FETCH IS NOT AN ALL-CLEAR. Keeping the last picture on a failure is
+// right once there is one; before the first good payload there is not, and an
+// empty scoped list draws exactly like a route with no diversion on it — the
+// false negative that mirrors the false positive the vehicle floor guards
+// against, and the worse of the two, because a rider walks toward a live
+// diversion believing the road is clear. Two things separate the cases: every
+// failure is a console.error naming what asked for the data and whether
+// anything has ever been received (noteFailure), and while nothing has, the
+// retry is seconds rather than a whole poll interval (scheduleColdRetry).
 
 import {
   Popup,
@@ -38,6 +48,13 @@ const SOURCE_ID = 'diversions';
 const DIVERSIONS_URL = '/api/diversions';
 /** The API caches for 60 s; 90 s keeps at most one wasted hit per fresh copy. */
 const POLL_INTERVAL_MS = 90_000;
+/** How soon a failed poll is retried while the layer has NEVER held a payload.
+ * Short because that whole window is a map that cannot say whether a searched
+ * route is clear; not shorter, because a hard outage must not be hammered. */
+export const DIVERSIONS_COLD_RETRY_MS = 5_000;
+/** Consecutive cold retries before falling back to the normal interval — an
+ * outage lasting past ~15 s is not a blip and the 90 s poller can carry it. */
+export const DIVERSIONS_COLD_RETRY_LIMIT = 3;
 
 /** Highlighter-band styling: the basemap is already saturated with coloured
  * transit lines, so competing on colour loses — instead the event is a WIDE,
@@ -257,6 +274,24 @@ function wireInteractions(map: MaplibreMap, layerId: string): void {
   });
 }
 
+// ── fetch health ──
+// Read with `lastEvents`, never apart from it: the pair is what separates "no
+// diversion on your route" from "we do not know yet".
+
+const stats = {
+  polls: 0,
+  pollFailures: 0,
+  lastPollError: '',
+  /** Epoch ms of the last poll that actually returned a payload; 0 = never. */
+  lastGoodFetchAt: 0,
+};
+
+/** Live counters for acceptance tooling and the console, as the stop-closure
+ * layer exposes its own. */
+export function diversionsStats(): typeof stats {
+  return stats;
+}
+
 // ── diversion display coordinator ──
 // Two independent inputs decide what this layer shows, so they are resolved
 // together in one place rather than fighting over the same source:
@@ -317,6 +352,33 @@ export function setDiversionsVisible(map: MaplibreMap, visible: boolean): void {
   applyDiversionDisplay(map);
 }
 
+/** Which input was asking for the data, for the failure log. A failure while a
+ * line is searched is the one that reads back to the rider as "your route is
+ * clear", so the log has to name the line. */
+function describeDemand(): string {
+  const searched = searchedSelection ? [...searchedSelection].join(', ') : '';
+  if (searched && overlayOn) return `overlay on, searching ${searched}`;
+  if (searched) return `searching ${searched}`;
+  if (overlayOn) return 'overlay on';
+  return 'nothing asked for it';
+}
+
+/**
+ * The one place a failed poll is recorded. console.error, not warn: main.ts
+ * already uses error for a layer that fails to deliver its capability, and this
+ * is that — with no payload in hand the layer is answering a search with a
+ * blank map it has no evidence for.
+ */
+function noteFailure(error: unknown): void {
+  stats.pollFailures += 1;
+  stats.lastPollError = error instanceof Error ? error.message : String(error);
+  const held =
+    stats.lastGoodFetchAt === 0
+      ? 'NO payload ever received — the map cannot say whether a route is clear'
+      : `keeping ${lastEvents.length} event(s) from the last good fetch`;
+  console.error(`[diversions] poll failed (${describeDemand()}); ${held}`, error);
+}
+
 export async function startDiversions(map: MaplibreMap): Promise<void> {
   map.addSource(SOURCE_ID, {
     type: 'geojson',
@@ -354,6 +416,25 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
     below(map, 'stations-circle'),
   );
 
+  /** Consecutive fast retries spent since the layer last held a payload. */
+  let coldRetries = 0;
+
+  /**
+   * A failure with nothing ever received leaves a blank map that a searching
+   * rider reads as "clear", so waiting out the 90 s interval is the wrong
+   * trade — try again in seconds. Bounded, and only while `lastGoodFetchAt` is
+   * still 0: once there IS a last picture, keeping it until the next scheduled
+   * poll is honest and a retry would only add load to a struggling origin.
+   */
+  function scheduleColdRetry(): void {
+    if (stats.lastGoodFetchAt !== 0) return;
+    if (coldRetries >= DIVERSIONS_COLD_RETRY_LIMIT) return;
+    coldRetries += 1;
+    // The retry re-enters poll(), which re-checks `onScreen`, so a rider who
+    // clears the box in the meantime costs nothing.
+    setTimeout(() => void poll(), DIVERSIONS_COLD_RETRY_MS);
+  }
+
   async function poll(): Promise<void> {
     if (!onScreen) return;
     try {
@@ -364,10 +445,15 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
       // setData; empty `events` is fine and clears the layer.
       if (!Array.isArray(body?.events)) throw new Error('unexpected diversions payload shape');
       lastEvents = body.events;
+      stats.polls += 1;
+      stats.lastGoodFetchAt = Date.now();
+      stats.lastPollError = '';
       draw(map);
     } catch (error) {
-      // Keep the last picture; the next poll retries.
-      console.warn('[diversions]', error);
+      // Keep the last picture — but never silently: an outage and a genuine
+      // all-clear must not read the same.
+      noteFailure(error);
+      scheduleColdRetry();
     }
   }
 

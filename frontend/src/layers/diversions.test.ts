@@ -232,6 +232,7 @@ describe('the two inputs that decide what is drawn', () => {
   const body = (events: DiversionEvent[]) => ({ ok: true, json: async () => ({ events }) });
 
   let fetchSpy: ReturnType<typeof vi.fn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
   /** Module state (overlay, selection, cached events) outlives one test. */
   async function freshModule(): Promise<typeof import('./diversions')> {
@@ -258,6 +259,7 @@ describe('the two inputs that decide what is drawn', () => {
 
   beforeEach(() => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     fetchSpy = vi.fn(async () => body(EVENTS));
     vi.stubGlobal('fetch', fetchSpy);
   });
@@ -390,5 +392,132 @@ describe('the two inputs that decide what is drawn', () => {
     expect(filters).toEqual([]);
     expect(paints).toEqual([]);
     expect(JSON.stringify(specs[0]?.filter)).not.toContain('routes');
+  });
+  // ── a failed fetch must never read as "your route is clear" ──
+  // The layer keeps the last picture on a failure, which is right once there IS
+  // one. Before the first good payload there is not: the scoped list is empty
+  // and the map looks exactly like a route with no diversion on it. These pin
+  // the two things that separate the cases — a loud, contextual log, and a
+  // bounded fast retry so the blank window is seconds rather than an interval.
+
+  test('a failed first poll says so loudly, naming what asked for the data', async () => {
+    // Arrange — the rider is searching and the very first fetch fails, so there
+    // is no previous picture to fall back on.
+    const { map, painted } = fakeMap();
+    fetchSpy.mockRejectedValue(new Error('offline'));
+    const { startDiversions, diversionsStats } = await freshModule();
+    await startDiversions(map);
+
+    // Act
+    search(['46']);
+    await vi.waitFor(() => expect(diversionsStats().pollFailures).toBeGreaterThan(0));
+
+    // Assert — console.error (not warn), and the line says which line was typed
+    // and that nothing has ever been received.
+    const line = String(errorSpy.mock.calls.at(-1)?.[0]);
+    expect(line).toContain('[diversions]');
+    expect(line).toContain('46');
+    expect(line).toContain('NO payload');
+    expect(diversionsStats().lastGoodFetchAt).toBe(0);
+    expect(diversionsStats().lastPollError).toBe('offline');
+    expect(painted.at(-1)?.features ?? []).toEqual([]);
+  });
+
+  test('retries within seconds while it has never held a payload', async () => {
+    vi.useFakeTimers();
+    try {
+      // Arrange — first fetch fails, the next one would succeed.
+      const { map, painted } = fakeMap();
+      fetchSpy.mockRejectedValueOnce(new Error('offline'));
+      const { startDiversions, DIVERSIONS_COLD_RETRY_MS } = await freshModule();
+      await startDiversions(map);
+
+      // Act
+      search(['46']);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(painted.at(-1)?.features ?? []).toEqual([]);
+      await vi.advanceTimersByTimeAsync(DIVERSIONS_COLD_RETRY_MS);
+
+      // Assert — the searched line's diversion is on screen long before the
+      // 90 s poll would have come round.
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(drawnRoutes(painted.at(-1)!)).toEqual(['46']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('gives up fast-retrying after the bounded limit', async () => {
+    vi.useFakeTimers();
+    try {
+      // Arrange — everything fails, forever.
+      const { map } = fakeMap();
+      fetchSpy.mockRejectedValue(new Error('offline'));
+      const { startDiversions, DIVERSIONS_COLD_RETRY_MS, DIVERSIONS_COLD_RETRY_LIMIT } =
+        await freshModule();
+      await startDiversions(map);
+
+      // Act
+      search(['46']);
+      await vi.advanceTimersByTimeAsync(DIVERSIONS_COLD_RETRY_MS * (DIVERSIONS_COLD_RETRY_LIMIT + 4));
+
+      // Assert — the opening attempt plus the bounded retries, and no more:
+      // the 90 s poller carries it from here.
+      expect(fetchSpy).toHaveBeenCalledTimes(DIVERSIONS_COLD_RETRY_LIMIT + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('a failure AFTER a good payload keeps that picture and does not fast-retry', async () => {
+    vi.useFakeTimers();
+    try {
+      // Arrange — one good fetch, so there is a last picture worth keeping.
+      const { map, painted } = fakeMap();
+      const { startDiversions, DIVERSIONS_COLD_RETRY_MS, diversionsStats } = await freshModule();
+      await startDiversions(map);
+      search(['46']);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(drawnRoutes(painted.at(-1)!)).toEqual(['46']);
+
+      // Act — the next scheduled poll fails.
+      fetchSpy.mockRejectedValueOnce(new Error('blip'));
+      const tick = registerPoll.mock.calls[0]?.[0] as () => void;
+      tick();
+      await vi.advanceTimersByTimeAsync(DIVERSIONS_COLD_RETRY_MS * 3);
+
+      // Assert — no extra requests beyond that failed tick, the picture stands,
+      // and the log says what is still on screen rather than claiming nothing.
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(drawnRoutes(painted.at(-1)!)).toEqual(['46']);
+      expect(diversionsStats().lastGoodFetchAt).toBeGreaterThan(0);
+      expect(String(errorSpy.mock.calls.at(-1)?.[0])).toContain('last good fetch');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('a cold retry that lands after the search is cleared fetches nothing', async () => {
+    vi.useFakeTimers();
+    try {
+      // Arrange
+      const { map } = fakeMap();
+      fetchSpy.mockRejectedValue(new Error('offline'));
+      const { startDiversions, DIVERSIONS_COLD_RETRY_MS } = await freshModule();
+      await startDiversions(map);
+      search(['46']);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+      // Act — the rider clears the box before the retry is due.
+      search(null);
+      await vi.advanceTimersByTimeAsync(DIVERSIONS_COLD_RETRY_MS * 3);
+
+      // Assert — the gate still holds: nothing on screen, nothing fetched.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
