@@ -2,6 +2,7 @@
 // one-liner; clicking (handled elsewhere) opens the detailed card.
 
 import { Popup, type Map as MaplibreMap, type MapLayerMouseEvent } from 'maplibre-gl';
+import { presentLayers } from '../util/layer-order';
 
 const VEHICLES_LAYER_ID = 'trains-dots';
 const STATIONS_LAYER_ID = 'stations-circle';
@@ -82,19 +83,8 @@ function linesTipHtml(
   return `<div class="vp">${rows}</div>`;
 }
 
-/**
- * queryRenderedFeatures aborts the whole query on the first layer id the style
- * does not contain: it fires a map error and returns an empty array. A region
- * without a live train pipeline has no vehicles layer, so asking for it would
- * both spam the console on every hover and make "is something on top of this?"
- * answer no — letting the line tooltip overwrite the station tooltip. Filtering
- * to layers that exist is the same guard legend.ts already applies.
- */
-function presentLayers(map: MaplibreMap, ids: readonly string[]): string[] {
-  return ids.filter((id) => map.getLayer(id));
-}
-
-/** Features under the cursor among whichever of `ids` the style actually has. */
+/** Features under the cursor among whichever of `ids` the style actually has.
+ * `presentLayers` explains why the filter is not optional. */
 function queryPresent(
   map: MaplibreMap,
   point: MapLayerMouseEvent['point'],

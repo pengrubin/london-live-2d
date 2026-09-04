@@ -1,0 +1,1419 @@
+{
+ "t": 1788463830,
+ "lines": [
+  {
+   "id": "bakerloo",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "central",
+   "st": [
+    {
+     "s": 9,
+     "d": "Minor Delays",
+     "r": "Central Line: Minor delays due to train cancellations.",
+     "v": [
+      {
+       "f": "2026-09-03T19:07:54Z",
+       "n": true
+      }
+     ],
+     "c": "RealTime",
+     "ct": "minorDelays",
+     "ar": [
+      {
+       "id": "2654",
+       "n": "Epping Underground Station - West Ruislip Underground Station",
+       "dir": "inbound",
+       "o": "Epping Underground Station",
+       "de": "West Ruislip Underground Station",
+       "e": true
+      },
+      {
+       "id": "2655",
+       "n": "West Ruislip Underground Station - Epping Underground Station",
+       "dir": "outbound",
+       "o": "West Ruislip Underground Station",
+       "de": "Epping Underground Station",
+       "e": true
+      },
+      {
+       "id": "2656",
+       "n": "Hainault Underground Station - West Ruislip Underground Station",
+       "dir": "inbound",
+       "o": "Hainault Underground Station",
+       "de": "West Ruislip Underground Station",
+       "e": true
+      },
+      {
+       "id": "2657",
+       "n": "Hainault Underground Station - West Ruislip Underground Station",
+       "dir": "inbound",
+       "o": "Hainault Underground Station",
+       "de": "West Ruislip Underground Station",
+       "e": true
+      },
+      {
+       "id": "2658",
+       "n": "West Ruislip Underground Station - Hainault Underground Station",
+       "dir": "outbound",
+       "o": "West Ruislip Underground Station",
+       "de": "Hainault Underground Station",
+       "e": true
+      },
+      {
+       "id": "2659",
+       "n": "West Ruislip Underground Station - Hainault Underground Station",
+       "dir": "outbound",
+       "o": "West Ruislip Underground Station",
+       "de": "Hainault Underground Station",
+       "e": true
+      },
+      {
+       "id": "2660",
+       "n": "Epping Underground Station - Ealing Broadway Underground Station",
+       "dir": "inbound",
+       "o": "Epping Underground Station",
+       "de": "Ealing Broadway Underground Station",
+       "e": true
+      },
+      {
+       "id": "2661",
+       "n": "Ealing Broadway Underground Station - Epping Underground Station",
+       "dir": "outbound",
+       "o": "Ealing Broadway Underground Station",
+       "de": "Epping Underground Station",
+       "e": true
+      },
+      {
+       "id": "2662",
+       "n": "Hainault Underground Station - Ealing Broadway Underground Station",
+       "dir": "inbound",
+       "o": "Hainault Underground Station",
+       "de": "Ealing Broadway Underground Station",
+       "e": true
+      },
+      {
+       "id": "2663",
+       "n": "Ealing Broadway Underground Station - Hainault Underground Station",
+       "dir": "outbound",
+       "o": "Ealing Broadway Underground Station",
+       "de": "Hainault Underground Station",
+       "e": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "circle",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "district",
+   "st": [
+    {
+     "s": 5,
+     "d": "Part Closure",
+     "r": "District Line: Saturday 5 and Sunday 6 September, no service between Edgware Road and Wimbledon. Rail Replacement bus services will operate. If travelling to/from Fulham vs Crystal Palace on Saturday, it may be easier to walk to/from Hammersmith.",
+     "v": [
+      {
+       "f": "2026-09-05T02:30:00Z",
+       "t": "2026-09-07T00:29:00Z"
+      }
+     ],
+     "c": "PlannedWork",
+     "ct": "partClosure",
+     "ar": [
+      {
+       "id": "1555",
+       "n": "Upminster Underground Station - Wimbledon Underground Station",
+       "dir": "inbound",
+       "o": "Upminster Underground Station",
+       "de": "Wimbledon Underground Station",
+       "e": false,
+       "st": [
+        "940GZZLUECT",
+        "940GZZLUWBN",
+        "940GZZLUFBY",
+        "940GZZLUPSG",
+        "940GZZLUPYB",
+        "940GZZLUEPY",
+        "940GZZLUSFS",
+        "940GZZLUWIP",
+        "940GZZLUWIM"
+       ]
+      },
+      {
+       "id": "1556",
+       "n": "Wimbledon Underground Station - Upminster Underground Station",
+       "dir": "outbound",
+       "o": "Wimbledon Underground Station",
+       "de": "Upminster Underground Station",
+       "e": false,
+       "st": [
+        "940GZZLUWIM",
+        "940GZZLUWIP",
+        "940GZZLUSFS",
+        "940GZZLUEPY",
+        "940GZZLUPYB",
+        "940GZZLUPSG",
+        "940GZZLUFBY",
+        "940GZZLUWBN",
+        "940GZZLUECT"
+       ]
+      },
+      {
+       "id": "1557",
+       "n": "Edgware Road (Circle Line) Underground Station - Ealing Broadway Underground Station",
+       "dir": "inbound",
+       "o": "Edgware Road (Circle Line) Underground Station",
+       "de": "Ealing Broadway Underground Station",
+       "e": false,
+       "st": [
+        "940GZZLUERC",
+        "940GZZLUPAC",
+        "940GZZLUBWT",
+        "940GZZLUNHG",
+        "940GZZLUHSK",
+        "940GZZLUECT"
+       ]
+      },
+      {
+       "id": "1558",
+       "n": "Ealing Broadway Underground Station - Edgware Road (Circle Line) Underground Station",
+       "dir": "outbound",
+       "o": "Ealing Broadway Underground Station",
+       "de": "Edgware Road (Circle Line) Underground Station",
+       "e": false,
+       "st": [
+        "940GZZLUECT",
+        "940GZZLUHSK",
+        "940GZZLUNHG",
+        "940GZZLUBWT",
+        "940GZZLUPAC",
+        "940GZZLUERC"
+       ]
+      },
+      {
+       "id": "1559",
+       "n": "Edgware Road (Circle Line) Underground Station - Richmond Underground Station",
+       "dir": "inbound",
+       "o": "Edgware Road (Circle Line) Underground Station",
+       "de": "Richmond Underground Station",
+       "e": false,
+       "st": [
+        "940GZZLUERC",
+        "940GZZLUPAC",
+        "940GZZLUBWT",
+        "940GZZLUNHG",
+        "940GZZLUHSK",
+        "940GZZLUECT"
+       ]
+      },
+      {
+       "id": "1560",
+       "n": "Richmond Underground Station - Edgware Road (Circle Line) Underground Station",
+       "dir": "outbound",
+       "o": "Richmond Underground Station",
+       "de": "Edgware Road (Circle Line) Underground Station",
+       "e": false,
+       "st": [
+        "940GZZLUECT",
+        "940GZZLUHSK",
+        "940GZZLUNHG",
+        "940GZZLUBWT",
+        "940GZZLUPAC",
+        "940GZZLUERC"
+       ]
+      },
+      {
+       "id": "1561",
+       "n": "Edgware Road (Circle Line) Underground Station - Wimbledon Underground Station",
+       "dir": "inbound",
+       "o": "Edgware Road (Circle Line) Underground Station",
+       "de": "Wimbledon Underground Station",
+       "e": true
+      },
+      {
+       "id": "1562",
+       "n": "Wimbledon Underground Station - Edgware Road (Circle Line) Underground Station",
+       "dir": "outbound",
+       "o": "Wimbledon Underground Station",
+       "de": "Edgware Road (Circle Line) Underground Station",
+       "e": true
+      },
+      {
+       "id": "1563",
+       "n": "Edgware Road (Circle Line) Underground Station - Kensington (Olympia) Underground Station",
+       "dir": "inbound",
+       "o": "Edgware Road (Circle Line) Underground Station",
+       "de": "Kensington (Olympia) Underground Station",
+       "e": false,
+       "st": [
+        "940GZZLUERC",
+        "940GZZLUPAC",
+        "940GZZLUBWT",
+        "940GZZLUNHG",
+        "940GZZLUHSK",
+        "940GZZLUECT"
+       ]
+      },
+      {
+       "id": "1564",
+       "n": "Kensington (Olympia) Underground Station - Edgware Road (Circle Line) Underground Station",
+       "dir": "outbound",
+       "o": "Kensington (Olympia) Underground Station",
+       "de": "Edgware Road (Circle Line) Underground Station",
+       "e": false,
+       "st": [
+        "940GZZLUECT",
+        "940GZZLUHSK",
+        "940GZZLUNHG",
+        "940GZZLUBWT",
+        "940GZZLUPAC",
+        "940GZZLUERC"
+       ]
+      }
+     ],
+     "as": [
+      "940GZZLUECT",
+      "940GZZLUEPY",
+      "940GZZLUFBY",
+      "940GZZLUPSG",
+      "940GZZLUPYB",
+      "940GZZLUSFS",
+      "940GZZLUWBN",
+      "940GZZLUWIM",
+      "940GZZLUWIP",
+      "940GZZLUBWT",
+      "940GZZLUERC",
+      "940GZZLUHSK",
+      "940GZZLUNHG",
+      "940GZZLUPAC"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "dlr",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "elizabeth",
+   "st": [
+    {
+     "s": 5,
+     "d": "Part Closure",
+     "r": "ELIZABETH LINE: Sunday 6 September, until 0745, no service between Paddington and Ealing Broadway.",
+     "v": [
+      {
+       "f": "2026-09-06T03:30:00Z",
+       "t": "2026-09-06T06:45:00Z"
+      }
+     ],
+     "c": "PlannedWork",
+     "ct": "partClosure",
+     "ar": [
+      {
+       "id": "1937",
+       "n": "Heathrow Terminal 4 Rail Station - Shenfield Rail Station",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 4 Rail Station",
+       "de": "Shenfield Rail Station",
+       "e": false,
+       "st": [
+        "910GEALINGB",
+        "910GACTONML",
+        "910GPADTLL"
+       ]
+      },
+      {
+       "id": "1938",
+       "n": "Heathrow Terminal 5 Rail Station - Shenfield Rail Station",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 5 Rail Station",
+       "de": "Shenfield Rail Station",
+       "e": false,
+       "st": [
+        "910GEALINGB",
+        "910GACTONML",
+        "910GPADTLL"
+       ]
+      },
+      {
+       "id": "1939",
+       "n": "Shenfield Rail Station - Heathrow Terminal 4 Rail Station",
+       "dir": "outbound",
+       "o": "Shenfield Rail Station",
+       "de": "Heathrow Terminal 4 Rail Station",
+       "e": false,
+       "st": [
+        "910GPADTLL",
+        "910GACTONML",
+        "910GEALINGB"
+       ]
+      },
+      {
+       "id": "1940",
+       "n": "Shenfield Rail Station - Heathrow Terminal 5 Rail Station",
+       "dir": "outbound",
+       "o": "Shenfield Rail Station",
+       "de": "Heathrow Terminal 5 Rail Station",
+       "e": false,
+       "st": [
+        "910GPADTLL",
+        "910GACTONML",
+        "910GEALINGB"
+       ]
+      },
+      {
+       "id": "1941",
+       "n": "Reading Rail Station - Abbey Wood",
+       "dir": "inbound",
+       "o": "Reading Rail Station",
+       "de": "Abbey Wood",
+       "e": false,
+       "st": [
+        "910GEALINGB",
+        "910GACTONML",
+        "910GPADTLL"
+       ]
+      },
+      {
+       "id": "1942",
+       "n": "Abbey Wood - Reading Rail Station",
+       "dir": "outbound",
+       "o": "Abbey Wood",
+       "de": "Reading Rail Station",
+       "e": false,
+       "st": [
+        "910GPADTLL",
+        "910GACTONML",
+        "910GEALINGB"
+       ]
+      },
+      {
+       "id": "1946",
+       "n": "Heathrow Terminal 4 Rail Station - Abbey Wood",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 4 Rail Station",
+       "de": "Abbey Wood",
+       "e": false,
+       "st": [
+        "910GEALINGB",
+        "910GACTONML",
+        "910GPADTLL"
+       ]
+      },
+      {
+       "id": "1948",
+       "n": "Heathrow Terminal 5 Rail Station - Abbey Wood",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 5 Rail Station",
+       "de": "Abbey Wood",
+       "e": false,
+       "st": [
+        "910GEALINGB",
+        "910GACTONML",
+        "910GPADTLL"
+       ]
+      },
+      {
+       "id": "1950",
+       "n": "Abbey Wood - Heathrow Terminal 4 Rail Station",
+       "dir": "outbound",
+       "o": "Abbey Wood",
+       "de": "Heathrow Terminal 4 Rail Station",
+       "e": false,
+       "st": [
+        "910GPADTLL",
+        "910GACTONML",
+        "910GEALINGB"
+       ]
+      },
+      {
+       "id": "1952",
+       "n": "Abbey Wood - Heathrow Terminal 5 Rail Station",
+       "dir": "outbound",
+       "o": "Abbey Wood",
+       "de": "Heathrow Terminal 5 Rail Station",
+       "e": false,
+       "st": [
+        "910GPADTLL",
+        "910GACTONML",
+        "910GEALINGB"
+       ]
+      },
+      {
+       "id": "1954",
+       "n": "Reading Rail Station - London Paddington Rail Station",
+       "dir": "inbound",
+       "o": "Reading Rail Station",
+       "de": "London Paddington Rail Station",
+       "e": false,
+       "st": [
+        "910GEALINGB",
+        "910GACTONML",
+        "910GPADTON"
+       ]
+      },
+      {
+       "id": "1955",
+       "n": "London Paddington Rail Station - Reading Rail Station",
+       "dir": "outbound",
+       "o": "London Paddington Rail Station",
+       "de": "Reading Rail Station",
+       "e": false,
+       "st": [
+        "910GPADTON",
+        "910GACTONML",
+        "910GEALINGB"
+       ]
+      },
+      {
+       "id": "1961",
+       "n": "Heathrow Terminal 4 Rail Station - London Paddington Rail Station",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 4 Rail Station",
+       "de": "London Paddington Rail Station",
+       "e": false,
+       "st": [
+        "910GEALINGB",
+        "910GACTONML",
+        "910GPADTON"
+       ]
+      },
+      {
+       "id": "1963",
+       "n": "Heathrow Terminal 5 Rail Station - London Paddington Rail Station",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 5 Rail Station",
+       "de": "London Paddington Rail Station",
+       "e": false,
+       "st": [
+        "910GEALINGB",
+        "910GACTONML",
+        "910GPADTON"
+       ]
+      },
+      {
+       "id": "1965",
+       "n": "London Paddington Rail Station - Heathrow Terminal 4 Rail Station",
+       "dir": "outbound",
+       "o": "London Paddington Rail Station",
+       "de": "Heathrow Terminal 4 Rail Station",
+       "e": false,
+       "st": [
+        "910GPADTON",
+        "910GACTONML",
+        "910GEALINGB"
+       ]
+      },
+      {
+       "id": "1967",
+       "n": "London Paddington Rail Station - Heathrow Terminal 5 Rail Station",
+       "dir": "outbound",
+       "o": "London Paddington Rail Station",
+       "de": "Heathrow Terminal 5 Rail Station",
+       "e": false,
+       "st": [
+        "910GPADTON",
+        "910GACTONML",
+        "910GEALINGB"
+       ]
+      }
+     ],
+     "as": [
+      "910GACTONML",
+      "910GEALINGB",
+      "910GPADTLL",
+      "910GPADTON"
+     ]
+    },
+    {
+     "s": 6,
+     "d": "Severe Delays",
+     "r": "Severe delays between Hayes & Harlington and Heathrow Terminal 5 while we fix a signal system failure at Heathrow Terminal 5. Tickets are being accepted on London Underground and London Buses. Customers are advised to use the Piccadilly line or Heathrow Express to travel to Heathrow Terminal 5. GOOD SERVICE on the rest of the line.",
+     "v": [
+      {
+       "f": "2026-09-03T16:11:41Z",
+       "n": true
+      }
+     ],
+     "c": "RealTime",
+     "ct": "severeDelays",
+     "ar": [
+      {
+       "id": "1937",
+       "n": "Heathrow Terminal 4 Rail Station - Shenfield Rail Station",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 4 Rail Station",
+       "de": "Shenfield Rail Station",
+       "e": false,
+       "st": [
+        "910GHTRWAPT",
+        "910GHAYESAH"
+       ]
+      },
+      {
+       "id": "1938",
+       "n": "Heathrow Terminal 5 Rail Station - Shenfield Rail Station",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 5 Rail Station",
+       "de": "Shenfield Rail Station",
+       "e": false,
+       "st": [
+        "910GHTRWTM5",
+        "910GHTRWAPT",
+        "910GHAYESAH"
+       ]
+      },
+      {
+       "id": "1939",
+       "n": "Shenfield Rail Station - Heathrow Terminal 4 Rail Station",
+       "dir": "outbound",
+       "o": "Shenfield Rail Station",
+       "de": "Heathrow Terminal 4 Rail Station",
+       "e": false,
+       "st": [
+        "910GHAYESAH",
+        "910GHTRWAPT"
+       ]
+      },
+      {
+       "id": "1940",
+       "n": "Shenfield Rail Station - Heathrow Terminal 5 Rail Station",
+       "dir": "outbound",
+       "o": "Shenfield Rail Station",
+       "de": "Heathrow Terminal 5 Rail Station",
+       "e": false,
+       "st": [
+        "910GHAYESAH",
+        "910GHTRWAPT",
+        "910GHTRWTM5"
+       ]
+      },
+      {
+       "id": "1946",
+       "n": "Heathrow Terminal 4 Rail Station - Abbey Wood",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 4 Rail Station",
+       "de": "Abbey Wood",
+       "e": false,
+       "st": [
+        "910GHTRWAPT",
+        "910GHAYESAH"
+       ]
+      },
+      {
+       "id": "1948",
+       "n": "Heathrow Terminal 5 Rail Station - Abbey Wood",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 5 Rail Station",
+       "de": "Abbey Wood",
+       "e": false,
+       "st": [
+        "910GHTRWTM5",
+        "910GHTRWAPT",
+        "910GHAYESAH"
+       ]
+      },
+      {
+       "id": "1950",
+       "n": "Abbey Wood - Heathrow Terminal 4 Rail Station",
+       "dir": "outbound",
+       "o": "Abbey Wood",
+       "de": "Heathrow Terminal 4 Rail Station",
+       "e": false,
+       "st": [
+        "910GHAYESAH",
+        "910GHTRWAPT"
+       ]
+      },
+      {
+       "id": "1952",
+       "n": "Abbey Wood - Heathrow Terminal 5 Rail Station",
+       "dir": "outbound",
+       "o": "Abbey Wood",
+       "de": "Heathrow Terminal 5 Rail Station",
+       "e": false,
+       "st": [
+        "910GHAYESAH",
+        "910GHTRWAPT",
+        "910GHTRWTM5"
+       ]
+      },
+      {
+       "id": "1961",
+       "n": "Heathrow Terminal 4 Rail Station - London Paddington Rail Station",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 4 Rail Station",
+       "de": "London Paddington Rail Station",
+       "e": false,
+       "st": [
+        "910GHTRWAPT",
+        "910GHAYESAH"
+       ]
+      },
+      {
+       "id": "1963",
+       "n": "Heathrow Terminal 5 Rail Station - London Paddington Rail Station",
+       "dir": "inbound",
+       "o": "Heathrow Terminal 5 Rail Station",
+       "de": "London Paddington Rail Station",
+       "e": false,
+       "st": [
+        "910GHTRWTM5",
+        "910GHTRWAPT",
+        "910GHAYESAH"
+       ]
+      },
+      {
+       "id": "1965",
+       "n": "London Paddington Rail Station - Heathrow Terminal 4 Rail Station",
+       "dir": "outbound",
+       "o": "London Paddington Rail Station",
+       "de": "Heathrow Terminal 4 Rail Station",
+       "e": false,
+       "st": [
+        "910GHAYESAH",
+        "910GHTRWAPT"
+       ]
+      },
+      {
+       "id": "1967",
+       "n": "London Paddington Rail Station - Heathrow Terminal 5 Rail Station",
+       "dir": "outbound",
+       "o": "London Paddington Rail Station",
+       "de": "Heathrow Terminal 5 Rail Station",
+       "e": false,
+       "st": [
+        "910GHAYESAH",
+        "910GHTRWAPT",
+        "910GHTRWTM5"
+       ]
+      }
+     ],
+     "as": [
+      "910GHAYESAH",
+      "910GHTRWAPT",
+      "910GHTRWTM5"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "hammersmith-city",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "jubilee",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "liberty",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "lioness",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "metropolitan",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "mildmay",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "northern",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "piccadilly",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "suffragette",
+   "st": [
+    {
+     "s": 5,
+     "d": "Part Closure",
+     "r": "SUFFRAGETTE LINE: Sunday 6 September, no service between Gospel Oak and Woodgrange Park. Use VICTORIA LINE connections between Seven Sisters (for South Tottenham), Blackhorse Road and Walthamstow Central (for Walthamstow Queens Road). Replacement buses operate.",
+     "v": [
+      {
+       "f": "2026-09-06T03:30:00Z",
+       "t": "2026-09-07T00:29:00Z"
+      }
+     ],
+     "c": "PlannedWork",
+     "ct": "partClosure",
+     "ar": [
+      {
+       "id": "432",
+       "n": "Barking Riverside - Gospel Oak Rail Station",
+       "dir": "inbound",
+       "o": "Barking Riverside",
+       "de": "Gospel Oak Rail Station",
+       "e": false,
+       "st": [
+        "910GWDGRNPK",
+        "910GWNSTDPK",
+        "910GLYTNSHR",
+        "910GLEYTNMR",
+        "910GWLTHQRD",
+        "910GBLCHSRD",
+        "910GSTOTNHM",
+        "910GHRGYGL",
+        "910GCROUCHH",
+        "910GUPRHLWY",
+        "910GGOSPLOK"
+       ]
+      },
+      {
+       "id": "436",
+       "n": "Gospel Oak Rail Station - Barking Riverside",
+       "dir": "outbound",
+       "o": "Gospel Oak Rail Station",
+       "de": "Barking Riverside",
+       "e": false,
+       "st": [
+        "910GGOSPLOK",
+        "910GUPRHLWY",
+        "910GCROUCHH",
+        "910GHRGYGL",
+        "910GSTOTNHM",
+        "910GBLCHSRD",
+        "910GWLTHQRD",
+        "910GLEYTNMR",
+        "910GLYTNSHR",
+        "910GWNSTDPK",
+        "910GWDGRNPK"
+       ]
+      }
+     ],
+     "as": [
+      "910GBLCHSRD",
+      "910GCROUCHH",
+      "910GGOSPLOK",
+      "910GHRGYGL",
+      "910GLEYTNMR",
+      "910GLYTNSHR",
+      "910GSTOTNHM",
+      "910GUPRHLWY",
+      "910GWDGRNPK",
+      "910GWLTHQRD",
+      "910GWNSTDPK"
+     ]
+    },
+    {
+     "s": 7,
+     "d": "Reduced Service",
+     "r": "SUFFRAGETTE LINE: Sunday 6 September, a reduced service operates between Woodgrange Park and Barking Riverside. Trains run every 30 minutes.",
+     "v": [
+      {
+       "f": "2026-09-06T03:30:00Z",
+       "t": "2026-09-07T00:29:00Z"
+      }
+     ],
+     "c": "PlannedWork",
+     "ct": "reducedService",
+     "ar": [
+      {
+       "id": "432",
+       "n": "Barking Riverside - Gospel Oak Rail Station",
+       "dir": "inbound",
+       "o": "Barking Riverside",
+       "de": "Gospel Oak Rail Station",
+       "e": false,
+       "st": [
+        "910GBARKRIV",
+        "910GBARKING",
+        "910GWDGRNPK"
+       ]
+      },
+      {
+       "id": "436",
+       "n": "Gospel Oak Rail Station - Barking Riverside",
+       "dir": "outbound",
+       "o": "Gospel Oak Rail Station",
+       "de": "Barking Riverside",
+       "e": false,
+       "st": [
+        "910GWDGRNPK",
+        "910GBARKING",
+        "910GBARKRIV"
+       ]
+      }
+     ],
+     "as": [
+      "910GBARKING",
+      "910GBARKRIV",
+      "910GWDGRNPK"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "tram",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "victoria",
+   "st": [
+    {
+     "s": 10,
+     "d": "Good Service"
+    }
+   ]
+  },
+  {
+   "id": "waterloo-city",
+   "st": [
+    {
+     "s": 4,
+     "d": "Planned Closure",
+     "r": "Waterloo & City line: service operates 06:00 until 00:30, Monday to Friday only. There is no service on Saturdays, Sundays and on bank/public holidays.",
+     "v": [
+      {
+       "f": "2026-09-05T03:15:00Z",
+       "t": "2026-09-05T22:59:00Z"
+      },
+      {
+       "f": "2026-09-05T23:00:00Z",
+       "t": "2026-09-06T00:15:00Z"
+      },
+      {
+       "f": "2026-09-06T03:15:00Z",
+       "t": "2026-09-06T22:59:00Z"
+      },
+      {
+       "f": "2026-09-06T23:00:00Z",
+       "t": "2026-09-06T23:45:00Z"
+      }
+     ],
+     "c": "Information",
+     "ct": "plannedClosure",
+     "ar": [
+      {
+       "id": "1717",
+       "n": "Bank Underground Station - Waterloo Underground Station",
+       "dir": "inbound",
+       "o": "Bank Underground Station",
+       "de": "Waterloo Underground Station",
+       "e": true
+      },
+      {
+       "id": "1718",
+       "n": "Waterloo Underground Station - Bank Underground Station",
+       "dir": "outbound",
+       "o": "Waterloo Underground Station",
+       "de": "Bank Underground Station",
+       "e": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "weaver",
+   "st": [
+    {
+     "s": 5,
+     "d": "Part Closure",
+     "r": "WEAVER LINE: Monday 31 August, Tuesday 1, Wednesday 2 and Thursday 3 September, after 2245 each evening, no service between Hackney Downs and Enfield Town / Cheshunt. Last through trains operate at 2243 from Liverpool Street to Cheshunt, 2250 from Enfield Town to Liverpool Street, 2258 from Liverpool Street to Enfield Town and 2259 from Cheshunt to Liverpool Street. Use Clapton for Rectory Road and Stoke Newington, and local London Buses services for Stamford Hill. Replacement buses operate. The limited number of southbound GREATER ANGLIA and STANSTED EXPRESS trains after midnight which usually call at Seven Sisters are diverted via Tottenham Hale instead",
+     "v": [
+      {
+       "f": "2026-09-01T23:00:00Z",
+       "t": "2026-09-02T00:29:00Z"
+      },
+      {
+       "f": "2026-09-02T21:45:00Z",
+       "t": "2026-09-02T22:59:00Z"
+      },
+      {
+       "f": "2026-09-02T23:00:00Z",
+       "t": "2026-09-03T00:29:00Z"
+      },
+      {
+       "f": "2026-09-03T21:45:00Z",
+       "t": "2026-09-03T22:59:00Z"
+      },
+      {
+       "f": "2026-09-03T23:00:00Z",
+       "t": "2026-09-04T00:29:00Z"
+      }
+     ],
+     "c": "PlannedWork",
+     "ct": "partClosure",
+     "ar": [
+      {
+       "id": "422",
+       "n": "Cheshunt Rail Station - London Liverpool Street Rail Station",
+       "dir": "inbound",
+       "o": "Cheshunt Rail Station",
+       "de": "London Liverpool Street Rail Station",
+       "e": false,
+       "st": [
+        "910GCHESHNT",
+        "910GTHBLDSG",
+        "910GTURKYST",
+        "910GSBURY",
+        "910GEDMNGRN",
+        "910GSIVRST",
+        "910GWHHRTLA",
+        "910GBRUCGRV",
+        "910GSEVNSIS",
+        "910GSTMFDHL",
+        "910GSTKNWNG",
+        "910GRCTRYRD",
+        "910GHAKNYNM"
+       ]
+      },
+      {
+       "id": "426",
+       "n": "London Liverpool Street Rail Station - Cheshunt Rail Station",
+       "dir": "outbound",
+       "o": "London Liverpool Street Rail Station",
+       "de": "Cheshunt Rail Station",
+       "e": false,
+       "st": [
+        "910GHAKNYNM",
+        "910GRCTRYRD",
+        "910GSTKNWNG",
+        "910GSTMFDHL",
+        "910GSEVNSIS",
+        "910GBRUCGRV",
+        "910GWHHRTLA",
+        "910GSIVRST",
+        "910GEDMNGRN",
+        "910GSBURY",
+        "910GTURKYST",
+        "910GTHBLDSG",
+        "910GCHESHNT"
+       ]
+      },
+      {
+       "id": "430",
+       "n": "Enfield Town Rail Station - London Liverpool Street Rail Station",
+       "dir": "inbound",
+       "o": "Enfield Town Rail Station",
+       "de": "London Liverpool Street Rail Station",
+       "e": false,
+       "st": [
+        "910GENFLDTN",
+        "910GBHILLPK",
+        "910GEDMNGRN",
+        "910GSIVRST",
+        "910GWHHRTLA",
+        "910GBRUCGRV",
+        "910GSEVNSIS",
+        "910GSTMFDHL",
+        "910GSTKNWNG",
+        "910GRCTRYRD",
+        "910GHAKNYNM"
+       ]
+      },
+      {
+       "id": "434",
+       "n": "London Liverpool Street Rail Station - Enfield Town Rail Station",
+       "dir": "outbound",
+       "o": "London Liverpool Street Rail Station",
+       "de": "Enfield Town Rail Station",
+       "e": false,
+       "st": [
+        "910GHAKNYNM",
+        "910GRCTRYRD",
+        "910GSTKNWNG",
+        "910GSTMFDHL",
+        "910GSEVNSIS",
+        "910GBRUCGRV",
+        "910GWHHRTLA",
+        "910GSIVRST",
+        "910GEDMNGRN",
+        "910GBHILLPK",
+        "910GENFLDTN"
+       ]
+      }
+     ],
+     "as": [
+      "910GBRUCGRV",
+      "910GCHESHNT",
+      "910GEDMNGRN",
+      "910GHAKNYNM",
+      "910GRCTRYRD",
+      "910GSBURY",
+      "910GSEVNSIS",
+      "910GSIVRST",
+      "910GSTKNWNG",
+      "910GSTMFDHL",
+      "910GTHBLDSG",
+      "910GTURKYST",
+      "910GWHHRTLA",
+      "910GBHILLPK",
+      "910GENFLDTN"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "windrush",
+   "st": [
+    {
+     "s": 5,
+     "d": "Part Closure",
+     "r": "WINDRUSH LINE: Saturday 5, all day, and Sunday 6 September, until 1915, no service between Surrey Quays and Clapham Junction / Battersea Park. Replacement bus service M operates between Canada Water and Clapham Junction via Surrey Quays, Queens Road Peckham, Peckham Rye, Denmark Hill, Clapham High Street and Wandsworth Road.",
+     "v": [
+      {
+       "f": "2026-09-05T03:30:00Z",
+       "t": "2026-09-06T18:15:00Z"
+      }
+     ],
+     "c": "PlannedWork",
+     "ct": "partClosure",
+     "ar": [
+      {
+       "id": "1446",
+       "n": "Clapham Junction Rail Station - Highbury & Islington Rail Station",
+       "dir": "inbound",
+       "o": "Clapham Junction Rail Station",
+       "de": "Highbury & Islington Rail Station",
+       "e": false,
+       "st": [
+        "910GCLPHMJ1",
+        "910GWNDSWRD",
+        "910GCLPHHS",
+        "910GDENMRKH",
+        "910GPCKHMRY",
+        "910GPCKHMQD",
+        "910GSURREYQ"
+       ]
+      },
+      {
+       "id": "1453",
+       "n": "Highbury & Islington Rail Station - Clapham Junction Rail Station",
+       "dir": "outbound",
+       "o": "Highbury & Islington Rail Station",
+       "de": "Clapham Junction Rail Station",
+       "e": false,
+       "st": [
+        "910GSURREYQ",
+        "910GPCKHMQD",
+        "910GPCKHMRY",
+        "910GDENMRKH",
+        "910GCLPHHS",
+        "910GWNDSWRD",
+        "910GCLPHMJ1"
+       ]
+      }
+     ],
+     "as": [
+      "910GSURREYQ",
+      "910GCLPHHS",
+      "910GCLPHMJ1",
+      "910GDENMRKH",
+      "910GPCKHMQD",
+      "910GPCKHMRY",
+      "910GWNDSWRD"
+     ]
+    },
+    {
+     "s": 5,
+     "d": "Part Closure",
+     "r": "WINDRUSH LINE: Sunday 6 September, until 1915, no service between Sydenham and West Croydon. Change at Crystal Palace for trains to/from Norwood Junction and connections to/from West Croydon. Use local London Buses services for Penge West and Anerley.",
+     "v": [
+      {
+       "f": "2026-09-06T03:30:00Z",
+       "t": "2026-09-06T18:15:00Z"
+      }
+     ],
+     "c": "PlannedWork",
+     "ct": "partClosure",
+     "ar": [
+      {
+       "id": "1440",
+       "n": "West Croydon Rail Station - Highbury & Islington Rail Station",
+       "dir": "inbound",
+       "o": "West Croydon Rail Station",
+       "de": "Highbury & Islington Rail Station",
+       "e": false,
+       "st": [
+        "910GWCROYDN",
+        "910GNORWDJ",
+        "910GANERLEY",
+        "910GPENEW",
+        "910GSYDENHM"
+       ]
+      },
+      {
+       "id": "1443",
+       "n": "Highbury & Islington Rail Station - West Croydon Rail Station",
+       "dir": "outbound",
+       "o": "Highbury & Islington Rail Station",
+       "de": "West Croydon Rail Station",
+       "e": false,
+       "st": [
+        "910GSYDENHM",
+        "910GPENEW",
+        "910GANERLEY",
+        "910GNORWDJ",
+        "910GWCROYDN"
+       ]
+      }
+     ],
+     "as": [
+      "910GANERLEY",
+      "910GNORWDJ",
+      "910GPENEW",
+      "910GSYDENHM",
+      "910GWCROYDN"
+     ]
+    },
+    {
+     "s": 4,
+     "d": "Planned Closure",
+     "r": "WINDRUSH LINE: Sunday 6 September, from 1915, no service between Highbury & Islington and Battersea Park / Clapham Junction / Crystal Palace / New Cross Gate / West Croydon. Use MILDMAY LINE services between Highbury & Islington, Canonbury and Dalston Kingsland. Use SOUTHERN connections for stations south of New Cross Gate, and local buses for New Cross, Penge West and Anerley. Replacement buses operate.",
+     "v": [
+      {
+       "f": "2026-09-06T18:15:00Z",
+       "t": "2026-09-07T00:29:00Z"
+      }
+     ],
+     "c": "PlannedWork",
+     "ct": "plannedClosure",
+     "ar": [
+      {
+       "id": "1440",
+       "n": "West Croydon Rail Station - Highbury & Islington Rail Station",
+       "dir": "inbound",
+       "o": "West Croydon Rail Station",
+       "de": "Highbury & Islington Rail Station",
+       "e": true
+      },
+      {
+       "id": "1443",
+       "n": "Highbury & Islington Rail Station - West Croydon Rail Station",
+       "dir": "outbound",
+       "o": "Highbury & Islington Rail Station",
+       "de": "West Croydon Rail Station",
+       "e": true
+      },
+      {
+       "id": "1446",
+       "n": "Clapham Junction Rail Station - Highbury & Islington Rail Station",
+       "dir": "inbound",
+       "o": "Clapham Junction Rail Station",
+       "de": "Highbury & Islington Rail Station",
+       "e": true
+      },
+      {
+       "id": "1450",
+       "n": "Crystal Palace Rail Station - Highbury & Islington Rail Station",
+       "dir": "inbound",
+       "o": "Crystal Palace Rail Station",
+       "de": "Highbury & Islington Rail Station",
+       "e": true
+      },
+      {
+       "id": "1453",
+       "n": "Highbury & Islington Rail Station - Clapham Junction Rail Station",
+       "dir": "outbound",
+       "o": "Highbury & Islington Rail Station",
+       "de": "Clapham Junction Rail Station",
+       "e": true
+      },
+      {
+       "id": "1456",
+       "n": "Highbury & Islington Rail Station - Crystal Palace Rail Station",
+       "dir": "outbound",
+       "o": "Highbury & Islington Rail Station",
+       "de": "Crystal Palace Rail Station",
+       "e": true
+      },
+      {
+       "id": "1458",
+       "n": "New Cross ELL Rail Station - Highbury & Islington Rail Station",
+       "dir": "inbound",
+       "o": "New Cross ELL Rail Station",
+       "de": "Highbury & Islington Rail Station",
+       "e": true
+      },
+      {
+       "id": "1461",
+       "n": "Highbury & Islington Rail Station - New Cross ELL Rail Station",
+       "dir": "outbound",
+       "o": "Highbury & Islington Rail Station",
+       "de": "New Cross ELL Rail Station",
+       "e": true
+      }
+     ],
+     "as": [
+      "910GANERLEY",
+      "910GBROCKLY",
+      "910GCNDAW",
+      "910GCNNB",
+      "910GDALS",
+      "910GFORESTH",
+      "910GHAGGERS",
+      "910GHGHI",
+      "910GHONROPK",
+      "910GHOXTON",
+      "910GNEWXGTE",
+      "910GNORWDJ",
+      "910GPENEW",
+      "910GRTHERHI",
+      "910GSHADWEL",
+      "910GSHRDHST",
+      "910GSURREYQ",
+      "910GSYDENHM",
+      "910GWAPPING",
+      "910GWCHAPEL",
+      "910GWCROYDN",
+      "910GCLPHHS",
+      "910GCLPHMJ1",
+      "910GDENMRKH",
+      "910GPCKHMQD",
+      "910GPCKHMRY",
+      "910GWNDSWRD",
+      "910GCRYSTLP",
+      "910GNWCRELL"
+     ]
+    },
+    {
+     "s": 5,
+     "d": "Part Closure",
+     "r": "WINDRUSH LINE: Monday 7, Tuesday 8, Wednesday 9 and Thursday 10 September, after 2215 each evening, no service between Sydenham and West Croydon. West Croydon trains will divert to and depart from Crystal Palace after 2215. Use local buses via any reasonable route or Southern Railway trains between Sydenham and Norwood Junction. Tickets will also be accepted on Southern Railway trains between Crystal Palace and East Croydon (via Norwood Junction), and on two Southern Railway rail replacement buses departing Norwood Junction at 2318 and 0013 for West Croydon via Selhurst (and onward to Sutton). Last through trains: Highbury & Islington to West Croydon 2147; West Croydon to Highbury & Islington 2246",
+     "v": [
+      {
+       "f": "2026-09-07T21:15:00Z",
+       "t": "2026-09-07T22:59:00Z"
+      },
+      {
+       "f": "2026-09-07T23:00:00Z",
+       "t": "2026-09-08T00:29:00Z"
+      },
+      {
+       "f": "2026-09-08T21:15:00Z",
+       "t": "2026-09-08T22:59:00Z"
+      },
+      {
+       "f": "2026-09-08T23:00:00Z",
+       "t": "2026-09-09T00:29:00Z"
+      },
+      {
+       "f": "2026-09-09T21:15:00Z",
+       "t": "2026-09-09T22:59:00Z"
+      },
+      {
+       "f": "2026-09-09T23:00:00Z",
+       "t": "2026-09-10T00:29:00Z"
+      }
+     ],
+     "c": "PlannedWork",
+     "ct": "partClosure",
+     "ar": [
+      {
+       "id": "1440",
+       "n": "West Croydon Rail Station - Highbury & Islington Rail Station",
+       "dir": "inbound",
+       "o": "West Croydon Rail Station",
+       "de": "Highbury & Islington Rail Station",
+       "e": false,
+       "st": [
+        "910GWCROYDN",
+        "910GNORWDJ",
+        "910GANERLEY",
+        "910GPENEW",
+        "910GSYDENHM"
+       ]
+      },
+      {
+       "id": "1443",
+       "n": "Highbury & Islington Rail Station - West Croydon Rail Station",
+       "dir": "outbound",
+       "o": "Highbury & Islington Rail Station",
+       "de": "West Croydon Rail Station",
+       "e": false,
+       "st": [
+        "910GSYDENHM",
+        "910GPENEW",
+        "910GANERLEY",
+        "910GNORWDJ",
+        "910GWCROYDN"
+       ]
+      }
+     ],
+     "as": [
+      "910GANERLEY",
+      "910GNORWDJ",
+      "910GPENEW",
+      "910GSYDENHM",
+      "910GWCROYDN"
+     ]
+    }
+   ]
+  }
+ ]
+}

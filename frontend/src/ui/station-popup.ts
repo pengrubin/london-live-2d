@@ -5,11 +5,14 @@
 
 import { Popup, type LngLat, type Map as MaplibreMap, type MapLayerMouseEvent } from 'maplibre-gl';
 import { enablePopupDragToPan } from './popup-drag';
+import { stationDisruptionLines } from '../layers/disruptions';
+import { anyFeatureAt } from '../util/layer-order';
 
 const STATIONS_LAYER_ID = 'stations-circle';
 const MAX_DEPARTURES = 8;
 const MAX_BIKE_DOCKS = 2;
 const LIFT_MESSAGE_MAX_CHARS = 90;
+const DISRUPTION_REASON_MAX_CHARS = 140;
 
 interface StopPrediction {
   lineId: string;
@@ -242,6 +245,20 @@ async function fetchEnrichment(
   };
 }
 
+/**
+ * Notice line for every disruption whose structured NaPTAN path or point
+ * covers this station. Synchronous — the layer keeps the last payload — and
+ * escaped here, like every other string this popup renders.
+ */
+function disruptionNoticeHtml(naptanId: string): string {
+  return stationDisruptionLines(naptanId)
+    .map(({ headline, reason }) => {
+      const detail = reason ? ` ${truncate(reason, DISRUPTION_REASON_MAX_CHARS)}` : '';
+      return `<div class="sp-warn">${esc(headline)}${esc(detail)}</div>`;
+    })
+    .join('');
+}
+
 function footerHtml(enrichment: Enrichment): string {
   const parts: string[] = [];
   const tags = [
@@ -277,7 +294,7 @@ export function setupStationPopups(
 
   map.on('click', STATIONS_LAYER_ID, (e: MapLayerMouseEvent) => {
     // A vehicle sitting on the station owns the click — its popup handles it.
-    if (map.queryRenderedFeatures(e.point, { layers: [VEHICLES_LAYER_ID] }).length > 0) return;
+    if (anyFeatureAt(map, e.point, [VEHICLES_LAYER_ID])) return;
     const feature = e.features?.[0];
     if (!feature) return;
     onOpen?.();
@@ -289,8 +306,9 @@ export function setupStationPopups(
     const seq = ++clickSeq;
     let boardBody = '<div class="vp-dim">Loading departures…</div>';
     let footer = '';
+    const notice = disruptionNoticeHtml(naptanId);
     const wrap = (): string =>
-      `<div class="vp"><div class="sp-title">${esc(name)}</div>${boardBody}${footer}</div>`;
+      `<div class="vp"><div class="sp-title">${esc(name)}</div>${notice}${boardBody}${footer}</div>`;
     const render = (): void => {
       if (popup.isOpen() && seq === clickSeq) popup.setHTML(wrap());
     };

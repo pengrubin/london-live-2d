@@ -13,6 +13,11 @@ import { addAbout } from './about';
 import { addLeaderboard, type VehicleLocator } from './leaderboard';
 import { addBusFilter } from './bus-filter';
 import { addLegend, type LegendLine, type OverlayToggle } from './legend';
+import {
+  disruptionsConnectionLost,
+  disruptionsExpired,
+  onDisruptionsUpdate,
+} from '../layers/disruptions';
 import { hasLayer } from '../region';
 
 // Phones (portrait) start the panel collapsed so the map stays visible; tapping
@@ -87,7 +92,16 @@ export function addControlPanel(
   const filterSection = sectionByKey.get('filter');
   if (filterSection) addBusFilter(filterSection, map);
   const linesSection = sectionByKey.get('lines');
-  if (linesSection) addLegend(linesSection, map, lines, overlays);
+  if (linesSection) {
+    // Above the legend: only when the feed itself is in trouble. The per-line
+    // rows this strip used to carry were removed at the owner's request on
+    // 2026-09-04 — four truncated, unclickable lines pushed the overlay
+    // toggles off the bottom of the panel, and the coloured pip on each line
+    // row already says which lines are affected. The outage row stays,
+    // because without it a dead backend and an all-clear look identical.
+    if (hasLayer('disruptions')) addFeedStatusRow(linesSection);
+    addLegend(linesSection, map, lines, overlays);
+  }
   const aboutSection = sectionByKey.get('about');
   if (aboutSection) addAbout(aboutSection);
 
@@ -105,4 +119,39 @@ export function addControlPanel(
 
   panel.append(header, tabStrip, cpBody);
   map.getContainer().append(panel);
+}
+
+/**
+ * One row, shown only while the disruption feed is in trouble. An outage and a
+ * genuine all-clear must never read the same, so this survives even though the
+ * per-line rows it used to sit above were removed.
+ *
+ * Every string is written with textContent — the escape helpers here do not
+ * escape apostrophes.
+ */
+function addFeedStatusRow(container: HTMLElement): void {
+  const strip = document.createElement('div');
+  strip.className = 'svc-strip';
+  strip.hidden = true;
+  container.append(strip);
+
+  function paint(): void {
+    strip.replaceChildren();
+    if (!disruptionsExpired()) {
+      strip.hidden = true;
+      return;
+    }
+    strip.hidden = false;
+    const row = document.createElement('div');
+    row.className = 'svc-row svc-dim';
+    row.textContent = disruptionsConnectionLost()
+      ? 'Disruption data unavailable'
+      : 'No current disruption data';
+    strip.append(row);
+  }
+
+  // The layer publishes its first snapshot before the panel mounts, so paint
+  // once now rather than waiting up to a minute for the next tick.
+  paint();
+  onDisruptionsUpdate(paint);
 }

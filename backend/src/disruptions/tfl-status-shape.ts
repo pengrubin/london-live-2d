@@ -193,15 +193,28 @@ function compactDisruption(status: TflLineStatus): Partial<LineStatusEntry> {
  * Reduces a TfL line-status body (Mode or date-window form) to the compact
  * archived form. Returns null when the body is not the expected array (error
  * payloads, HTML gateways, etc.) — never trust upstream data.
+ *
+ * `onDrop` is called once per structurally unusable line or status entry. A
+ * whole-body parse failure is loud (null → the caller throws), but a SINGLE
+ * line losing its statuses is not: nineteen lines would still parse, the
+ * response would still be 200, and one line's disruption would vanish with no
+ * trace. The callback is the only signal that this happened, so the route can
+ * count it and an operator can see a partial schema drift.
  */
-export function compactStatus(body: unknown): LineSnapshot[] | null {
+export function compactStatus(body: unknown, onDrop?: (reason: string) => void): LineSnapshot[] | null {
   if (!Array.isArray(body)) return null;
   const lines: LineSnapshot[] = [];
   for (const raw of body as TflLine[]) {
-    if (typeof raw?.id !== 'string' || raw.id === '') continue;
+    if (typeof raw?.id !== 'string' || raw.id === '') {
+      onDrop?.('line entry without a usable id');
+      continue;
+    }
     const statuses: LineStatusEntry[] = [];
     for (const status of raw.lineStatuses ?? []) {
-      if (typeof status?.statusSeverity !== 'number') continue;
+      if (typeof status?.statusSeverity !== 'number') {
+        onDrop?.(`line=${raw.id} status without a numeric statusSeverity`);
+        continue;
+      }
       const entry: LineStatusEntry = {
         s: status.statusSeverity,
         d: typeof status.statusSeverityDescription === 'string' ? status.statusSeverityDescription : '',
@@ -210,7 +223,10 @@ export function compactStatus(body: unknown): LineSnapshot[] | null {
       if (reason !== '') entry.r = reason;
       statuses.push({ ...entry, ...compactDisruption(status) });
     }
-    if (statuses.length === 0) continue;
+    if (statuses.length === 0) {
+      onDrop?.(`line=${raw.id} carried no usable status entry`);
+      continue;
+    }
     lines.push({ id: raw.id, st: statuses });
   }
   if (lines.length === 0) return null;

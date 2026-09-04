@@ -51,6 +51,14 @@
       .sp-eta { color: #9c9; font-variant-numeric: tabular-nums; }
       .sp-plat { color: #777; font-size: 10px; border: 1px solid #333; border-radius: 3px; padding: 0 3px; }
       .vp-status { color: #da3; margin-top: 4px; }
+      /* Disruption popup badges: LIVE vs PLANNED, so a weekend closure never
+         reads as something happening now. */
+      .dz-badge {
+        display: inline-block; border-radius: 3px; padding: 0 5px;
+        font-size: 9.5px; font-weight: 700; letter-spacing: .06em; vertical-align: 1px;
+      }
+      .dz-live { background: #ff4d4d; color: #0a0a0a; }
+      .dz-planned { background: #9aa7ff; color: #0a0a0a; }
       .vp-section { color: #777; text-transform: uppercase; font-size: 10px; letter-spacing: .08em; margin-top: 6px; border-top: 1px solid #222; padding-top: 5px; }
       .tip-dest { font-weight: 600; margin-left: 4px; }
       .tip-chips .sp-chip { display: inline-block; margin-left: 3px; vertical-align: baseline; }
@@ -119,6 +127,25 @@
       .legend-row.off { opacity: 0.32; }
       .legend-row.off .legend-swatch { background: #444 !important; }
       .legend-swatch { width: 14px; height: 5px; border-radius: 2px; flex: none; }
+      /* Disruption pip on a line row: worst class on that line (blue = the
+         only items are planned works). Shape is a dot, so it never reads as
+         another line swatch. */
+      .legend-pip {
+        width: 6px; height: 6px; border-radius: 50%; flex: none; margin-left: auto;
+        box-shadow: 0 0 0 1px rgba(0,0,0,.6);
+      }
+      .legend-row.off .legend-pip { opacity: .35; }
+
+      /* Service strip (top of the Lines tab): line-scope items, which draw
+         nothing on the map on purpose. */
+      .svc-strip { border-bottom: 1px solid #222; padding: 3px 0 4px; }
+      .svc-row {
+        display: flex; align-items: center; gap: 6px; padding: 1.5px 10px;
+        white-space: nowrap; font-size: 10.5px;
+      }
+      .svc-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+      .svc-when { color: #888; font-size: 9.5px; }
+      .svc-dim { color: #777; }
 
       /* About tab: data sources, licences, acknowledgements */
       .about-note {

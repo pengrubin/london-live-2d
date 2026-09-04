@@ -3,9 +3,12 @@
 // Tier 1 (parsed) disruption geometry is only ever a slice of one of these
 // patterns (docs/DISRUPTION_GEOLOCATION_SPEC.md §5.4); a line without a
 // valid file has no Tier 1 geometry at all — there is no fragment fallback.
-// The section slicer itself is P1 and does not live here.
+// The section slicer itself is P1 and does not live here. The hop index every
+// pattern is validated against lives in line-graph.ts, shared with the Tier 0
+// resolver so both refuse exactly the same geometry.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { buildHopIndex, firstBadHop, type HopIndex } from './line-graph';
 import type { LineBranches } from '../shared/types';
 
 export type PatternDirection = 'inbound' | 'outbound';
@@ -32,36 +35,9 @@ type FileRead = { ok: true; patterns: unknown[] } | { ok: false; reason: string 
 const ROUTE_PATTERNS_DIR = 'route-patterns';
 /** A pattern needs at least one hop to describe a section. */
 const MIN_PATTERN_IDS = 2;
-const HOP_KEY_SEPARATOR = '>';
 /** How much of a malformed entry to echo in the log line. */
 const MAX_REASON_CHARS = 120;
 const DIRECTIONS: readonly string[] = ['inbound', 'outbound'];
-
-/** Undirected edge key — the same for a→b and b→a. */
-export function hopKey(a: string, b: string): string {
-  return a < b ? `${a}${HOP_KEY_SEPARATOR}${b}` : `${b}${HOP_KEY_SEPARATOR}${a}`;
-}
-
-/** Consecutive `(ids[i], ids[i+1])` pairs; the `?? b` only satisfies noUncheckedIndexedAccess. */
-function consecutivePairs(ids: readonly string[]): [string, string][] {
-  return ids.slice(1).map((b, i) => [ids[i] ?? b, b]);
-}
-
-/** Every consecutive stop pair across all branches of a line, undirected. */
-export function branchHopIndex(line: LineBranches): Set<string> {
-  const keys = line.branches.flatMap((branch) =>
-    consecutivePairs(branch.stops.map((s) => s.id)).map(([a, b]) => hopKey(a, b)),
-  );
-  return new Set(keys);
-}
-
-/** First consecutive pair of `ids` that is not a branch edge, or null when all are. */
-export function firstBadHop(
-  ids: readonly string[],
-  hops: ReadonlySet<string>,
-): [string, string] | null {
-  return consecutivePairs(ids).find(([a, b]) => !hops.has(hopKey(a, b))) ?? null;
-}
 
 function isPattern(value: unknown): value is Pattern {
   if (typeof value !== 'object' || value === null) return false;
@@ -77,12 +53,12 @@ function isPattern(value: unknown): value is Pattern {
   );
 }
 
-function judge(candidate: unknown, hops: ReadonlySet<string>): Verdict {
+function judge(candidate: unknown, index: HopIndex, lineId: string): Verdict {
   if (!isPattern(candidate)) {
     const shown = JSON.stringify(candidate)?.slice(0, MAX_REASON_CHARS) ?? String(candidate);
     return { pattern: null, reason: `malformed pattern ${shown}` };
   }
-  const bad = firstBadHop(candidate.ids, hops);
+  const bad = firstBadHop(index, lineId, candidate.ids);
   if (bad) {
     return {
       pattern: null,
@@ -124,19 +100,17 @@ export function loadRoutePatterns(
   branchesByLine: ReadonlyMap<string, LineBranches>,
   log: (msg: string) => void,
 ): RoutePatternsResult {
+  const index = buildHopIndex(branchesByLine);
   const patterns = new Map<string, Pattern[]>();
   let loaded = 0;
   let dropped = 0;
   for (const lineId of [...branchesByLine.keys()].sort()) {
-    const line = branchesByLine.get(lineId);
-    if (!line) continue;
     const file = readPatternFile(dataDir, lineId);
     if (!file.ok) {
       log(`route-patterns: ${lineId} has no usable pattern file, Tier 1 disabled: ${file.reason}`);
       continue;
     }
-    const hops = branchHopIndex(line);
-    const verdicts = file.patterns.map((candidate) => judge(candidate, hops));
+    const verdicts = file.patterns.map((candidate) => judge(candidate, index, lineId));
     const kept = verdicts.flatMap((v) => (v.pattern ? [v.pattern] : []));
     for (const v of verdicts) {
       if (v.reason) log(`route-patterns: ${lineId} dropped ${v.reason}`);

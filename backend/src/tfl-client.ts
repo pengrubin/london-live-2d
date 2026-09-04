@@ -102,6 +102,22 @@ export async function fetchStopPointDisruptions(
 }
 
 /**
+ * Stop point detail for several NaPTAN/ATCO ids at once — the only way to turn
+ * the `atcoCode` of a bus-stop closure into a coordinate and a route list.
+ * Measured 2026-09-03: 20 ids per URL answer 200, 25 answer HTTP 400, so
+ * callers batch at `STOPPOINT_BATCH_MAX` (disruptions/bus-stop-gazetteer.ts).
+ * A single id answers with a bare object, several with an array; asking for a
+ * pole answers with its stop PAIR and the pole inside `children[]`.
+ */
+export async function fetchStopPoints(
+  ids: readonly string[],
+  appKey: string,
+  timeoutMs: number = UPSTREAM_TIMEOUT_MS,
+): Promise<TflResponse> {
+  return fetchTfl(`/StopPoint/${ids.join(',')}`, appKey, timeoutMs);
+}
+
+/**
  * /Line/Mode/bus/Status bodies measured 760 KB in 4.6 s on 2026-09-02 — over
  * half the default upstream timeout, so this call gets its own.
  */

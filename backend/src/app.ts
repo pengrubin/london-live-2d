@@ -51,6 +51,10 @@ import { registerBusRoutesRoute } from './routes/bus-routes';
 import { registerCoverageRoute } from './routes/coverage';
 import { registerDataExportRoute } from './routes/data-export';
 import { registerDiversionsRoute } from './routes/diversions';
+import { DISRUPTIONS_TTL_MS, registerDisruptionsRoute } from './routes/disruptions';
+import { BUS_STOP_CLOSURES_TTL_MS, registerBusStopClosuresRoute } from './routes/bus-stop-closures';
+import { buildHopIndex } from './disruptions/line-graph';
+import { loadCache, saveCache, type BusStop } from './disruptions/bus-stop-gazetteer';
 import { registerShipPhotoRoute } from './routes/ship-photo';
 
 /** Repo layout anchors — data/ and scripts/ sit beside backend/. */
@@ -79,6 +83,27 @@ const DATA_DIR = resolveBakedDataDir();
  * days of traces before the learned dir exists, so a boot-only check would
  * disable the feature until a redeploy. 30 min is modest — one existsSync. */
 const DIVERSIONS_RETRY_INTERVAL_MS = 30 * 60_000;
+
+/**
+ * The baked bus-stop positions, or an empty map with a loud line in the log.
+ * A corrupt or unreadable cache must not stop the server booting: the route
+ * re-resolves what it needs from TfL, so the cost of starting empty is a few
+ * batched lookups, while the cost of throwing here is the whole deployment.
+ */
+async function loadGazetteer(
+  path: string,
+  log: (message: string) => void,
+): Promise<ReadonlyMap<string, BusStop>> {
+  try {
+    const stops = await loadCache(path);
+    log(`bus-stop gazetteer: ${stops.size} stop(s) loaded from ${path}`);
+    return stops;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log(`bus-stop gazetteer: starting empty — ${reason}`);
+    return new Map();
+  }
+}
 
 /** Builds the Fastify app with all plugins and routes; exported for tests (inject()). */
 export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
@@ -206,6 +231,9 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   // recorder below and the leaderboard further down — loaded once, here.
   const log = (msg: string): void => app.log.info(msg);
   const branchData = loadBranchData(DATA_DIR, log);
+  // The manifest's rail lines, shared by the status archive and the disruption
+  // map: both ask TfL about exactly the lines this deployment has geometry for.
+  const railLineIds = statusLineIds(branchData.lineIds, branchData.lineModeById);
 
   // Permanent archives of TfL feeds with no historical endpoint (line status
   // + road disruptions) — kept from the day this ships. A few MB per year;
@@ -213,7 +241,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   // bus diversion detection. The status window names its lines explicitly:
   // the manifest's rail lines, never the cable car or the river buses.
   if (config.tflAppKey) {
-    const tubeStatusFeed = makeTubeStatusFeed(statusLineIds(branchData.lineIds, branchData.lineModeById));
+    const tubeStatusFeed = makeTubeStatusFeed(railLineIds);
     for (const feed of [tubeStatusFeed, ROAD_DISRUPTIONS_FEED]) {
       const recorder = new SnapshotRecorder(busDataDir, config.tflAppKey, log, feed);
       recorder.start();
@@ -252,9 +280,13 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const crowdingCache = new TtlCache<unknown>(CROWDING_TTL_MS);
   const liftDisruptionsCache = new TtlCache<unknown>(LIFT_DISRUPTIONS_TTL_MS);
   const bikePointsCache = new TtlCache<unknown>(BIKE_POINTS_TTL_MS);
+  // One entry forever: /api/disruptions has no query parameters by design.
+  const disruptionsCache = new TtlCache<unknown>(DISRUPTIONS_TTL_MS);
+  // Likewise for the bus stop closure overlay: one shared key, one entry.
+  const busStopClosuresCache = new TtlCache<unknown>(BUS_STOP_CLOSURES_TTL_MS);
   const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
 
-  registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir);
+  registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir, railLineIds);
   registerArrivalsRoute(app, { config, cache: arrivalsCache, budget: tflBudget });
   registerStopArrivalsRoute(app, { config, cache: stopArrivalsCache, budget: tflBudget });
   registerVehicleArrivalsRoute(app, { config, cache: vehicleArrivalsCache, budget: tflBudget });
@@ -263,6 +295,34 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   registerCrowdingRoute(app, { config, cache: crowdingCache, budget: tflBudget });
   registerLiftDisruptionsRoute(app, { config, cache: liftDisruptionsCache, budget: tflBudget });
   registerBikePointsRoute(app, { config, cache: bikePointsCache, budget: tflBudget });
+  // Structured disruption geometry: TfL's own NaPTAN ids, validated against the
+  // baked branches. Nothing here reads a sentence for a location.
+  const disruptionCounters = registerDisruptionsRoute(
+    app,
+    { config, cache: disruptionsCache, budget: tflBudget },
+    {
+      lineIds: railLineIds,
+      resolve: {
+        hops: buildHopIndex(branchData.branchesByLine),
+        modeById: branchData.lineModeById,
+        log,
+      },
+    },
+  );
+
+  // Bus stops closed right now. The feed names poles by ATCO id alone, so the
+  // permanent gazetteer supplies every coordinate and route list; ids it has
+  // never seen are resolved on demand and written back beside the baked file.
+  const gazetteerPath = join(DATA_DIR, 'bus-stops', 'gazetteer.json');
+  const busStopClosuresCounters = registerBusStopClosuresRoute(
+    app,
+    { config, cache: busStopClosuresCache, budget: tflBudget },
+    {
+      gazetteer: await loadGazetteer(gazetteerPath, log),
+      log,
+      saveGazetteer: (stops) => saveCache(gazetteerPath, stops),
+    },
+  );
 
   // ── vehicle distance leaderboard ──
   // Tube positions come from the SAME arrivals cache + TfL budget as
@@ -319,6 +379,10 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     cacheCrowding: crowdingCache.size,
     cacheLiftDisruptions: liftDisruptionsCache.size,
     cacheBikePoints: bikePointsCache.size,
+    cacheDisruptions: disruptionsCache.size,
+    cacheBusStopClosures: busStopClosuresCache.size,
+    ...disruptionCounters(),
+    ...busStopClosuresCounters(),
     // Evictions on the caches keyed by an id space larger than any working
     // set. Zero means the ceiling is never reached and costs nothing; a number
     // that climbs steadily means it is too low and every eviction is a cache
