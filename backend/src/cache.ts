@@ -4,37 +4,96 @@ interface CacheEntry<T> {
 }
 
 /**
+ * Ceiling on entries in one cache, applied unless a caller names its own.
+ *
+ * It is a DEFAULT rather than an opt-in because the absence of one killed the
+ * London service on 2026-09-04: the heap filled to its 2,053 MB limit and a
+ * Mark-Compact freed 0.6 MB, because nothing was garbage — every response body
+ * the process had ever cached was still reachable. Several caches are keyed by
+ * an id space far larger than any working set: NaPTAN stop id (~19,000 stops)
+ * for stop-arrivals, stop-detail and crowding, vehicle id for vehicle-arrivals,
+ * and aircraft callsign — with a one-hour TTL — for callsign. Opting in would
+ * have left the next route keyed by an id to reintroduce the same crash.
+ *
+ * 300 is chosen against the working set, not the key space: a cache is useful
+ * only for keys asked for again inside its TTL, which is 8 s for arrivals and
+ * 10 min for stop detail. Hundreds of distinct stops in flight at once is
+ * already a busier map than this serves, so evictions should be rare — watch
+ * `evictions` on /health and raise this if they are not.
+ */
+export const DEFAULT_MAX_ENTRIES = 300;
+
+/**
  * In-memory TTL cache (per ARCHITECTURE.md: a Map, no Redis until proven needed).
  * Entries past their TTL are still retrievable via `getStale` so the server can
  * degrade gracefully when the upstream is down or the rate budget is exhausted.
+ *
+ * Bounded, least-recently-used. A Map iterates in insertion order, so "move a
+ * key to the end whenever it is used, drop the first key when full" is exact
+ * LRU with no second structure: the first key is by construction the one
+ * nothing has touched for longest.
  */
 export class TtlCache<T> {
   private readonly entries = new Map<string, CacheEntry<T>>();
+  private evicted = 0;
 
-  constructor(private readonly ttlMs: number) {}
+  constructor(
+    private readonly ttlMs: number,
+    private readonly maxEntries: number = DEFAULT_MAX_ENTRIES,
+  ) {}
+
+  /** Re-insert so this key becomes the most recently used. */
+  private touch(key: string, entry: CacheEntry<T>): void {
+    this.entries.delete(key);
+    this.entries.set(key, entry);
+  }
 
   /** Returns the value only if it is younger than the TTL. */
   getFresh(key: string, now: number = Date.now()): T | undefined {
     const entry = this.entries.get(key);
     if (entry === undefined) return undefined;
-    return now - entry.storedAt < this.ttlMs ? entry.value : undefined;
+    // An expired entry is not a hit, so it does not earn a place at the back
+    // of the queue: it should be the first thing evicted, not the last.
+    if (now - entry.storedAt >= this.ttlMs) return undefined;
+    this.touch(key, entry);
+    return entry.value;
   }
 
   /** Returns the value regardless of age (for stale-serving fallbacks). */
   getStale(key: string): T | undefined {
-    return this.entries.get(key)?.value;
+    const entry = this.entries.get(key);
+    if (entry === undefined) return undefined;
+    // Serving stale IS using the entry — an upstream outage must not cost the
+    // very keys the fallback is holding up.
+    this.touch(key, entry);
+    return entry.value;
   }
 
   set(key: string, value: T, now: number = Date.now()): void {
+    if (!this.entries.has(key) && this.entries.size >= this.maxEntries) {
+      const oldest = this.entries.keys().next().value;
+      if (oldest !== undefined) {
+        this.entries.delete(oldest);
+        this.evicted += 1;
+      }
+    }
+    // Delete first so a re-set moves the key to the back of the queue rather
+    // than updating it in place and leaving it looking stale to the evictor.
+    this.entries.delete(key);
     this.entries.set(key, { value, storedAt: now });
   }
 
-  /** Entry count. Nothing is ever evicted here — expired entries are kept on
-   * purpose so `getStale` can degrade gracefully — so this only ever grows,
-   * once per distinct key the process has seen. Reported on /health because
-   * "how many keys has it seen" is exactly the question that matters for
-   * caches keyed by stop or vehicle id. */
+  /** Entry count, now bounded by `maxEntries`. Reported on /health because
+   * "how many keys is it holding" is the question that matters for caches
+   * keyed by stop or vehicle id. */
   get size(): number {
     return this.entries.size;
+  }
+
+  /** Keys dropped to stay under the ceiling. Zero means the working set fits;
+   * a number that climbs steadily means `maxEntries` is too small for the
+   * traffic and every eviction is a cache miss someone paid for. */
+  get evictions(): number {
+    return this.evicted;
   }
 }
