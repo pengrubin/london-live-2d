@@ -26,6 +26,7 @@ data/**/diversions/
 data/**/coverage/
 data/**/leaderboard.json
 data/**/leaderboard.json.tmp
+data/**/leaderboard/
 data/bus-traces/
 data/osm-cache/
 data/bus-routes/
@@ -36,6 +37,7 @@ data/diversions/
 data/coverage/
 data/leaderboard.json
 data/leaderboard.json.tmp
+data/leaderboard/
 # Scratch space (review agents and one-off experiments write here).
 tmp/
 node_modules/

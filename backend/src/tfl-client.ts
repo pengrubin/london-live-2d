@@ -44,7 +44,6 @@ export async function fetchLineStatus(
   return fetchTfl(`/Line/${lineIds.join(',')}/Status`, appKey, timeoutMs);
 }
 
-/** Service status for every line of the given modes (e.g. all tube lines). */
 /** Every current road disruption (roadworks, closures) network-wide. */
 export async function fetchRoadDisruptions(
   appKey: string,
@@ -53,12 +52,70 @@ export async function fetchRoadDisruptions(
   return fetchTfl('/Road/all/Disruption', appKey, timeoutMs, { stripContent: 'false' });
 }
 
+/**
+ * Service status for every line of the given modes (e.g. all tube lines).
+ * `withDetail` asks TfL for the structured `disruption` object (affectedRoutes /
+ * affectedStops with NaPTAN ids) alongside the free-text reason. Measured on
+ * 2026-09-02: 399 KB raw vs 19 KB without, 91% of it affectedRoutes — so only
+ * callers that archive or geolocate should ask, never a browser-facing proxy.
+ */
 export async function fetchLineStatusByModes(
   modes: readonly string[],
   appKey: string,
   timeoutMs: number = UPSTREAM_TIMEOUT_MS,
+  withDetail = false,
 ): Promise<TflResponse> {
-  return fetchTfl(`/Line/Mode/${modes.join(',')}/Status`, appKey, timeoutMs);
+  const params = withDetail ? { detail: 'true' } : undefined;
+  return fetchTfl(`/Line/Mode/${modes.join(',')}/Status`, appKey, timeoutMs, params);
+}
+
+/**
+ * Service status for explicit lines over a date window (YYYY-MM-DD, Europe/London
+ * days), always with detail. Unlike the Mode form this returns planned works days
+ * ahead with their affectedRoutes — the only TfL form that does. Measured
+ * 2026-09-02: all 20 rail lines incl. tram in one URL, 607 KB raw / 23 KB gzipped,
+ * ≈ 0.7 s (Node's fetch asks for gzip), so the default timeout holds; the Mode
+ * form of this path returns 404.
+ */
+export async function fetchLineStatusWindow(
+  lineIds: readonly string[],
+  fromDate: string,
+  toDate: string,
+  appKey: string,
+  timeoutMs: number = UPSTREAM_TIMEOUT_MS,
+): Promise<TflResponse> {
+  return fetchTfl(`/Line/${lineIds.join(',')}/Status/${fromDate}/to/${toDate}`, appKey, timeoutMs, {
+    detail: 'true',
+  });
+}
+
+/**
+ * Station-scoped disruptions (closures, lifts, "trains not stopping") for the
+ * given modes — an array keyed by atcoCode. Measured 2026-09-02: 46 KB raw.
+ */
+export async function fetchStopPointDisruptions(
+  modes: readonly string[],
+  appKey: string,
+  timeoutMs: number = UPSTREAM_TIMEOUT_MS,
+): Promise<TflResponse> {
+  return fetchTfl(`/StopPoint/Mode/${modes.join(',')}/Disruption`, appKey, timeoutMs);
+}
+
+/**
+ * /Line/Mode/bus/Status bodies measured 760 KB in 4.6 s on 2026-09-02 — over
+ * half the default upstream timeout, so this call gets its own.
+ */
+export const BUS_STATUS_TIMEOUT_MS = 20_000;
+
+/**
+ * Status of every bus route, without detail: the detail form is 10 MB and its
+ * affected routes are all whole routes (zero localisation value).
+ */
+export async function fetchBusLineStatus(
+  appKey: string,
+  timeoutMs: number = BUS_STATUS_TIMEOUT_MS,
+): Promise<TflResponse> {
+  return fetchTfl('/Line/Mode/bus/Status', appKey, timeoutMs);
 }
 
 /** Full stop point detail (zones, facilities, lines) — a large object. */

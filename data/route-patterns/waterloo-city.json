@@ -1,0 +1,8 @@
+{
+  "lineId": "waterloo-city",
+  "bakedAt": "2026-09-03T18:41:06.933Z",
+  "patterns": [
+    {"dir":"inbound","name":"Bank  &harr;  Waterloo ","ids":["940GZZLUBNK","940GZZLUWLO"]},
+    {"dir":"outbound","name":"Waterloo  &harr;  Bank ","ids":["940GZZLUWLO","940GZZLUBNK"]}
+  ]
+}

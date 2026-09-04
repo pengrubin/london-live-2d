@@ -1,0 +1,8 @@
+{
+  "lineId": "suffragette",
+  "bakedAt": "2026-09-03T18:41:06.933Z",
+  "patterns": [
+    {"dir":"inbound","name":"Barking Riverside &harr;  Gospel Oak ","ids":["910GBARKRIV","910GBARKING","910GWDGRNPK","910GWNSTDPK","910GLYTNSHR","910GLEYTNMR","910GWLTHQRD","910GBLCHSRD","910GSTOTNHM","910GHRGYGL","910GCROUCHH","910GUPRHLWY","910GGOSPLOK"]},
+    {"dir":"outbound","name":"Gospel Oak  &harr;  Barking Riverside","ids":["910GGOSPLOK","910GUPRHLWY","910GCROUCHH","910GHRGYGL","910GSTOTNHM","910GBLCHSRD","910GWLTHQRD","910GLEYTNMR","910GLYTNSHR","910GWNSTDPK","910GWDGRNPK","910GBARKING","910GBARKRIV"]}
+  ]
+}

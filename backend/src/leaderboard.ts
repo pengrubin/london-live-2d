@@ -17,6 +17,7 @@ import type { AppConfig } from './config';
 import { persistPath } from './config';
 import type { RateBudget } from './rate-budget';
 import { fetchArrivals } from './tfl-client';
+import { londonDay, MS_PER_DAY } from './shared/london-date';
 import { inferTrains } from './shared/position-inference';
 import type { LineBranches, Prediction } from './shared/types';
 
@@ -43,7 +44,6 @@ const RANK_CACHE_TTL_MS = 15_000;
 const EARTH_RADIUS_M = 6_371_000;
 /** Weekly period anchors on Wednesday (ISO weekday index with Sunday = 0). */
 const WEEK_ANCHOR_WEEKDAY = 3;
-const MS_PER_DAY = 86_400_000;
 
 /** TfL river services live in the trains pipeline but rank as ships. */
 const RIVER_LINE_IDS = new Set(['rb1', 'rb4', 'rb6', 'woolwich-ferry']);
@@ -114,7 +114,6 @@ interface PersistedState {
 
 // ── Europe/London period keys (no cron: a new key IS the rollover) ──
 
-const LONDON_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' });
 const LONDON_WEEKDAY = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Europe/London',
   weekday: 'short',
@@ -140,7 +139,7 @@ export interface PeriodKeys {
  * date of the week's Wednesday anchor, monthKey "2026-07".
  */
 export function londonPeriodKeys(now: number): PeriodKeys {
-  const day = LONDON_DATE.format(now); // en-CA → YYYY-MM-DD
+  const day = londonDay(new Date(now));
   const weekdayName = LONDON_WEEKDAY.format(now).slice(0, 3);
   const weekday = WEEKDAY_INDEX[weekdayName] ?? 0;
   const daysSinceWednesday = (weekday - WEEK_ANCHOR_WEEKDAY + 7) % 7;
@@ -178,16 +177,21 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
 interface ManifestLine {
   id: string;
   name: string;
+  /** TfL mode, e.g. "tube" / "overground" / "river-bus"; absent on older manifests. */
+  mode?: string;
 }
 
 /** Reads data/manifest.json + data/branches/<id>.json for the tube pipeline. */
 export function loadBranchData(dataDir: string, log: (msg: string) => void): {
   branchesByLine: Map<string, LineBranches>;
   lineNameById: Map<string, string>;
+  /** Only lines whose manifest row names a mode. */
+  lineModeById: Map<string, string>;
   lineIds: string[];
 } {
   const branchesByLine = new Map<string, LineBranches>();
   const lineNameById = new Map<string, string>();
+  const lineModeById = new Map<string, string>();
   let lines: ManifestLine[] = [];
   try {
     const manifest = JSON.parse(readFileSync(join(dataDir, 'manifest.json'), 'utf8')) as {
@@ -196,10 +200,11 @@ export function loadBranchData(dataDir: string, log: (msg: string) => void): {
     lines = manifest.lines ?? [];
   } catch (err) {
     log(`leaderboard: manifest.json unreadable, tube ranking disabled: ${String(err)}`);
-    return { branchesByLine, lineNameById, lineIds: [] };
+    return { branchesByLine, lineNameById, lineModeById, lineIds: [] };
   }
   for (const line of lines) {
     lineNameById.set(line.id, line.name);
+    if (typeof line.mode === 'string') lineModeById.set(line.id, line.mode);
     try {
       const parsed = JSON.parse(
         readFileSync(join(dataDir, 'branches', `${line.id}.json`), 'utf8'),
@@ -210,7 +215,7 @@ export function loadBranchData(dataDir: string, log: (msg: string) => void): {
     }
   }
   const lineIds = [...new Set(lines.map((l) => l.id))].sort();
-  return { branchesByLine, lineNameById, lineIds };
+  return { branchesByLine, lineNameById, lineModeById, lineIds };
 }
 
 export interface ArrivalsFetcherDeps {
