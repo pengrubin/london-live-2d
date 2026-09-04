@@ -1,11 +1,23 @@
 // Live bus-diversion events from the detector (/api/diversions). Each event's
 // bypassed learned-polyline slices draw as a translucent highlighter band
-// (no separate centroid marker — the wide band itself is the click target). The API returns only display-worthy
-// events — the frontend renders exactly what it is given, no filtering.
+// (no separate centroid marker — the wide band itself is the click target).
 //
-// Polling is gated on the overlay toggle (default OFF): the detector output
-// only changes every rollup pass, so a hidden overlay polling anyway would be
-// pure egress waste. Re-enabling refreshes immediately since the last picture
+// TWO ways in, one picture. The Diversions overlay toggle (default OFF) shows
+// every event the API returned; searching a bus line in the Filter tab shows,
+// with the toggle still off, only the events serving that line — see the
+// display coordinator below for the truth table. Search changes WHICH events
+// are drawn and nothing else: same colours, same widths, same popup, so a
+// diversion looks the same however it got on screen.
+//
+// The API still decides what is display-worthy at all, and search does NOT
+// lower that bar: a diversion corroborated by a single vehicle stays hidden
+// here too (DISPLAY_MIN_VEHICLES in backend/src/diversion-events.ts). Search is
+// where the rider is paying most attention, which is the worst place to spend a
+// false positive.
+//
+// Polling is gated on that same pair: the detector output only changes every
+// rollup pass, so a layer nobody is looking at polling anyway would be pure
+// egress waste. Becoming active refreshes immediately since the last picture
 // may be a whole off-interval stale.
 
 import {
@@ -17,6 +29,7 @@ import {
 } from 'maplibre-gl';
 import { registerPoll } from '../util/lifecycle';
 import { below } from '../util/layer-order';
+import { matchesSearch, onSearchedLines } from './searched-lines';
 
 export const DIVERSIONS_SEGMENTS_LAYER_ID = 'diversions-segments';
 export const DIVERSIONS_LAYER_IDS = [DIVERSIONS_SEGMENTS_LAYER_ID];
@@ -48,7 +61,7 @@ const STATUS_OPACITY: ExpressionSpecification =
 
 type LngLat = [number, number];
 
-interface DiversionEvent {
+export interface DiversionEvent {
   id?: string;
   status?: 'active' | 'recovering' | 'stale';
   severity?: 'road' | 'partial';
@@ -69,7 +82,7 @@ interface DiversionsResponse {
 
 /** Flat because maplibre JSON-round-trips feature properties; a nested `tfl`
  * object would come back out of queryRenderedFeatures as a string. */
-interface DiversionProps {
+export interface DiversionProps {
   routes: string;
   vehicles: number;
   status: string;
@@ -80,6 +93,9 @@ interface DiversionProps {
   hasTfl: boolean;
   tflLoc: string;
   tflDist: number;
+  /** True when a line search, not the overlay toggle, put this on screen. Read
+   * by the popup only — nothing in the paint expressions touches it. */
+  scoped: boolean;
 }
 
 const esc = (s: string): string =>
@@ -94,7 +110,23 @@ function isLngLat(value: unknown): value is LngLat {
   );
 }
 
-function toProps(ev: DiversionEvent): DiversionProps {
+/**
+ * The events a search of `lines` surfaces.
+ *
+ * MATCHED IN JS, ON THE ARRAY, and it has to stay that way: `toProps` joins
+ * `routes` into one comma-separated STRING for MapLibre, so the equivalent map
+ * filter (`['in', '46', ['get', 'routes']]`) would substring-match and put 146,
+ * 460 and N46 on screen for a search of 46 — three different roads.
+ */
+export function eventsOnSearchedLines(
+  events: readonly DiversionEvent[],
+  lines: ReadonlySet<string> | null,
+): DiversionEvent[] {
+  if (!lines) return [];
+  return events.filter((ev) => (ev.routes ?? []).some((route) => matchesSearch(route, lines)));
+}
+
+function toProps(ev: DiversionEvent, scoped: boolean): DiversionProps {
   return {
     // Numeric-aware so "9" sorts before "10" and "N136" after "45" — the same
     // idiom as listActiveBusLines in layers/buses.ts.
@@ -110,12 +142,17 @@ function toProps(ev: DiversionEvent): DiversionProps {
     hasTfl: ev.tfl != null,
     tflLoc: ev.tfl?.loc ?? '',
     tflDist: ev.tfl?.dist ?? 0,
+    scoped,
   };
 }
 
-function toFeatures(events: DiversionEvent[]): GeoJSON.Feature[] {
+/** `scoped` only reaches the popup: the drawn shape is identical either way. */
+export function buildDiversionFeatures(
+  events: readonly DiversionEvent[],
+  scoped: boolean,
+): GeoJSON.Feature[] {
   return events.flatMap((ev) => {
-    const props = toProps(ev);
+    const props = toProps(ev, scoped);
     const features: GeoJSON.Feature[] = [];
     // One MultiLineString per event, not a feature per slice: the popup should
     // hit the whole event wherever it is clicked.
@@ -171,7 +208,19 @@ export function freshnessLabel(lastEvidenceAt: number, nowSec: number): string {
   return `last diverting bus ${hours} h ${mins % 60} min ago`;
 }
 
-function popupHtml(p: DiversionProps): string {
+/**
+ * A search surfaces this event because ONE of its routes matched, but the
+ * geometry is the union of the bracket slices of every high-confidence route on
+ * it — there is no per-route shape to draw. Left unsaid, the band would read as
+ * "your route now goes this way". So say what it actually is, and keep listing
+ * every affected route rather than just the one that was typed.
+ */
+function scopeNote(p: DiversionProps): string {
+  if (!p.scoped) return '';
+  return `<div class="vp-dim">Affects routes ${esc(p.routes)} — the band is the whole diversion, not one route’s path</div>`;
+}
+
+export function diversionPopupHtml(p: DiversionProps): string {
   // 'partial' softens everything: one direction of one route is diverting
   // while the road itself flows — "Diversion" + red would read as a closure.
   const partial = p.severity === 'partial';
@@ -188,6 +237,7 @@ function popupHtml(p: DiversionProps): string {
   return `<div class="vp"><div class="sp-title">${title} — ${esc(p.routes)}</div>
     <div>${esc(status)}${ongoing}</div>
     <div>since ${timeLabel(p.startedAt, p.longRunning)} · ${p.vehicles} vehicle${p.vehicles === 1 ? '' : 's'}</div>
+    ${scopeNote(p)}
     ${fresh === '' ? '' : `<div class="vp-dim">${fresh}</div>`}
     <div class="vp-dim">${tfl}</div></div>`;
 }
@@ -197,7 +247,7 @@ function wireInteractions(map: MaplibreMap, layerId: string): void {
   map.on('click', layerId, (e: MapLayerMouseEvent) => {
     const p = e.features?.[0]?.properties as DiversionProps | undefined;
     if (!p) return;
-    detail.setLngLat(e.lngLat).setHTML(popupHtml(p)).addTo(map);
+    detail.setLngLat(e.lngLat).setHTML(diversionPopupHtml(p)).addTo(map);
   });
   map.on('mouseenter', layerId, () => {
     map.getCanvas().style.cursor = 'pointer';
@@ -207,18 +257,64 @@ function wireInteractions(map: MaplibreMap, layerId: string): void {
   });
 }
 
+// ── diversion display coordinator ──
+// Two independent inputs decide what this layer shows, so they are resolved
+// together in one place rather than fighting over the same source:
+//   • the Diversions overlay toggle (Lines tab) — overlayOn
+//   • the bus line search (Filter tab)          — searchedSelection
+// Truth table:
+//   overlay ON,  no search → every event the API returned
+//   overlay ON,  search    → every event, unchanged: the toggle already asked
+//                            for all of them, and searching must not take any
+//                            away from a rider who is looking at the lot
+//   overlay OFF, search    → ONLY events serving a searched line, drawn exactly
+//                            as the toggle draws them
+//   overlay OFF, no search → nothing drawn, and ZERO fetches
+
 /** OFF by default, mirroring the legend row's startOff. */
 let overlayOn = false;
-/** Set by startDiversions so the toggle can force an immediate refresh. */
+/** The Filter tab's selection, or null when the rider is not searching. */
+let searchedSelection: ReadonlySet<string> | null = null;
+/** The resolved output of the truth table, kept as state because poll() reads
+ * it: while nothing is on screen, nothing is fetched. */
+let onScreen = false;
+/** The last events the API returned, so a filter change re-scopes the picture
+ * without spending a request on data we already hold. */
+let lastEvents: readonly DiversionEvent[] = [];
+/** Set by startDiversions so a newly-active input can force an immediate refresh. */
 let refresh: (() => void) | null = null;
 
-/** Legend toggle handler: visibility flip + poll gate. */
+/** Push the currently-drawable events to the source. With neither input active
+ * the scoped list is empty, so `scoped` never reaches a feature in that case. */
+function draw(map: MaplibreMap): void {
+  const src = map.getSource(SOURCE_ID);
+  if (!src || !('setData' in src)) return;
+  const events = overlayOn ? lastEvents : eventsOnSearchedLines(lastEvents, searchedSelection);
+  (src as GeoJSONSource).setData({
+    type: 'FeatureCollection',
+    features: buildDiversionFeatures(events, !overlayOn),
+  });
+}
+
+/** Recompute visibility, the poll gate and the drawn events from both inputs. */
+function applyDiversionDisplay(map: MaplibreMap): void {
+  const active = overlayOn || searchedSelection !== null;
+  // Coming back on, `lastEvents` holds whatever was true when we stopped
+  // fetching — possibly a whole off-interval stale — so refresh out of band
+  // rather than leaving that picture up until the next tick.
+  const resumed = active && !onScreen;
+  onScreen = active;
+  for (const id of DIVERSIONS_LAYER_IDS) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', active ? 'visible' : 'none');
+  }
+  draw(map);
+  if (resumed) refresh?.();
+}
+
+/** Legend toggle handler: one of the two inputs above. */
 export function setDiversionsVisible(map: MaplibreMap, visible: boolean): void {
   overlayOn = visible;
-  for (const id of DIVERSIONS_LAYER_IDS) {
-    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
-  }
-  if (visible) refresh?.();
+  applyDiversionDisplay(map);
 }
 
 export async function startDiversions(map: MaplibreMap): Promise<void> {
@@ -233,16 +329,19 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
   // One wide translucent band — no casing, no dashes: solid saturated lines
   // lose against a basemap full of them (a previous dashed-red pass read as
   // yet another line), while a broad ~30%-opacity wash over the road is a
-  // channel nothing else on the map uses. Since the overlay is opt-in
-  // (default off), subtle is a feature: you turned it on, you are looking
-  // for it.
+  // channel nothing else on the map uses. Since the layer only appears when
+  // asked for (toggle on, or the line searched), subtle is a feature: you went
+  // looking for it, so you know where to look.
+  //
+  // The only `filter` here is on geometry type. Scoping to a searched line is
+  // deliberately NOT expressible here — see eventsOnSearchedLines.
   map.addLayer(
     {
       id: DIVERSIONS_SEGMENTS_LAYER_ID,
       type: 'line',
       source: SOURCE_ID,
       filter: ['==', ['geometry-type'], 'LineString'],
-      // off by default; the legend toggle flips visibility on opt-in
+      // hidden until an input asks for it; applyDiversionDisplay flips this
       layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
       paint: {
         'line-color': STATUS_COLOR,
@@ -256,7 +355,7 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
   );
 
   async function poll(): Promise<void> {
-    if (!overlayOn) return;
+    if (!onScreen) return;
     try {
       const res = await fetch(DIVERSIONS_URL);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -264,22 +363,27 @@ export async function startDiversions(map: MaplibreMap): Promise<void> {
       // A 200 from an intermediary (error page, captive portal) must not reach
       // setData; empty `events` is fine and clears the layer.
       if (!Array.isArray(body?.events)) throw new Error('unexpected diversions payload shape');
-      const src = map.getSource(SOURCE_ID);
-      if (src && 'setData' in src) {
-        (src as GeoJSONSource).setData({
-          type: 'FeatureCollection',
-          features: toFeatures(body.events),
-        });
-      }
+      lastEvents = body.events;
+      draw(map);
     } catch (error) {
       // Keep the last picture; the next poll retries.
       console.warn('[diversions]', error);
     }
   }
-  refresh = () => void poll();
 
   wireInteractions(map, DIVERSIONS_SEGMENTS_LAYER_ID);
 
+  // Subscribing delivers the CURRENT selection synchronously, so a rider who
+  // typed a line before this layer finished starting gets it resolved here
+  // rather than at their next keystroke. `refresh` is still null during that
+  // first delivery, so it cannot kick a request of its own — the awaited poll
+  // below stays the single start-up fetch.
+  onSearchedLines((lines) => {
+    searchedSelection = lines;
+    applyDiversionDisplay(map);
+  });
+
+  refresh = () => void poll();
   await poll();
   registerPoll(() => void poll(), POLL_INTERVAL_MS);
 }

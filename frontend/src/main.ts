@@ -537,8 +537,11 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
       overlay: {
         // Default OFF (user call after a live-map session): the base map is
         // already dense with coloured lines, so this ships as an opt-in tool
-        // layer. The custom handler gates the 90 s poll on the toggle, so
-        // while hidden it also costs zero fetches.
+        // layer. The toggle is no longer its only way on screen though —
+        // searching a bus line in the Filter tab draws that line's diversions
+        // with this still off — so the 90 s poll is gated on "toggled on OR a
+        // line searched", and it is hidden AND unsearched that costs zero
+        // fetches. See the truth table in layers/diversions.ts.
         label: 'Diversions',
         layerIds: DIVERSIONS_LAYER_IDS,
         startOff: true,
