@@ -52,7 +52,9 @@ import { registerCoverageRoute } from './routes/coverage';
 import { registerDataExportRoute } from './routes/data-export';
 import { registerDiversionsRoute } from './routes/diversions';
 import { DISRUPTIONS_TTL_MS, registerDisruptionsRoute } from './routes/disruptions';
+import { BUS_STOP_CLOSURES_TTL_MS, registerBusStopClosuresRoute } from './routes/bus-stop-closures';
 import { buildHopIndex } from './disruptions/line-graph';
+import { loadCache, saveCache, type BusStop } from './disruptions/bus-stop-gazetteer';
 import { registerShipPhotoRoute } from './routes/ship-photo';
 
 /** Repo layout anchors — data/ and scripts/ sit beside backend/. */
@@ -81,6 +83,27 @@ const DATA_DIR = resolveBakedDataDir();
  * days of traces before the learned dir exists, so a boot-only check would
  * disable the feature until a redeploy. 30 min is modest — one existsSync. */
 const DIVERSIONS_RETRY_INTERVAL_MS = 30 * 60_000;
+
+/**
+ * The baked bus-stop positions, or an empty map with a loud line in the log.
+ * A corrupt or unreadable cache must not stop the server booting: the route
+ * re-resolves what it needs from TfL, so the cost of starting empty is a few
+ * batched lookups, while the cost of throwing here is the whole deployment.
+ */
+async function loadGazetteer(
+  path: string,
+  log: (message: string) => void,
+): Promise<ReadonlyMap<string, BusStop>> {
+  try {
+    const stops = await loadCache(path);
+    log(`bus-stop gazetteer: ${stops.size} stop(s) loaded from ${path}`);
+    return stops;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    log(`bus-stop gazetteer: starting empty — ${reason}`);
+    return new Map();
+  }
+}
 
 /** Builds the Fastify app with all plugins and routes; exported for tests (inject()). */
 export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
@@ -259,6 +282,8 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const bikePointsCache = new TtlCache<unknown>(BIKE_POINTS_TTL_MS);
   // One entry forever: /api/disruptions has no query parameters by design.
   const disruptionsCache = new TtlCache<unknown>(DISRUPTIONS_TTL_MS);
+  // Likewise for the bus stop closure overlay: one shared key, one entry.
+  const busStopClosuresCache = new TtlCache<unknown>(BUS_STOP_CLOSURES_TTL_MS);
   const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
 
   registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir, railLineIds);
@@ -282,6 +307,20 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
         modeById: branchData.lineModeById,
         log,
       },
+    },
+  );
+
+  // Bus stops closed right now. The feed names poles by ATCO id alone, so the
+  // permanent gazetteer supplies every coordinate and route list; ids it has
+  // never seen are resolved on demand and written back beside the baked file.
+  const gazetteerPath = join(DATA_DIR, 'bus-stops', 'gazetteer.json');
+  const busStopClosuresCounters = registerBusStopClosuresRoute(
+    app,
+    { config, cache: busStopClosuresCache, budget: tflBudget },
+    {
+      gazetteer: await loadGazetteer(gazetteerPath, log),
+      log,
+      saveGazetteer: (stops) => saveCache(gazetteerPath, stops),
     },
   );
 
@@ -341,7 +380,9 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     cacheLiftDisruptions: liftDisruptionsCache.size,
     cacheBikePoints: bikePointsCache.size,
     cacheDisruptions: disruptionsCache.size,
+    cacheBusStopClosures: busStopClosuresCache.size,
     ...disruptionCounters(),
+    ...busStopClosuresCounters(),
   }));
   app.addHook('onClose', () => leaderboard.stop());
   registerLeaderboardRoute(app, leaderboard);

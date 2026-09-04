@@ -122,6 +122,18 @@ describe('capabilities disruptions flag', () => {
     expect(caps.layers['trainPositions']).toBe(true);
   });
 
+  it('gates busStopClosures on the operator key alone, not on the baked network', async () => {
+    // Arrange — bus stop closures are positioned from the gazetteer, which is
+    // resolved on demand from TfL; no baked rail geometry is involved at all.
+    // Act
+    const withoutKey = buildCapabilities(CONFIG, join(dir, 'no-baked-data'), dir, NO_RAIL_LINES);
+    const withTflKey = buildCapabilities(withKey, join(dir, 'no-baked-data'), dir, NO_RAIL_LINES);
+
+    // Assert
+    expect(withoutKey.layers['busStopClosures']).toBe(false);
+    expect(withTflKey.layers['busStopClosures']).toBe(true);
+  });
+
   it('is false on a manifest with no rail line, because the route is not registered', async () => {
     // Arrange — a key and a manifest, but statusLineIds() found no rail line
     // (an empty or bus-only manifest). registerDisruptionsRoute returns early

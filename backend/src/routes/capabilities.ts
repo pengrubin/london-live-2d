@@ -98,6 +98,10 @@ export function buildCapabilities(
       // AND the baked network to validate every id and hop against — with only
       // one of the two there is nothing that could honestly be drawn.
       disruptions: hasTfl && hasRailLines,
+      // Bus stops closed right now. Positions come from the on-demand stop
+      // gazetteer rather than from baked geometry, so the operator key is the
+      // only thing this needs — no manifest, no rail lines.
+      busStopClosures: hasTfl,
       // TfL Unified API extras.
       lineStatus: hasTfl,
       stopArrivals: hasTfl,

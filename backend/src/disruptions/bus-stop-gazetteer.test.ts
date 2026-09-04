@@ -461,4 +461,96 @@ describe('gazetteer cache file', () => {
     // Act / Assert
     await expect(loadCache(path)).rejects.toThrow(/490000123B/);
   });
+
+  it('refuses an unknown match value rather than passing a pair centroid off as a pole', async () => {
+    // Arrange — coercing anything to "exact" claims a per-pole position the
+    // cache never recorded, which is exactly the mark the data does not state.
+    const path = join(dir, 'guessed.json');
+    await writeFile(
+      path,
+      '{"490000123B":{"id":"490000123B","name":"X","lat":51.5,"lon":-0.2,"routes":[],"match":"guessed"}}',
+      'utf8',
+    );
+
+    // Act / Assert
+    await expect(loadCache(path)).rejects.toThrow(/490000123B/);
+  });
+
+  it('refuses an entry with no match at all', async () => {
+    // Arrange
+    const path = join(dir, 'absent.json');
+    await writeFile(
+      path,
+      '{"490000123B":{"id":"490000123B","name":"X","lat":51.5,"lon":-0.2,"routes":[]}}',
+      'utf8',
+    );
+
+    // Act / Assert
+    await expect(loadCache(path)).rejects.toThrow(/490000123B/);
+  });
+});
+
+describe('resolveStops accounting', () => {
+  it('counts and names blank ids instead of quietly shrinking the request', async () => {
+    // Arrange — a caller that lets an empty atcoCode through would otherwise
+    // see `requested` shrink to match, and the loss would leave no trace.
+    const { ids, roots } = standalonePoles(2);
+    const stub = stubFetcher(roots);
+    const logs: string[] = [];
+
+    // Act
+    const result = await resolveStops([ids[0] as string, '', ids[1] as string, ''], {
+      fetchStopPoints: stub.fetchStopPoints,
+      log: (message) => logs.push(message),
+      sleep: noWait,
+    });
+
+    // Assert
+    expect(result.stats.blank).toBe(2);
+    expect(result.stats.requested).toBe(2);
+    expect(logs.some((entry) => entry.includes('blank'))).toBe(true);
+  });
+
+  it('reports zero blank ids for a clean request', async () => {
+    // Arrange
+    const { ids, roots } = standalonePoles(2);
+    const stub = stubFetcher(roots);
+
+    // Act
+    const result = await resolveStops(ids, {
+      fetchStopPoints: stub.fetchStopPoints,
+      log: silent,
+      sleep: noWait,
+    });
+
+    // Assert
+    expect(result.stats.blank).toBe(0);
+  });
+
+  it('describes the whole resolved set on a warm cache, not just the fetched part', async () => {
+    // Arrange — every id is cached, so a fetch-path-only tally reports zeroes
+    // and the report claims a fully resolved gazetteer holds no positions.
+    const cached = new Map<string, BusStop>([
+      ['490000000A', { id: '490000000A', name: 'A', lat: 51.5, lon: -0.1, routes: ['88'], match: 'exact' }],
+      ['490000001B', { id: '490000001B', name: 'B', lat: 51.6, lon: -0.2, routes: [], match: 'parent' }],
+    ]);
+    const stub = stubFetcher(new Map());
+
+    // Act
+    const result = await resolveStops([...cached.keys()], {
+      fetchStopPoints: stub.fetchStopPoints,
+      log: silent,
+      sleep: noWait,
+      cached,
+    });
+
+    // Assert
+    expect(result.stats).toMatchObject({
+      fromCache: 2,
+      fetched: 0,
+      exact: 1,
+      parent: 1,
+      withRoutes: 1,
+    });
+  });
 });

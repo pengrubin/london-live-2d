@@ -72,11 +72,23 @@ export interface GazetteerDeps {
 }
 
 export interface ResolveStats {
-  /** Distinct ids asked for. */
+  /** Distinct non-blank ids asked for. */
   readonly requested: number;
+  /**
+   * Ids the caller passed that were empty strings. Counted (and logged)
+   * because `requested` is the POST-filter length: without this the loss
+   * would balance the books and leave no trace anywhere in the report.
+   */
+  readonly blank: number;
   readonly fromCache: number;
   /** Newly resolved through the network this run. */
   readonly fetched: number;
+  /**
+   * The three tallies below describe the whole RESOLVED set — cache hits
+   * included — not just what this run fetched. Counting only the fetch path
+   * made a warm-cache run report zero positions for a fully resolved
+   * gazetteer, which reads as total failure.
+   */
   /** Coordinate read off the requested pole itself. */
   readonly exact: number;
   /** Coordinate read off the stop pair because the pole was absent. */
@@ -114,9 +126,6 @@ type Pick = { ok: true; stop: BusStop } | { ok: false; reason: string };
 
 interface Counters {
   fetched: number;
-  exact: number;
-  parent: number;
-  withRoutes: number;
   upstreamCalls: number;
   failedBatches: number;
 }
@@ -130,7 +139,10 @@ export async function resolveStops(
   ids: readonly string[],
   deps: GazetteerDeps,
 ): Promise<ResolveResult> {
-  const wanted = distinct(ids);
+  const { ids: wanted, blank } = distinct(ids);
+  if (blank > 0) {
+    deps.log(`bus-gazetteer: ${blank} of ${ids.length} requested id(s) were blank and ignored`);
+  }
   const cached = deps.cached ?? new Map<string, BusStop>();
   const resolved = new Map<string, BusStop>();
   for (const id of wanted) {
@@ -157,12 +169,35 @@ export async function resolveStops(
     resolved,
     unresolved,
     reasons,
-    stats: { ...counters, requested: wanted.length, fromCache: wanted.length - missing.length },
+    stats: {
+      ...counters,
+      ...tally(resolved),
+      requested: wanted.length,
+      blank,
+      fromCache: wanted.length - missing.length,
+    },
   };
 }
 
 function newCounters(): Counters {
-  return { fetched: 0, exact: 0, parent: 0, withRoutes: 0, upstreamCalls: 0, failedBatches: 0 };
+  return { fetched: 0, upstreamCalls: 0, failedBatches: 0 };
+}
+
+/** Describe what was resolved, however it was resolved — cache hits included. */
+function tally(resolved: ReadonlyMap<string, BusStop>): {
+  exact: number;
+  parent: number;
+  withRoutes: number;
+} {
+  let exact = 0;
+  let parent = 0;
+  let withRoutes = 0;
+  for (const stop of resolved.values()) {
+    if (stop.match === 'exact') exact += 1;
+    else parent += 1;
+    if (stop.routes.length > 0) withRoutes += 1;
+  }
+  return { exact, parent, withRoutes };
 }
 
 /** One upstream call; on failure, split and retry rather than drop the batch. */
@@ -197,9 +232,6 @@ async function resolveBatch(
     }
     resolved.set(id, picked.stop);
     counters.fetched += 1;
-    if (picked.stop.match === 'exact') counters.exact += 1;
-    else counters.parent += 1;
-    if (picked.stop.routes.length > 0) counters.withRoutes += 1;
   }
 }
 
@@ -329,10 +361,21 @@ function toCachedStop(path: string, id: string, value: unknown): BusStop {
     throw new Error(`bus-stop gazetteer cache ${path}: entry ${id} is malformed`);
   }
   const name = typeof record['name'] === 'string' ? record['name'] : id;
-  const match: MatchKind = record['match'] === 'parent' ? 'parent' : 'exact';
-  const stop: BusStop = { id, name, lat, lon, routes, match };
+  const stop: BusStop = { id, name, lat, lon, routes, match: toMatchKind(path, id, record['match']) };
   const towards = record['towards'];
   return typeof towards === 'string' && towards.length > 0 ? { ...stop, towards } : stop;
+}
+
+/**
+ * `match` says whether the coordinate is the pole's own or its pair's centroid.
+ * Coercing an unknown value to `exact` would claim a per-pole position the
+ * cache never recorded, so anything else is a corrupt entry and says so.
+ */
+function toMatchKind(path: string, id: string, value: unknown): MatchKind {
+  if (value === 'exact' || value === 'parent') return value;
+  throw new Error(
+    `bus-stop gazetteer cache ${path}: entry ${id} has match ${JSON.stringify(value)}, not "exact" or "parent"`,
+  );
 }
 
 function toNodes(body: unknown): RawNode[] {
@@ -433,15 +476,21 @@ function describe(error: unknown): string {
   return message.slice(0, MAX_REASON_CHARS);
 }
 
-function distinct(ids: readonly string[]): string[] {
+/** Distinct usable ids, plus how many blank ones the caller passed. */
+function distinct(ids: readonly string[]): { ids: string[]; blank: number } {
   const seen = new Set<string>();
   const out: string[] = [];
+  let blank = 0;
   for (const id of ids) {
-    if (!id || seen.has(id)) continue;
+    if (!id) {
+      blank += 1;
+      continue;
+    }
+    if (seen.has(id)) continue;
     seen.add(id);
     out.push(id);
   }
-  return out;
+  return { ids: out, blank };
 }
 
 function chunk(ids: readonly string[], size: number): string[][] {
