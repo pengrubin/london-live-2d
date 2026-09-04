@@ -383,6 +383,15 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     cacheBusStopClosures: busStopClosuresCache.size,
     ...disruptionCounters(),
     ...busStopClosuresCounters(),
+    // Evictions on the caches keyed by an id space larger than any working
+    // set. Zero means the ceiling is never reached and costs nothing; a number
+    // that climbs steadily means it is too low and every eviction is a cache
+    // miss a viewer paid for. These are the caches whose unbounded growth
+    // filled the heap on 2026-09-04.
+    evictStopArrivals: stopArrivalsCache.evictions,
+    evictVehicleArrivals: vehicleArrivalsCache.evictions,
+    evictStopDetail: stopDetailCache.evictions,
+    evictCrowding: crowdingCache.evictions,
   }));
   app.addHook('onClose', () => leaderboard.stop());
   registerLeaderboardRoute(app, leaderboard);
