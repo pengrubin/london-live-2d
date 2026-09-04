@@ -29,6 +29,78 @@ describe('TtlCache.size', () => {
   });
 });
 
+describe('TtlCache.getStale with maxAgeMs', () => {
+  const MAX_AGE_MS = 600_000;
+
+  test('serves an expired entry of any age when maxAgeMs is absent', () => {
+    // Arrange
+    const cache = new TtlCache<string>(TTL_MS);
+    const t0 = 1_000_000;
+    cache.set('k', 'v', t0);
+
+    // Act
+    const value = cache.getStale('k', undefined, t0 + MAX_AGE_MS * 100);
+
+    // Assert
+    expect(value).toBe('v');
+  });
+
+  test('serves an entry younger than maxAgeMs even though it is past the TTL', () => {
+    // Arrange
+    const cache = new TtlCache<string>(TTL_MS);
+    const t0 = 1_000_000;
+    cache.set('k', 'v', t0);
+
+    // Act
+    const value = cache.getStale('k', MAX_AGE_MS, t0 + MAX_AGE_MS - 1);
+
+    // Assert
+    expect(cache.getFresh('k', t0 + MAX_AGE_MS - 1)).toBeUndefined();
+    expect(value).toBe('v');
+  });
+
+  test('returns undefined once the entry is maxAgeMs old — the same boundary as getFresh', () => {
+    // A stale payload older than the bound must not be served: a lifted
+    // suspension would otherwise keep its hatch for hours under an outage.
+    // Arrange
+    const cache = new TtlCache<string>(TTL_MS);
+    const t0 = 1_000_000;
+    cache.set('k', 'v', t0);
+
+    // Act
+    const value = cache.getStale('k', MAX_AGE_MS, t0 + MAX_AGE_MS);
+
+    // Assert
+    expect(value).toBeUndefined();
+    expect(cache.size).toBe(1);
+  });
+
+  test('returns undefined for a key never stored, bounded or not', () => {
+    // Arrange
+    const cache = new TtlCache<string>(TTL_MS);
+
+    // Act / Assert
+    expect(cache.getStale('missing')).toBeUndefined();
+    expect(cache.getStale('missing', MAX_AGE_MS, 1_000_000)).toBeUndefined();
+  });
+
+  test('an entry past maxAgeMs is refused without earning a reprieve from eviction', () => {
+    // Arrange — the bound is not a use, so the entry stays first in line.
+    const cache = new TtlCache<string>(TTL_MS, 2);
+    const t0 = 1_000_000;
+    cache.set('old', 'v', t0);
+    cache.set('newer', 'v', t0 + 1);
+
+    // Act
+    expect(cache.getStale('old', MAX_AGE_MS, t0 + MAX_AGE_MS)).toBeUndefined();
+    cache.set('newest', 'v', t0 + MAX_AGE_MS);
+
+    // Assert
+    expect(cache.getStale('old')).toBeUndefined();
+    expect(cache.getStale('newer')).toBe('v');
+  });
+});
+
 describe('TtlCache eviction', () => {
   test('holds at the ceiling instead of growing without bound', () => {
     // Arrange — a cache keyed the way /api/stop-arrivals is, asked for far

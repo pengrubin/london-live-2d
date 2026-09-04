@@ -59,10 +59,18 @@ export class TtlCache<T> {
     return entry.value;
   }
 
-  /** Returns the value regardless of age (for stale-serving fallbacks). */
-  getStale(key: string): T | undefined {
+  /**
+   * Returns the value past its TTL (for stale-serving fallbacks). With
+   * `maxAgeMs` the entry is served only while younger than that bound — the
+   * same `<` boundary as `getFresh` — so a payload whose meaning decays (a
+   * lifted suspension) is never served hours old; absent, any age is served.
+   */
+  getStale(key: string, maxAgeMs?: number, now: number = Date.now()): T | undefined {
     const entry = this.entries.get(key);
     if (entry === undefined) return undefined;
+    // Past the bound it is not served, so it is not a use either: it stays
+    // where it is in the queue rather than earning a reprieve from eviction.
+    if (maxAgeMs !== undefined && now - entry.storedAt >= maxAgeMs) return undefined;
     // Serving stale IS using the entry — an upstream outage must not cost the
     // very keys the fallback is holding up.
     this.touch(key, entry);
