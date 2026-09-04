@@ -6,20 +6,26 @@ interface CacheEntry<T> {
 /**
  * Ceiling on entries in one cache, applied unless a caller names its own.
  *
- * It is a DEFAULT rather than an opt-in because the absence of one killed the
- * London service on 2026-09-04: the heap filled to its 2,053 MB limit and a
- * Mark-Compact freed 0.6 MB, because nothing was garbage — every response body
- * the process had ever cached was still reachable. Several caches are keyed by
- * an id space far larger than any working set: NaPTAN stop id (~19,000 stops)
- * for stop-arrivals, stop-detail and crowding, vehicle id for vehicle-arrivals,
- * and aircraft callsign — with a one-hour TTL — for callsign. Opting in would
- * have left the next route keyed by an id to reintroduce the same crash.
+ * It is a DEFAULT rather than an opt-in because several caches are keyed by an
+ * id space far larger than any working set — NaPTAN stop id (~19,000 stops) for
+ * stop-arrivals, stop-detail and crowding, vehicle id for vehicle-arrivals, and
+ * aircraft callsign, on a one-hour TTL, for callsign — and opting in would
+ * leave the next route keyed by an id free to grow without limit.
+ *
+ * History, because the comment here used to claim otherwise: this ceiling was
+ * the first suspect for the 2026-09-04 out-of-memory crash and was NOT its
+ * cause. A heap snapshot later named that: SIRI response strings retained by
+ * slice views, fixed in `bods-client.ts`, which is where that incident is
+ * written up. Bounding these caches was still worth doing.
  *
  * 300 is chosen against the working set, not the key space: a cache is useful
  * only for keys asked for again inside its TTL, which is 8 s for arrivals and
- * 10 min for stop detail. Hundreds of distinct stops in flight at once is
- * already a busier map than this serves, so evictions should be rare — watch
- * `evictions` on /health and raise this if they are not.
+ * 10 min for stop detail. Watch `evictions` on /health and raise it if they
+ * climb.
+ *
+ * **It bounds entries, not bytes.** A cache whose entries are megabytes needs
+ * its own, far smaller ceiling — `/api/arrivals` bodies reach ~8.8 MB, so 300
+ * of them would be 2.6 GB. See `ARRIVALS_MAX_ENTRIES` in app.ts.
  */
 export const DEFAULT_MAX_ENTRIES = 300;
 

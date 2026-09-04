@@ -272,7 +272,21 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const LIFT_DISRUPTIONS_TTL_MS = 300_000; // network-wide list; changes rarely
   const BIKE_POINTS_TTL_MS = 60_000; // dock occupancy drifts by the minute
 
-  const arrivalsCache = new TtlCache<unknown>(ARRIVALS_CACHE_TTL_MS);
+  /**
+   * A ceiling counted in ENTRIES only bounds memory when entries are small.
+   * These are not: one /api/arrivals body is 0.5 MB for a single line and
+   * ~8.8 MB for the whole network, so the 300-entry default would permit
+   * gigabytes. And the key is attacker-chosen — it is the caller's own list of
+   * line ids, canonicalised but otherwise free, so up to 30 ids give an
+   * astronomically large set of distinct subsets to churn through.
+   *
+   * The legitimate key space is exactly ONE: the frontend always asks for the
+   * whole manifest (trains-controller.ts builds `lineIds` once from every
+   * line). Four leaves room for a second region and an odd subset while
+   * capping this cache at roughly 35 MB rather than 2.6 GB.
+   */
+  const ARRIVALS_MAX_ENTRIES = 4;
+  const arrivalsCache = new TtlCache<unknown>(ARRIVALS_CACHE_TTL_MS, ARRIVALS_MAX_ENTRIES);
   const stopArrivalsCache = new TtlCache<unknown>(ARRIVALS_CACHE_TTL_MS);
   const vehicleArrivalsCache = new TtlCache<unknown>(ARRIVALS_CACHE_TTL_MS);
   const lineStatusCache = new TtlCache<unknown>(LINE_STATUS_TTL_MS);
@@ -386,8 +400,11 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     // Evictions on the caches keyed by an id space larger than any working
     // set. Zero means the ceiling is never reached and costs nothing; a number
     // that climbs steadily means it is too low and every eviction is a cache
-    // miss a viewer paid for. These are the caches whose unbounded growth
-    // filled the heap on 2026-09-04.
+    // miss a viewer paid for. These caches were the FIRST suspect for the
+    // 2026-09-04 out-of-memory crash and were not the cause — a heap snapshot
+    // later named it as SIRI response strings retained by slice views
+    // (bods-client.ts). Bounding them was still right, but nothing here should
+    // be read as an account of that incident.
     evictStopArrivals: stopArrivalsCache.evictions,
     evictVehicleArrivals: vehicleArrivalsCache.evictions,
     evictStopDetail: stopDetailCache.evictions,

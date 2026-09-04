@@ -80,12 +80,13 @@ describe('parseSiriVm', () => {
    * trustworthy, so it skips rather than pretending when gc is unavailable.
    */
   test('retains the fields it parsed, not the documents they came from', () => {
+    // vitest.config.ts runs the suite with --expose-gc precisely so this test
+    // is never skipped. Assert that rather than skipping: a regression test
+    // that quietly opts out still reports the suite green, which is how the
+    // bug it guards would come back unnoticed.
     const gc = (globalThis as { gc?: () => void }).gc;
-    if (!gc) {
-      // eslint-disable-next-line no-console
-      console.warn('skipping the retention check: run vitest under --expose-gc for it');
-      return;
-    }
+    expect(gc, 'the suite must run with --expose-gc; see vitest.config.ts').toBeTypeOf('function');
+    if (!gc) return;
 
     // Arrange — documents far larger than the fields taken out of them.
     // The document must dwarf the fields taken out of it, or the buses' own
