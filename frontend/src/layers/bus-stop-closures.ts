@@ -17,8 +17,10 @@
 // backend's stop gazetteer, so a pole the gazetteer could not resolve has no
 // position and is dropped (and counted) rather than placed somewhere plausible.
 //
-// Polling is gated on the overlay toggle (default OFF): while hidden the layer
-// makes zero requests.
+// Two independent inputs decide what is drawn — the overlay toggle (default
+// OFF) and the Filter tab's bus-line search — and polling is gated on EITHER of
+// them being active. With neither, the layer makes zero requests. See the
+// display coordinator at the foot of the file for the truth table.
 
 import {
   Popup,
@@ -29,6 +31,7 @@ import {
 } from 'maplibre-gl';
 import { registerPoll } from '../util/lifecycle';
 import { anyFeatureAt, below, DOT_LAYER_IDS } from '../util/layer-order';
+import { matchesSearch, onSearchedLines, type Unsubscribe } from './searched-lines';
 
 export const BUS_STOP_CLOSURES_HALO_LAYER_ID = 'bus-stop-closures-halo';
 export const BUS_STOP_CLOSURES_CORE_LAYER_ID = 'bus-stop-closures-core';
@@ -118,6 +121,9 @@ const stats = {
   droppedNoCoords: 0,
   droppedNotInForce: 0,
   droppedUnreadableWindow: 0,
+  /** In force and positioned, but on no line the rider searched for. Kept
+   * apart so `received` still adds up: drawn + every dropped* = received. */
+  droppedOffSearch: 0,
   pollFailures: 0,
   lastPollError: '',
 };
@@ -204,15 +210,29 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
 }
 
-function toProps(stop: BusStopClosure): ClosureProps {
+/**
+ * The stop's routes as the popup lists them: numeric-aware so "9" sorts before
+ * "24" and "N29" after "176" (the same idiom as listActiveBusLines in
+ * layers/buses.ts), with any line the rider searched for lifted to the front so
+ * the reason this pin is on screen reads first. Ordering only — the routes are
+ * neither filtered nor restyled, and with no search the list is untouched.
+ */
+function orderedRoutes(
+  routes: readonly string[],
+  searched: ReadonlySet<string> | null,
+): readonly string[] {
+  const sorted = [...routes].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  if (!searched) return sorted;
+  const wanted = sorted.filter((route) => matchesSearch(route, searched));
+  if (wanted.length === 0) return sorted;
+  return [...wanted, ...sorted.filter((route) => !matchesSearch(route, searched))];
+}
+
+function toProps(stop: BusStopClosure, searched: ReadonlySet<string> | null): ClosureProps {
   return {
     id: stop.id ?? '',
     name: stop.name ?? 'Bus stop',
-    // Numeric-aware so "9" sorts before "24" and "N29" after "176" — the same
-    // idiom as listActiveBusLines in layers/buses.ts.
-    routes: [...(stop.routes ?? [])]
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-      .join(', '),
+    routes: orderedRoutes(stop.routes ?? [], searched).join(', '),
     towards: stop.towards ?? '',
     // NOT defaulted to "Closure". An absent `ty` states nothing, and inventing
     // the most specific claim the layer can make for a row that made none is
@@ -230,10 +250,18 @@ export interface BuiltClosures {
   readonly droppedUnreadableWindow: number;
 }
 
-/** One point feature per stop that is both positioned and in force right now. */
+/**
+ * One point feature per stop that is both positioned and in force right now.
+ *
+ * `searched` is presentation only — which line the popup names first. WHICH
+ * stops are built is decided before this by scopeToSearch(), because the two
+ * answers differ: with the overlay on, every stop is built while the searched
+ * line still reads first in its popup.
+ */
 export function buildClosureFeatures(
   stops: readonly BusStopClosure[],
   nowMs: number,
+  searched: ReadonlySet<string> | null = null,
 ): BuiltClosures {
   const features: GeoJSON.Feature[] = [];
   let droppedNoCoords = 0;
@@ -256,7 +284,7 @@ export function buildClosureFeatures(
     }
     features.push({
       type: 'Feature',
-      properties: toProps(stop),
+      properties: toProps(stop, searched),
       geometry: { type: 'Point', coordinates: [stop.lon as number, stop.lat as number] },
     });
   }
@@ -376,18 +404,79 @@ function setData(map: MaplibreMap, features: GeoJSON.Feature[]): void {
   }
 }
 
+// ── closure display coordinator ──
+// Two independent inputs decide what this layer draws, so they are resolved
+// together in one place rather than fighting over the same source and the same
+// poll gate — the applyBusDisplay pattern from layers/buses.ts:
+//   • the Bus stop closures overlay toggle (Lines tab) — overlayOn
+//   • the bus line search (Filter tab)                 — searchLines
+// Truth table:
+//   overlay ON,  no search → every closed stop, exactly as before
+//   overlay ON,  search    → STILL every closed stop. The overlay means "show
+//                            me all of it", and a search must never silently
+//                            hide a stop the rider explicitly asked to see.
+//                            The searched line only reads first in the popup.
+//   overlay OFF, search    → only stops a searched line serves
+//   overlay OFF, no search → nothing drawn, and ZERO requests
+// Styling never enters the table: search decides WHICH stops exist, never how
+// they look, so a closed stop looks the same however it got on screen.
+
 /** OFF by default, mirroring the legend row's startOff. */
 let overlayOn = false;
-/** Set by startBusStopClosures so the toggle can force an immediate refresh. */
+/** The lines the rider is searching for; null when not searching (an empty
+ * selection is normalised to null by layers/searched-lines). */
+let searchLines: ReadonlySet<string> | null = null;
+/** The resolved output of the table above: is anything asked for at all? Kept
+ * as state so the waking edge can be told from a change while already awake. */
+let displayActive = false;
+/** Set by startBusStopClosures so the coordinator can go and get a fresh
+ * payload, or redraw from the one already in hand. */
 let refresh: (() => void) | null = null;
+let redraw: (() => void) | null = null;
+/** Dropped and replaced by a second start (a style reload), so subscriptions
+ * never stack up one per call. */
+let unsubscribeSearch: Unsubscribe | null = null;
 
-/** Legend toggle handler: visibility flip + poll gate. */
+/** Whether either input is asking for the layer — the poll gate too: the feed
+ * is paid for when the overlay OR the search needs it, and never otherwise. */
+function closuresRequested(): boolean {
+  return overlayOn || searchLines !== null;
+}
+
+/** The rows to draw from. The overlay wins: while it is on, nothing is scoped
+ * away, so a search can only ever ADD to what the rider already asked for. */
+function scopeToSearch(stops: readonly BusStopClosure[]): readonly BusStopClosure[] {
+  // Read once into a const: narrowing a module-level `let` does not survive
+  // into the closure below, and the alternative is a cast that asserts what
+  // this line already proves.
+  const lines = searchLines;
+  if (overlayOn || !lines) return stops;
+  return stops.filter((stop) => servesSearchedLine(stop, lines));
+}
+
+function servesSearchedLine(stop: BusStopClosure, lines: ReadonlySet<string>): boolean {
+  return (stop.routes ?? []).some((route) => matchesSearch(route, lines));
+}
+
+/** Resolve both inputs onto the map: visibility, then the features, then a
+ * fetch if the layer is only now waking up. */
+function applyClosureDisplay(map: MaplibreMap): void {
+  const active = closuresRequested();
+  // Coming back on, whatever is in hand is however old the layer was when it
+  // stopped fetching, so refresh out of band rather than leaving it stale.
+  const woke = active && !displayActive;
+  displayActive = active;
+  for (const id of BUS_STOP_CLOSURES_LAYER_IDS) {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', active ? 'visible' : 'none');
+  }
+  redraw?.();
+  if (woke) refresh?.();
+}
+
+/** Legend toggle handler: one of the two inputs above. */
 export function setBusStopClosuresVisible(map: MaplibreMap, visible: boolean): void {
   overlayOn = visible;
-  for (const id of BUS_STOP_CLOSURES_LAYER_IDS) {
-    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
-  }
-  if (visible) refresh?.();
+  applyClosureDisplay(map);
 }
 
 export async function startBusStopClosures(map: MaplibreMap): Promise<void> {
@@ -421,17 +510,24 @@ export async function startBusStopClosures(map: MaplibreMap): Promise<void> {
     console.warn(line);
   }
 
-  /** Re-filters the payload in hand against a freshly anchored "now". */
+  /** Re-filters the payload in hand against a freshly anchored "now" and the
+   * current scope. */
   function rebuild(): void {
-    if (!overlayOn || !payload || typeof payload.t !== 'number') return;
+    if (!displayActive || !payload || typeof payload.t !== 'number') return;
     const stops = payload.stops ?? [];
-    const built = buildClosureFeatures(stops, serverNowMs(payload.t, receivedAt, Date.now()));
+    const scoped = scopeToSearch(stops);
+    const built = buildClosureFeatures(
+      scoped,
+      serverNowMs(payload.t, receivedAt, Date.now()),
+      searchLines,
+    );
     stats.received = stops.length;
+    stats.droppedOffSearch = stops.length - scoped.length;
     stats.drawn = built.features.length;
     stats.droppedNoCoords = built.droppedNoCoords;
     stats.droppedNotInForce = built.droppedNotInForce;
     stats.droppedUnreadableWindow = built.droppedUnreadableWindow;
-    logDrops(built, stops.length);
+    logDrops(built, scoped.length);
     setData(map, built.features);
   }
 
@@ -459,7 +555,7 @@ export async function startBusStopClosures(map: MaplibreMap): Promise<void> {
   }
 
   async function poll(): Promise<void> {
-    if (!overlayOn) return;
+    if (!displayActive) return;
     try {
       const res = await fetch(CLOSURES_URL);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -486,10 +582,43 @@ export async function startBusStopClosures(map: MaplibreMap): Promise<void> {
   }
   refresh = () => void poll();
 
+  /**
+   * The coordinator's way into the source, and the second entry point that
+   * fetches nothing — so, like tickRebuild, an unguarded throw here would land
+   * in a legend click handler or a keystroke on the Filter tab with no counter,
+   * no reason and no [bus-stop-closures] line to grep.
+   */
+  redraw = () => {
+    try {
+      if (displayActive) {
+        rebuild();
+        return;
+      }
+      // Gone dark: release the features rather than leave a hidden set in the
+      // source. Before the first poll there is nothing to release, so a page
+      // that never asks for the layer never touches the source at all.
+      if (payload) setData(map, []);
+    } catch (error) {
+      noteFailure(error);
+    }
+  };
+
   wireInteractions(map, BUS_STOP_CLOSURES_CORE_LAYER_ID);
 
-  // No-op while the overlay is off, which is how it ships: zero requests until
-  // someone asks for the layer.
+  // The other half of the display coordinator. The listener fires once, right
+  // here, with whatever the rider has already typed — so a layer that starts
+  // after the search does is scoped from its first paint, not the next one.
+  // It cannot double up with the poll below: displayActive is written by the
+  // same coordinator as both inputs, so it is already true in that case and
+  // this delivery is not a waking edge.
+  unsubscribeSearch?.();
+  unsubscribeSearch = onSearchedLines((lines) => {
+    searchLines = lines;
+    applyClosureDisplay(map);
+  });
+
+  // No-op while neither input is asking, which is how it ships: zero requests
+  // until someone turns the overlay on or searches for a line.
   await poll();
   registerPoll(() => void poll(), POLL_INTERVAL_MS);
   // The window is time-dependent, so it is re-derived without a fetch.

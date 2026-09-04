@@ -6,11 +6,32 @@
 // (which reaches for `window`), so both are stubbed to keep this in the fast
 // node environment — the emergency-classify.test.ts pattern.
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import type { Map as MaplibreMap } from 'maplibre-gl';
 
 vi.mock('maplibre-gl', () => ({ Popup: class {} }));
 
 const registerPoll = vi.fn<(fn: () => void, ms: number) => void>();
 vi.mock('../util/lifecycle', () => ({ registerPoll: (fn: () => void, ms: number) => registerPoll(fn, ms) }));
+
+// layers/searched-lines is NOT mocked: the join it performs ("does this stop
+// serve a line the rider typed?") is half of what is under test here, and a
+// stubbed matcher would make the 46/146 case prove nothing. Only its dependency
+// on ./buses is replaced — that module value-imports the whole map runtime, and
+// capturing the hook it registers is how a real filter change is simulated.
+type RouteShapeHook = (map: MaplibreMap, lines: ReadonlySet<string> | null) => void | Promise<void>;
+
+let registeredHooks: readonly RouteShapeHook[] = [];
+
+vi.mock('./buses', () => ({
+  setBusRouteShapeHook: (hook: RouteShapeHook) => {
+    registeredHooks = [...registeredHooks, hook];
+  },
+}));
+
+/** Simulate a real bus-line filter change: buses.ts calls every hook it holds. */
+function fireSearch(lines: ReadonlySet<string> | null): void {
+  for (const hook of registeredHooks) hook({} as MaplibreMap, lines);
+}
 
 const {
   BUS_STOP_CLOSURES_HALO_LAYER_ID,
@@ -44,6 +65,71 @@ const stop = (over: Partial<BusStopClosure> = {}): BusStopClosure => ({
 });
 
 const propsOf = (feature: GeoJSON.Feature): ClosureProps => feature.properties as ClosureProps;
+
+/** Enough of a MapLibre map for the layer's own calls, recording setData. */
+function fakeMap() {
+  const painted: GeoJSON.FeatureCollection[] = [];
+  const layerIds = new Set<string>();
+  const visibility = new Map<string, string>();
+  const map = {
+    addSource: () => {},
+    addLayer: (layer: { id: string }) => layerIds.add(layer.id),
+    getLayer: (id: string) => (layerIds.has(id) ? { id } : undefined),
+    getSource: () => ({ setData: (data: GeoJSON.FeatureCollection) => painted.push(data) }),
+    setLayoutProperty: (id: string, _prop: string, value: string) => visibility.set(id, value),
+    queryRenderedFeatures: () => [],
+    getCanvas: () => ({ style: {} }),
+    on: () => {},
+  };
+  return {
+    map: map as unknown as Parameters<typeof startBusStopClosures>[0],
+    painted,
+    layerIds,
+    visibility,
+  };
+}
+
+const body = (stops: BusStopClosure[]) => ({
+  ok: true,
+  json: async () => ({ t: Math.floor(NOW / 1000), stops }),
+  headers: { get: () => null },
+});
+
+let fetchSpy: ReturnType<typeof vi.fn>;
+
+/** The layer keeps overlay/search/payload state across a start(), so every test
+ * hands its own map back to a neutral state rather than inheriting the last. */
+let lastStarted: ReturnType<typeof fakeMap> | null = null;
+
+beforeEach(() => {
+  registerPoll.mockClear();
+  fetchSpy = vi.fn(async () => body([stop()]));
+  vi.stubGlobal('fetch', fetchSpy);
+});
+
+afterEach(() => {
+  if (lastStarted) {
+    fireSearch(null);
+    setBusStopClosuresVisible(lastStarted.map, false);
+    lastStarted = null;
+  }
+  vi.unstubAllGlobals();
+});
+
+/** Start the layer over a map of its own, serving `stops` from the feed. */
+async function startWith(stops: BusStopClosure[]): Promise<ReturnType<typeof fakeMap>> {
+  fetchSpy.mockResolvedValue(body(stops));
+  const harness = fakeMap();
+  lastStarted = harness;
+  await startBusStopClosures(harness.map);
+  return harness;
+}
+
+/** Ids of the features in the most recent paint. */
+function drawnIds(painted: GeoJSON.FeatureCollection[]): string[] {
+  const last = painted[painted.length - 1];
+  return (last?.features ?? []).map((f) => (f.properties as ClosureProps).id);
+}
 
 describe('closureState — only a window covering now may be drawn', () => {
   test('an open-ended closure that has begun is in force', () => {
@@ -233,47 +319,6 @@ describe('closurePopupHtml', () => {
 });
 
 describe('poll gating', () => {
-  /** Enough of a MapLibre map for the layer's own calls, recording setData. */
-  function fakeMap() {
-    const painted: GeoJSON.FeatureCollection[] = [];
-    const layerIds = new Set<string>();
-    const visibility = new Map<string, string>();
-    const map = {
-      addSource: () => {},
-      addLayer: (layer: { id: string }) => layerIds.add(layer.id),
-      getLayer: (id: string) => (layerIds.has(id) ? { id } : undefined),
-      getSource: () => ({ setData: (data: GeoJSON.FeatureCollection) => painted.push(data) }),
-      setLayoutProperty: (id: string, _prop: string, value: string) => visibility.set(id, value),
-      queryRenderedFeatures: () => [],
-      getCanvas: () => ({ style: {} }),
-      on: () => {},
-    };
-    return {
-      map: map as unknown as Parameters<typeof startBusStopClosures>[0],
-      painted,
-      layerIds,
-      visibility,
-    };
-  }
-
-  const body = (stops: BusStopClosure[]) => ({
-    ok: true,
-    json: async () => ({ t: Math.floor(NOW / 1000), stops }),
-    headers: { get: () => null },
-  });
-
-  let fetchSpy: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    registerPoll.mockClear();
-    fetchSpy = vi.fn(async () => body([stop()]));
-    vi.stubGlobal('fetch', fetchSpy);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   test('makes zero requests while the overlay is off', async () => {
     // Arrange / Act — the overlay ships off, so start must not fetch
     const { map, layerIds } = fakeMap();
@@ -378,8 +423,12 @@ describe('poll gating', () => {
     expect(busStopClosuresStats().pollFailures).toBe(before + 1);
     expect(busStopClosuresStats().lastPollError).toContain('style reloaded');
     expect(error).toHaveBeenCalledWith('[bus-stop-closures]', expect.any(Error));
+
+    // Switching off goes through the source too, so it is contained the same
+    // way rather than throwing out of a legend click; the spy stays installed
+    // over the cleanup that proves it.
+    expect(() => setBusStopClosuresVisible(map, false)).not.toThrow();
     error.mockRestore();
-    setBusStopClosuresVisible(map, false);
   });
 
   test('registers the re-filter tick on its own interval', async () => {
@@ -429,5 +478,178 @@ describe('a row that states no type', () => {
     const blank = propsOf(buildClosureFeatures([stop({ ty: '' })], NOW).features[0]);
     expect(closurePopupHtml(blank)).not.toContain('Bus stop closed');
     expect(closurePopupHtml(blank)).toContain('Disruption');
+  });
+});
+
+// ── search-scoped closures ──
+// The overlay toggle and the Filter tab's bus-line search are two independent
+// inputs, and every row of their truth table is pinned here. The two that
+// matter most: an overlay that is ON keeps showing EVERYTHING (a search must
+// never silently hide a stop the rider asked to see), and an overlay that is
+// OFF with no search must still cost ZERO requests.
+describe('search-scoped closures', () => {
+  /** Two poles on lines that look alike to a substring match but are not. */
+  const on46 = stop({ id: '46', name: 'Lauderdale Road', routes: ['46'] });
+  const on146 = stop({ id: '146', name: 'Bromley Common', routes: ['146'], lat: 51.38, lon: 0.02 });
+
+  test('overlay ON with no search draws every closed stop', async () => {
+    // Arrange
+    const { map, painted } = await startWith([on46, on146]);
+
+    // Act
+    setBusStopClosuresVisible(map, true);
+    await vi.waitFor(() => expect(painted.length).toBeGreaterThan(0));
+
+    // Assert
+    expect(drawnIds(painted)).toEqual(['46', '146']);
+  });
+
+  test('overlay ON with a search STILL draws every closed stop', async () => {
+    // Arrange — the overlay means "show me all of it"
+    const { map, painted } = await startWith([on46, on146]);
+    setBusStopClosuresVisible(map, true);
+    await vi.waitFor(() => expect(painted.length).toBeGreaterThan(0));
+
+    // Act
+    fireSearch(new Set(['46']));
+
+    // Assert — the search narrows nothing while the overlay is asking for all
+    expect(drawnIds(painted)).toEqual(['46', '146']);
+  });
+
+  test('overlay OFF with a search draws only the stops a searched line serves', async () => {
+    // Arrange — the overlay ships off and is never touched
+    const { painted, visibility } = await startWith([on46, on146]);
+
+    // Act — the rider types 46
+    fireSearch(new Set(['46']));
+    await vi.waitFor(() => expect(painted.length).toBeGreaterThan(0));
+
+    // Assert — 146 is a different road, not a longer 46
+    expect(drawnIds(painted)).toEqual(['46']);
+    expect(busStopClosuresStats().droppedOffSearch).toBe(1);
+    expect(visibility.get(BUS_STOP_CLOSURES_CORE_LAYER_ID)).toBe('visible');
+    expect(visibility.get(BUS_STOP_CLOSURES_HALO_LAYER_ID)).toBe('visible');
+  });
+
+  test('overlay OFF with no search draws nothing and makes zero requests', async () => {
+    // Arrange / Act — this is the shipped state
+    const { painted } = await startWith([on46, on146]);
+
+    // Assert — not a request, not a paint
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(painted).toHaveLength(0);
+
+    // An EMPTY selection is no selection: searched-lines normalises it to null,
+    // so it must not wake the feed either.
+    fireSearch(new Set());
+    const tick = registerPoll.mock.calls[0]?.[0] as () => void;
+    tick();
+    await Promise.resolve();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  test('a search alone pays for the feed, and the poller keeps it fresh', async () => {
+    // Arrange — the invariant most likely to be broken later: the poll gate is
+    // "EITHER input", not "the overlay".
+    const { painted } = await startWith([on46]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // Act
+    fireSearch(new Set(['46']));
+    await vi.waitFor(() => expect(painted.length).toBeGreaterThan(0));
+
+    // Assert — one fetch on waking, and the registered poller now runs
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith('/api/bus-stop-closures');
+    const tick = registerPoll.mock.calls[0]?.[0] as () => void;
+    tick();
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+  });
+
+  test('re-searching another line re-scopes from the payload in hand, without refetching', async () => {
+    // Arrange
+    const { painted } = await startWith([on46, on146]);
+    fireSearch(new Set(['46']));
+    await vi.waitFor(() => expect(painted.length).toBeGreaterThan(0));
+
+    // Act — the rider types the other one
+    fireSearch(new Set(['146']));
+
+    // Assert — a keystroke costs a re-filter, not a request
+    expect(drawnIds(painted)).toEqual(['146']);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('turning the overlay off while a search is active keeps the searched subset', async () => {
+    // Arrange — overlay on, everything drawn, then a search
+    const { map, painted, visibility } = await startWith([on46, on146]);
+    setBusStopClosuresVisible(map, true);
+    await vi.waitFor(() => expect(painted.length).toBeGreaterThan(0));
+    fireSearch(new Set(['46']));
+    expect(drawnIds(painted)).toEqual(['46', '146']);
+
+    // Act
+    setBusStopClosuresVisible(map, false);
+
+    // Assert — the layer stays on screen for the search, narrowed to it
+    expect(drawnIds(painted)).toEqual(['46']);
+    expect(visibility.get(BUS_STOP_CLOSURES_CORE_LAYER_ID)).toBe('visible');
+  });
+
+  test('clearing the search with the overlay off empties the layer and stops fetching', async () => {
+    // Arrange
+    const { painted, visibility } = await startWith([on46, on146]);
+    fireSearch(new Set(['46']));
+    await vi.waitFor(() => expect(painted.length).toBeGreaterThan(0));
+    const fetches = fetchSpy.mock.calls.length;
+
+    // Act
+    fireSearch(null);
+
+    // Assert — nothing left in the source, nothing left on screen, no requests
+    expect(drawnIds(painted)).toEqual([]);
+    expect(visibility.get(BUS_STOP_CLOSURES_CORE_LAYER_ID)).toBe('none');
+    const tick = registerPoll.mock.calls[0]?.[0] as () => void;
+    tick();
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(fetches);
+  });
+
+  test('a searched stop looks exactly like a toggled one, searched route first', async () => {
+    // Arrange — styling never changes; only the ORDER of the routes line does,
+    // so the reason this pin is on screen reads first.
+    const { painted } = await startWith([stop({ routes: ['9', '24', '46'] })]);
+
+    // Act
+    fireSearch(new Set(['46']));
+    await vi.waitFor(() => expect(painted.length).toBeGreaterThan(0));
+
+    // Assert
+    const props = propsOf(painted[painted.length - 1].features[0]);
+    expect(props.routes).toBe('46, 9, 24');
+    expect(closurePopupHtml(props)).toContain('Routes: 46, 9, 24');
+    expect(closurePopupHtml(props)).toContain('Bus stop closed');
+  });
+});
+
+describe('buildClosureFeatures — searched route ordering', () => {
+  test('moves a searched line to the front and leaves the rest numerically sorted', () => {
+    // Arrange
+    const stops = [stop({ routes: ['9', '24', '176'] })];
+
+    // Act
+    const built = buildClosureFeatures(stops, NOW, new Set(['24']));
+
+    // Assert
+    expect(propsOf(built.features[0]).routes).toBe('24, 9, 176');
+  });
+
+  test('leaves the list alone when nothing on the stop was searched for', () => {
+    // Arrange / Act — the rider is looking at another road entirely
+    const built = buildClosureFeatures([stop({ routes: ['9', '24', '176'] })], NOW, new Set(['46']));
+
+    // Assert
+    expect(propsOf(built.features[0]).routes).toBe('9, 24, 176');
   });
 });
