@@ -244,7 +244,25 @@ function londonLabel(iso: string | undefined, withDate: boolean): string {
   return at.toLocaleString([], { ...timeOnly, weekday: 'short', day: 'numeric', month: 'short' });
 }
 
+/** Category, which decides how a window is WORDED (a RealTime item has no
+ * trustworthy end time, so it reads "Since HH:MM"). It does not decide whether
+ * anything is drawn — see `isInForceNow`. */
 const isPlannedItem = (item: DisruptionItem): boolean => item.c === 'P';
+
+/**
+ * Whether the item is in force at the moment the payload was built, which is
+ * the ONLY thing that decides which source it lands in. The backend sets `n`
+ * from TfL's own `isNow` across the validity periods.
+ *
+ * Category is the wrong test and was tried first: it drew a Friday-morning map
+ * on which the Waterloo & City line was hatched closed because a permanent
+ * `Information` notice ("no service Saturdays and Sundays") is neither `P` nor
+ * `R` and so counted as live. The mirror of that bug is worse — a `PlannedWork`
+ * closure that has actually begun would sit in the planned source, which is
+ * hidden by default, so the map would show nothing on the morning a line is
+ * genuinely shut.
+ */
+const isInForceNow = (item: DisruptionItem): boolean => item.n === 1;
 
 function earliestFrom(item: DisruptionItem): string | undefined {
   return (item.v ?? [])
@@ -382,7 +400,7 @@ function resolveItems(
     // A whole-line closure hatches every hop of the line; no geometry is sent.
     const wholeLine = item.wl === 1 ? [...index.hops.values()].map((hop) => [...hop.coords]) : null;
     if (wholeLine) hopKeys.push(...index.hops.keys());
-    resolved.push({ item, index, sections, wholeLine, hopKeys, planned: isPlannedItem(item) });
+    resolved.push({ item, index, sections, wholeLine, hopKeys, planned: !isInForceNow(item) });
   }
   return { resolved, dropped };
 }
@@ -655,37 +673,6 @@ export function stationDisruptionLines(naptanId: string): StationNoticeLine[] {
   }));
 }
 
-export interface ServiceRow {
-  readonly lineId: string;
-  readonly lineName: string;
-  readonly color: string;
-  readonly text: string;
-  readonly when: string;
-  readonly reason: string;
-  /** The map has already greyed this item's bands; the row must agree. */
-  readonly stale: boolean;
-}
-
-/** Line-scope items only — the ones that deliberately draw nothing, and would
- * otherwise be invisible on a phone. */
-export function serviceStripRows(): ServiceRow[] {
-  if (snapshot.expired) return [];
-  return snapshot.items
-    .filter((item) => item.sc === 'line' && item.wl !== 1)
-    .map((item) => {
-      const lineId = item.l ?? '';
-      return {
-        lineId,
-        lineName: snapshot.names.get(lineId) ?? lineId,
-        color: snapshot.colors.get(lineId) ?? STALE_COLOR,
-        text: item.d ?? SEVERITY_WORDS[item.k ?? 'info'],
-        when: isPlannedItem(item) ? 'PLANNED' : whenLabel(item),
-        reason: item.r ?? '',
-        stale: snapshot.stale,
-      };
-    });
-}
-
 const CLASS_RANK: Record<DisruptionClass, number> = { closed: 3, severe: 2, minor: 1, info: 0 };
 
 export function classColor(k: DisruptionClass): string {
@@ -712,7 +699,7 @@ export function linePip(lineId: string): { color: string; title: string } | null
     // the map has stopped standing behind the payload is the same lie twice.
     color: snapshot.stale
       ? STALE_COLOR
-      : items.every(isPlannedItem)
+      : items.every((item) => !isInForceNow(item))
         ? PLANNED_COLOR
         : classColor(worst.k ?? 'info'),
     title: snapshot.stale ? `${title}${STALE_SUFFIX}` : title,

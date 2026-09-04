@@ -17,8 +17,6 @@ import {
   disruptionsConnectionLost,
   disruptionsExpired,
   onDisruptionsUpdate,
-  serviceStripRows,
-  STALE_SUFFIX,
 } from '../layers/disruptions';
 import { hasLayer } from '../region';
 
@@ -95,9 +93,13 @@ export function addControlPanel(
   if (filterSection) addBusFilter(filterSection, map);
   const linesSection = sectionByKey.get('lines');
   if (linesSection) {
-    // Above the legend: line-scope disruptions draw nothing on the map by
-    // design, so this strip is their only path to a phone screen.
-    if (hasLayer('disruptions')) addServiceStrip(linesSection);
+    // Above the legend: only when the feed itself is in trouble. The per-line
+    // rows this strip used to carry were removed at the owner's request on
+    // 2026-09-04 — four truncated, unclickable lines pushed the overlay
+    // toggles off the bottom of the panel, and the coloured pip on each line
+    // row already says which lines are affected. The outage row stays,
+    // because without it a dead backend and an all-clear look identical.
+    if (hasLayer('disruptions')) addFeedStatusRow(linesSection);
     addLegend(linesSection, map, lines, overlays);
   }
   const aboutSection = sectionByKey.get('about');
@@ -120,11 +122,14 @@ export function addControlPanel(
 }
 
 /**
- * Compact Service strip: one row per item TfL localised to no place at all.
- * Every string is written with textContent and every attribute set as a DOM
- * property — the escape helpers here do not escape apostrophes.
+ * One row, shown only while the disruption feed is in trouble. An outage and a
+ * genuine all-clear must never read the same, so this survives even though the
+ * per-line rows it used to sit above were removed.
+ *
+ * Every string is written with textContent — the escape helpers here do not
+ * escape apostrophes.
  */
-function addServiceStrip(container: HTMLElement): void {
+function addFeedStatusRow(container: HTMLElement): void {
   const strip = document.createElement('div');
   strip.className = 'svc-strip';
   strip.hidden = true;
@@ -132,36 +137,17 @@ function addServiceStrip(container: HTMLElement): void {
 
   function paint(): void {
     strip.replaceChildren();
-    strip.hidden = false;
-    if (disruptionsExpired()) {
-      const row = document.createElement('div');
-      row.className = 'svc-row svc-dim';
-      // An outage and a genuine all-clear must never read the same.
-      row.textContent = disruptionsConnectionLost()
-        ? 'Disruption data unavailable'
-        : 'No current disruption data';
-      strip.append(row);
+    if (!disruptionsExpired()) {
+      strip.hidden = true;
       return;
     }
-    const rows = serviceStripRows();
-    strip.hidden = rows.length === 0;
-    for (const item of rows) {
-      const row = document.createElement('div');
-      row.className = item.stale ? 'svc-row svc-dim' : 'svc-row';
-      row.title = item.reason;
-      const swatch = document.createElement('span');
-      swatch.className = 'legend-swatch';
-      swatch.style.background = item.color;
-      const label = document.createElement('span');
-      label.className = 'svc-label';
-      label.textContent = `${item.lineName}: ${item.text}`;
-      const when = document.createElement('span');
-      when.className = 'svc-when';
-      // The map has already greyed this item's bands; say so here too.
-      when.textContent = item.stale ? `${item.when}${STALE_SUFFIX}` : item.when;
-      row.append(swatch, label, when);
-      strip.append(row);
-    }
+    strip.hidden = false;
+    const row = document.createElement('div');
+    row.className = 'svc-row svc-dim';
+    row.textContent = disruptionsConnectionLost()
+      ? 'Disruption data unavailable'
+      : 'No current disruption data';
+    strip.append(row);
   }
 
   // The layer publishes its first snapshot before the panel mounts, so paint

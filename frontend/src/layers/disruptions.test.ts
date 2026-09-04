@@ -13,7 +13,6 @@ const {
   payloadAgeMs,
   sectionGeometry,
   serverAgeMs,
-  serviceStripRows,
   stationDisruptionLines,
   toFeatures,
 } = await import('./disruptions');
@@ -150,7 +149,9 @@ const CLOSURE: DisruptionItem = {
   d: 'Part Closure',
   k: 'closed',
   c: 'R',
-  n: 0,
+  // In force now. `n` is what decides live vs planned, so a RealTime fixture
+  // with n: 0 would be a contradiction — an incident nobody is inside.
+  n: 1,
   v: [{ f: '2026-09-05T11:09:00Z' }],
   sc: 'section',
   src: 's',
@@ -300,6 +301,7 @@ describe('toFeatures', () => {
     const planned: DisruptionItem = {
       ...CLOSURE,
       c: 'P',
+      n: 0,
       v: [{ f: '2026-09-05T02:30:00Z', t: '2026-09-07T00:29:00Z' }],
       sec: [{ st: [ERC, PAC], k: 'closed', dir: 'b' }],
     };
@@ -314,11 +316,57 @@ describe('toFeatures', () => {
     expect(built.plannedStations.length).toBeGreaterThan(0);
   });
 
+  test('an Information notice that is not in force yet never joins the live source', () => {
+    // Arrange — the real Waterloo & City timetable notice: category I, so
+    // neither RealTime nor PlannedWork, and no window covering now. Judged by
+    // category it counted as live and hatched the whole line closed on a
+    // Friday morning while the line was running.
+    const timetable: DisruptionItem = {
+      ...CLOSURE,
+      l: 'district',
+      c: 'I',
+      n: 0,
+      s: 4,
+      d: 'Planned Closure',
+      v: [{ f: '2026-09-05T03:15:00Z', t: '2026-09-05T22:59:00Z' }],
+    };
+
+    // Act
+    const built = toFeatures(payloadOf([timetable]), context());
+
+    // Assert
+    expect(built.live).toHaveLength(0);
+    expect(built.liveStations).toHaveLength(0);
+    expect(built.planned).toHaveLength(1);
+  });
+
+  test('a planned closure that has begun is drawn live, not hidden in the planned source', () => {
+    // Arrange — the mirror of the bug above, and the worse half: on the
+    // morning a weekend closure actually starts, category still says P. The
+    // planned source is hidden by default, so the map would show nothing on
+    // the one day the line is genuinely shut.
+    const inForce: DisruptionItem = {
+      ...CLOSURE,
+      c: 'P',
+      n: 1,
+      v: [{ f: '2026-09-05T02:30:00Z', t: '2026-09-07T00:29:00Z' }],
+    };
+
+    // Act
+    const built = toFeatures(payloadOf([inForce]), context());
+
+    // Assert
+    expect(built.live).toHaveLength(1);
+    expect(built.planned).toHaveLength(0);
+    expect(built.live[0]?.properties?.planned).toBe(false);
+  });
+
   test('a planned work whose windows have all ended draws nothing', () => {
     // Arrange — the backend window opens yesterday, so finished works arrive.
     const over: DisruptionItem = {
       ...CLOSURE,
       c: 'P',
+      n: 0,
       v: [{ f: '2026-08-29T02:30:00Z', t: '2026-08-31T00:29:00Z' }],
     };
 
@@ -489,16 +537,7 @@ describe('a stale snapshot on the Lines tab, the pips and the station popup', ()
     publish();
 
     // Assert
-    expect(serviceStripRows()[0]?.stale).toBe(false);
     expect(linePip('district')?.title).toBe('Severe Delays');
-  });
-
-  test('a stale snapshot marks the Service strip row, so the strip cannot outrank the map', () => {
-    // Arrange / Act
-    publish({ stale: true });
-
-    // Assert
-    expect(serviceStripRows()[0]?.stale).toBe(true);
   });
 
   test('a stale snapshot greys the legend pip and says so in its title', () => {

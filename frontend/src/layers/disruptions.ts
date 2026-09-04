@@ -4,8 +4,8 @@
 // `sec[].st` paths and `pts[]` the backend resolved from `affectedRoutes` /
 // `affectedStops`. There is no sentence parsing here and no geometry guess:
 // an item the backend could not localise (`sc: 'line'`) draws NOTHING — a mark
-// at a place would imply a place — and reaches the rider as text in the Lines
-// tab instead (control-panel.ts) plus a pip on its line row (legend.ts).
+// at a place would imply a place — and reaches the rider as a coloured pip on
+// its line row in the Lines tab (legend.ts), whose title carries the wording.
 //
 // The contract, the hop index, feature building and the popup are in
 // disruptions-model.ts (no maplibre import, so they stay unit-testable); this
@@ -58,7 +58,6 @@ export type {
   DisruptionsPayload,
   FeatureContext,
   PayloadArrival,
-  ServiceRow,
   Snapshot,
   StationNoticeLine,
 } from './disruptions-model';
@@ -75,7 +74,6 @@ export {
   payloadAgeMs,
   sectionGeometry,
   serverAgeMs,
-  serviceStripRows,
   STALE_SUFFIX,
   stationDisruptionLines,
   toFeatures,
@@ -167,17 +165,24 @@ const WASH_WIDTH_RAMP: ExpressionSpecification = [
   16,
   22,
 ];
-/** Shape, not colour, says which class: closed and severe read as a solid
- * wash, minor as a dotted one. A zero-length gap is how the style spec writes
- * "solid" once the dash array has to be data-driven. */
+/**
+ * Shape, not colour, says which class: closed and severe read as a solid wash,
+ * minor as a dashed one. A zero-length gap is how the style spec writes
+ * "solid" once the dash array has to be data-driven.
+ *
+ * Dash units are multiples of the line width, so the first draft's [0.6, 1.4]
+ * — dash shorter than gap, at 0.45 opacity — was mostly gap and read as
+ * barely-there on the dark basemap. The dash is now longer than its gap: still
+ * unmistakably broken next to a solid severe wash, but actually visible.
+ */
 const WASH_DASH: ExpressionSpecification = [
   'match',
   ['get', 'k'],
   'minor',
-  ['literal', [0.6, 1.4]],
+  ['literal', [2, 1.2]],
   ['literal', [1, 0]],
 ];
-const WASH_OPACITY: ExpressionSpecification = ['match', ['get', 'k'], 'minor', 0.45, 0.55];
+const WASH_OPACITY: ExpressionSpecification = ['match', ['get', 'k'], 'minor', 0.6, 0.55];
 /** The hatch layer sees every band; only closed ones are painted. A filter
  * would be REPLACED by the Lines-tab line filter, so this is opacity-driven. */
 const HATCH_OPACITY: ExpressionSpecification = ['match', ['get', 'k'], 'closed', 0.9, 0];
