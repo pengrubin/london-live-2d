@@ -1,5 +1,8 @@
 # Scratch space (review agents and one-off experiments write here).
 tmp/
+# Heap snapshots from --heapsnapshot-signal: hundreds of MB, and one contains
+# every string the process held, including upstream bodies.
+*.heapsnapshot
 node_modules/
 dist/
 .env

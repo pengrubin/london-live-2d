@@ -41,7 +41,32 @@ export interface BusWire {
   readonly t: number;
 }
 
-/** First `<tag>…</tag>` text inside `chunk`, or '' — indexOf scan, no regex. */
+/**
+ * A string that shares no storage with the one it came from.
+ *
+ * V8's `slice`/`split` do not copy: they return a view that keeps a pointer to
+ * the WHOLE parent string. Every field below is cut out of a ~7 MB SIRI
+ * document, so one retained route number or destination name pins the entire
+ * poll's XML — and those fields are retained, in the vehicle table, the wire
+ * buffer and the diversion event store.
+ *
+ * That is what killed the London service on 2026-09-04: a heap snapshot of the
+ * reproduction showed 66 SIRI bodies, 480 MB of a 673 MB heap, held by nothing
+ * larger than a bus destination. The heap grew ~690 MB/h until it hit V8's
+ * 2 GB ceiling, and the final Mark-Compact freed 0.6 MB because none of it was
+ * garbage.
+ *
+ * Buffer round-trip rather than a `slice` trick: it decodes bytes into a fresh
+ * flat string with no parent, which is the property being bought, and it says
+ * so plainly. Cost is ~5 fields x ~6,700 vehicles per poll of very short
+ * strings, against a parse that already takes 60-120 ms.
+ */
+function copyOut(text: string): string {
+  return text.length === 0 ? '' : Buffer.from(text, 'utf8').toString('utf8');
+}
+
+/** First `<tag>…</tag>` text inside `chunk`, or '' — indexOf scan, no regex.
+ * The result is copied out of `chunk`; see `copyOut`. */
 function tagText(chunk: string, tag: string): string {
   const open = `<${tag}>`;
   const start = chunk.indexOf(open);
@@ -49,7 +74,7 @@ function tagText(chunk: string, tag: string): string {
   const from = start + open.length;
   const end = chunk.indexOf(`</${tag}>`, from);
   if (end === -1) return '';
-  return chunk.slice(from, end);
+  return copyOut(chunk.slice(from, end));
 }
 
 /** SIRI names use underscores for spaces ("Bus_Station"); undo for display. */
