@@ -53,6 +53,7 @@ const LONDON_FALLBACK: Capabilities = {
     buses: true,
     busCoverage: true,
     busDiversions: true,
+    busStopClosures: true,
     disruptions: true,
     nationalRail: true,
     bikeStations: true,

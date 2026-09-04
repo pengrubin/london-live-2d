@@ -6,6 +6,7 @@
 import { Popup, type LngLat, type Map as MaplibreMap, type MapLayerMouseEvent } from 'maplibre-gl';
 import { enablePopupDragToPan } from './popup-drag';
 import { stationDisruptionLines } from '../layers/disruptions';
+import { anyFeatureAt } from '../util/layer-order';
 
 const STATIONS_LAYER_ID = 'stations-circle';
 const MAX_DEPARTURES = 8;
@@ -293,7 +294,7 @@ export function setupStationPopups(
 
   map.on('click', STATIONS_LAYER_ID, (e: MapLayerMouseEvent) => {
     // A vehicle sitting on the station owns the click — its popup handles it.
-    if (map.queryRenderedFeatures(e.point, { layers: [VEHICLES_LAYER_ID] }).length > 0) return;
+    if (anyFeatureAt(map, e.point, [VEHICLES_LAYER_ID])) return;
     const feature = e.features?.[0];
     if (!feature) return;
     onOpen?.();

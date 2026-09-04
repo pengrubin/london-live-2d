@@ -20,7 +20,7 @@ import {
 } from 'maplibre-gl';
 import type { LineBranches } from '../realtime/types';
 import { fetchJson } from '../services/static-data';
-import { below } from '../util/layer-order';
+import { anyFeatureAt, below, DOT_LAYER_IDS } from '../util/layer-order';
 import { registerPoll } from '../util/lifecycle';
 import { isLayerShown } from '../util/render-gate';
 import { LINE_OFFSET_RAMP, LINE_WIDTH_RAMP } from './transit-lines';
@@ -324,22 +324,13 @@ function addRingLayer(map: MaplibreMap, layerId: string, sourceId: string, plann
 
 // ── interaction ──
 
-/** MapLibre fires every layer-scoped handler whose layer has a feature under
- * the point, and a 6-22 px band runs through every station of a section — so
- * the band yields whenever a dot owns the tap. */
-const DOT_LAYER_IDS = ['stations-circle', 'trains-dots', 'nr-trains-dots', 'buses-dots'];
-
-function dotUnderTap(map: MaplibreMap, point: MapLayerMouseEvent['point']): boolean {
-  const layers = DOT_LAYER_IDS.filter((id) => map.getLayer(id));
-  if (layers.length === 0) return false;
-  return map.queryRenderedFeatures(point, { layers }).length > 0;
-}
-
 function wireInteractions(map: MaplibreMap, layerIds: readonly string[]): void {
   const detail = new Popup({ closeButton: true, closeOnClick: true, offset: 12, maxWidth: '340px' });
   for (const layerId of layerIds) {
     map.on('click', layerId, (e: MapLayerMouseEvent) => {
-      if (dotUnderTap(map, e.point)) return;
+      // A 6-22 px band runs through every station of a section, so it yields
+      // whenever a station dot or a vehicle owns the tap.
+      if (anyFeatureAt(map, e.point, DOT_LAYER_IDS)) return;
       const props = e.features?.[0]?.properties as BandProps | undefined;
       if (!props) return;
       detail.setLngLat(e.lngLat).setHTML(disruptionPopupHtml(props)).addTo(map);

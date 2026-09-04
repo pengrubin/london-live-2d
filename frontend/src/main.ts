@@ -35,6 +35,11 @@ import { startBusCoverage, setBusCoverageVisible, BUS_COVERAGE_LAYER_ID } from '
 import { startBusRouteShapes } from './layers/bus-route-shape';
 import { startDiversions, setDiversionsVisible, DIVERSIONS_LAYER_IDS } from './layers/diversions';
 import {
+  startBusStopClosures,
+  setBusStopClosuresVisible,
+  BUS_STOP_CLOSURES_LAYER_IDS,
+} from './layers/bus-stop-closures';
+import {
   startDisruptions,
   setDisruptionsVisible,
   setPlannedWorksVisible,
@@ -538,6 +543,22 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
         layerIds: DIVERSIONS_LAYER_IDS,
         startOff: true,
         onToggle: (visible: boolean) => setDiversionsVisible(target, visible),
+      },
+    },
+    {
+      // Last in, so among the overlays that anchor below the station dots the
+      // closure pins take the top — except the rail bands, which the explicit
+      // raiseDisruptions call below deliberately lifts above everything in that
+      // group. Default OFF, and the custom handler gates the 300 s poll on the
+      // toggle so a hidden overlay costs zero fetches.
+      name: 'busStopClosures',
+      row: 12,
+      start: () => startBusStopClosures(target),
+      overlay: {
+        label: 'Bus stop closures',
+        layerIds: BUS_STOP_CLOSURES_LAYER_IDS,
+        startOff: true,
+        onToggle: (visible: boolean) => setBusStopClosuresVisible(target, visible),
       },
     },
   ];
