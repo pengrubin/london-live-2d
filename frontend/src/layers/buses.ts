@@ -287,19 +287,39 @@ let activeTrackers: ReadonlyMap<string, BusTracker> | null = null;
 /** Forces an out-of-band /api/buses fetch — set by startBuses. */
 let refreshBuses: (() => void) | null = null;
 
-/**
- * The route-shape layer's update function, registered by
- * layers/bus-route-shape.ts at start. A hook rather than an import because that
- * module already imports the geometry accessors below — calling it directly
- * would close an import cycle. Same shape as `refreshBuses`.
- */
-let routeShapeHook: ((map: MaplibreMap, lines: ReadonlySet<string> | null) => void) | null = null;
+/** What a line-filter listener is handed: the map, and the new selection
+ * (null when the filter was cleared). */
+type BusRouteShapeHook = (map: MaplibreMap, lines: ReadonlySet<string> | null) => void;
 
-/** Registers the route-shape update called on every real line-filter change. */
-export function setBusRouteShapeHook(
-  hook: (map: MaplibreMap, lines: ReadonlySet<string> | null) => void,
-): void {
-  routeShapeHook = hook;
+/**
+ * Everything that redraws when the bus line filter really changes — the white
+ * search polyline (layers/bus-route-shape.ts) today, the stop-closure highlight
+ * scoped to the same selection next. Hooks rather than imports because those
+ * modules already import the geometry accessors below — calling them directly
+ * would close an import cycle. Same shape as `refreshBuses`.
+ *
+ * A LIST, not a single slot: while this was one nullable variable a second
+ * registrant overwrote the first, and the polyline stopped drawing with no
+ * error, no type complaint and nothing failing in a test.
+ */
+let routeShapeHooks: readonly BusRouteShapeHook[] = [];
+
+/** Registers a route-shape update called on every real line-filter change.
+ * Appends — registering never displaces an already-registered hook. */
+export function setBusRouteShapeHook(hook: BusRouteShapeHook): void {
+  routeShapeHooks = [...routeShapeHooks, hook];
+}
+
+/** Calls every registered hook. One that throws must not silence the rest, so
+ * each is contained and the failure is logged with its registration index. */
+function notifyRouteShapeHooks(map: MaplibreMap, lines: ReadonlySet<string> | null): void {
+  routeShapeHooks.forEach((hook, index) => {
+    try {
+      hook(map, lines);
+    } catch (error) {
+      console.warn(`[buses] route-shape hook ${index} failed`, error);
+    }
+  });
 }
 
 /**
@@ -392,7 +412,7 @@ export function setBusLineFilter(map: MaplibreMap, lines: ReadonlySet<string> | 
   // Only on a REAL change: resolving shapes walks the whole fleet and can
   // fetch, while apply() upstream re-pushes the entire selection on every chip
   // add/remove, and the search input's `change` also fires on blur.
-  if (changed) routeShapeHook?.(map, lines);
+  if (changed) notifyRouteShapeHooks(map, lines);
 }
 
 /** Reflect the Buses overlay toggle (Lines tab). Combined with any active filter. */
