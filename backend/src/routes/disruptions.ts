@@ -134,7 +134,11 @@ export function registerDisruptionsRoute(
     // An unparseable body must not become an empty "all clear" map: throwing
     // keeps the last good payload on screen until it ages out.
     if (snapshot === null) throw new Error('TfL line status body was not a line array');
-    const { items, stats } = resolveSnapshot(snapshot, ctx.resolve);
+    // The payload's own instant, not the wall clock a listener reads it at:
+    // whether a window is in force must be decided against the moment this
+    // body describes, so a cached payload cannot drift into claiming
+    // otherwise.
+    const { items, stats } = resolveSnapshot(snapshot, ctx.resolve, fetched.t * MS_PER_SECOND);
     counters = {
       disruptionsItems: stats.items,
       disruptionsSections: stats.sections,

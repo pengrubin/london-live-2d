@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { buildHopIndex, type HopIndex } from './line-graph';
 import {
   canonicalSentence,
+  isInForce,
   renderClass,
   resolveSnapshot,
   type DisruptionItem,
@@ -82,11 +83,80 @@ const item = (items: readonly DisruptionItem[], lineId: string, severity: number
   return found;
 };
 
+/**
+ * The fixture's own instant. Passing it explicitly keeps every expectation
+ * deterministic: `n` is now decided by comparing a validity window to a
+ * moment, so leaving the clock to `Date.now()` would make these assertions
+ * quietly change meaning with the calendar — which is exactly what happened
+ * the first time this ran on a later day.
+ */
+const FIXTURE_NOW_MS = FIXTURE.t * 1_000;
+
+describe('isInForce', () => {
+  const T = (iso: string): number => Date.parse(iso);
+  const SATURDAY_MORNING = T('2026-09-05T09:23:00Z');
+
+  it('honours a covering window even when TfL says isNow is false', () => {
+    // Arrange — the real Waterloo & City weekend notice as it arrived on the
+    // Saturday morning it covers. TfL sent isNow: false and the map badged an
+    // in-force closure as upcoming; the window is the data we already hold.
+    const periods = [{ f: '2026-09-05T03:15:00Z', t: '2026-09-05T22:59:00Z', n: false }];
+
+    // Act / Assert
+    expect(isInForce(periods, SATURDAY_MORNING)).toBe(true);
+  });
+
+  it('is not in force before the window opens or after it closes', () => {
+    expect(isInForce([{ f: '2026-09-06T03:15:00Z', t: '2026-09-06T22:59:00Z' }], SATURDAY_MORNING)).toBe(false);
+    expect(isInForce([{ f: '2026-09-04T03:15:00Z', t: '2026-09-04T22:59:00Z' }], SATURDAY_MORNING)).toBe(false);
+  });
+
+  it('takes any one covering window out of several', () => {
+    const periods = [
+      { f: '2026-09-04T03:15:00Z', t: '2026-09-04T22:59:00Z' },
+      { f: '2026-09-05T03:15:00Z', t: '2026-09-05T22:59:00Z' },
+      { f: '2026-09-06T03:15:00Z', t: '2026-09-06T22:59:00Z' },
+    ];
+
+    expect(isInForce(periods, SATURDAY_MORNING)).toBe(true);
+  });
+
+  it('treats a started period with no end as in force, which is a RealTime incident', () => {
+    // The recorder drops a RealTime toDate because TfL rolls it forward on
+    // every poll, and TfL publishes such a status only while it is happening.
+    expect(isInForce([{ f: '2026-09-05T08:00:00Z' }], SATURDAY_MORNING)).toBe(true);
+  });
+
+  it('includes both boundaries', () => {
+    const periods = [{ f: '2026-09-05T03:15:00Z', t: '2026-09-05T22:59:00Z' }];
+
+    expect(isInForce(periods, T('2026-09-05T03:15:00Z'))).toBe(true);
+    expect(isInForce(periods, T('2026-09-05T22:59:00Z'))).toBe(true);
+    expect(isInForce(periods, T('2026-09-05T03:14:59Z'))).toBe(false);
+    expect(isInForce(periods, T('2026-09-05T22:59:01Z'))).toBe(false);
+  });
+
+  it('defers to TfL isNow only when no window can be read at all', () => {
+    expect(isInForce([{ f: 'not-a-date', n: true }], SATURDAY_MORNING)).toBe(true);
+    expect(isInForce([{ f: 'not-a-date', n: false }], SATURDAY_MORNING)).toBe(false);
+  });
+
+  it('treats an unreadable end date as untestable, never as open-ended', () => {
+    // Reading it as "runs forever" would keep a finished closure on the map.
+    expect(isInForce([{ f: '2026-09-01T00:00:00Z', t: 'rubbish' }], SATURDAY_MORNING)).toBe(false);
+  });
+
+  it('is not in force with no periods at all', () => {
+    expect(isInForce([], SATURDAY_MORNING)).toBe(false);
+    expect(isInForce(undefined, SATURDAY_MORNING)).toBe(false);
+  });
+});
+
 describe('resolveSnapshot on the real 2026-09-03 snapshot', () => {
   it('resolves one item per (line, sentence) and nothing for Good Service', () => {
     // Arrange — 20 lines, 12 of whose statuses are not Good Service / No Issues.
     // Act
-    const { items, stats } = resolveSnapshot(FIXTURE.lines, realCtx());
+    const { items, stats } = resolveSnapshot(FIXTURE.lines, realCtx(), FIXTURE_NOW_MS);
 
     // Assert
     expect(items).toHaveLength(EXPECTED_ITEMS);
@@ -110,7 +180,7 @@ describe('resolveSnapshot on the real 2026-09-03 snapshot', () => {
 
   it('draws the District closure as TfL published it: Earl’s Court to Wimbledon, 14 stops', () => {
     // Arrange / Act
-    const { items } = resolveSnapshot(FIXTURE.lines, realCtx());
+    const { items } = resolveSnapshot(FIXTURE.lines, realCtx(), FIXTURE_NOW_MS);
     const district = item(items, 'district', 5);
 
     // Assert — the 9-stop slice is TfL's own ordered id list, hop-validated.
@@ -132,7 +202,7 @@ describe('resolveSnapshot on the real 2026-09-03 snapshot', () => {
     // `wl` behind the CLOSED class, and §8.1 pins minor delays at `sc: line`.
     // Hatching the Central line for train cancellations would over-claim.
     // Act
-    const { items } = resolveSnapshot(FIXTURE.lines, realCtx());
+    const { items } = resolveSnapshot(FIXTURE.lines, realCtx(), FIXTURE_NOW_MS);
     const central = item(items, 'central', 9);
 
     // Assert
@@ -147,7 +217,7 @@ describe('resolveSnapshot on the real 2026-09-03 snapshot', () => {
     // Two affectedRoutes, both entire, AND severity 4 (Planned Closure) —
     // the two conjuncts §4 requires. Central has the same all-entire route
     // list but severity 9, which is exactly why the class gate exists.
-    const { items } = resolveSnapshot(FIXTURE.lines, realCtx());
+    const { items } = resolveSnapshot(FIXTURE.lines, realCtx(), FIXTURE_NOW_MS);
     const wc = item(items, 'waterloo-city', 4);
 
     expect(wc).toMatchObject({ wl: 1, k: 'closed', src: 's', c: 'I' });
@@ -167,7 +237,7 @@ describe('resolveSnapshot on the real 2026-09-03 snapshot', () => {
     ];
 
     // Act
-    const { items } = resolveSnapshot(snapshot, realCtx());
+    const { items } = resolveSnapshot(snapshot, realCtx(), FIXTURE_NOW_MS);
 
     // Assert
     expect(items[0]).toMatchObject({ wl: 1, k: 'closed', sc: 'section' });
@@ -186,7 +256,7 @@ describe('resolveSnapshot on the real 2026-09-03 snapshot', () => {
     ];
 
     // Act
-    const { items } = resolveSnapshot(snapshot, realCtx());
+    const { items } = resolveSnapshot(snapshot, realCtx(), FIXTURE_NOW_MS);
 
     // Assert — rings at the stops TfL named, and no whole-line claim.
     expect(items[0]).toMatchObject({ wl: 0, k: 'minor', sc: 'station' });
@@ -195,7 +265,7 @@ describe('resolveSnapshot on the real 2026-09-03 snapshot', () => {
 
   it('validates every structured id and hop TfL sent — nothing is dropped', () => {
     // The whole tier rests on this: TfL's ids agree with the baked branches.
-    const { stats } = resolveSnapshot(FIXTURE.lines, realCtx());
+    const { stats } = resolveSnapshot(FIXTURE.lines, realCtx(), FIXTURE_NOW_MS);
 
     expect(stats.sectionsDropped).toBe(0);
     expect(stats.stopsDropped).toBe(0);
@@ -207,7 +277,7 @@ describe('resolveSnapshot on the real 2026-09-03 snapshot', () => {
   });
 
   it('caps the sentence and the description, and never leaks an upstream field', () => {
-    const { items } = resolveSnapshot(FIXTURE.lines, realCtx());
+    const { items } = resolveSnapshot(FIXTURE.lines, realCtx(), FIXTURE_NOW_MS);
 
     for (const i of items) {
       expect(i.r.length).toBeLessThanOrEqual(600);
