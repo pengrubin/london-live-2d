@@ -272,19 +272,30 @@ function earliestFrom(item: DisruptionItem): string | undefined {
 }
 
 /**
- * Window words. A RealTime item shows only "since HH:MM": TfL's `toDate` on a
- * RealTime period is a rolling now+2-3 h stamp, so it is never an end time and
- * the backend does not even send it.
+ * Window words, keyed off the SAME test as the badge and the source routing.
+ *
+ * Keying this off the category instead put two contradicting lines in one
+ * popup on 2026-09-05: a Waterloo & City weekend closure read "Since 04:15 AM"
+ * — the branch for an item that is happening — directly under a PLANNED badge,
+ * because the label asked "is the category PlannedWork" while everything else
+ * asked "is a window covering now". One question, asked once.
+ *
+ * An item in force with no end time is a RealTime one, and TfL's `toDate` there
+ * is a rolling now-plus-two-hours stamp the backend does not even send, so
+ * "since" is all that can honestly be said.
  */
 function whenLabel(item: DisruptionItem): string {
-  if (!isPlannedItem(item)) {
+  if (isInForceNow(item)) {
+    const period = (item.v ?? []).find((entry) => entry.f);
+    const to = londonLabel(period?.t, false);
+    if (to) return `Until ${to}`;
     const from = londonLabel(earliestFrom(item), false);
     return from ? `Since ${from}` : '';
   }
   const period = (item.v ?? []).find((entry) => entry.f);
   const from = londonLabel(period?.f, true);
   const to = londonLabel(period?.t, true);
-  if (!from) return 'Planned work';
+  if (!from) return isPlannedItem(item) ? 'Planned work' : '';
   return to ? `${from} – ${to}` : from;
 }
 

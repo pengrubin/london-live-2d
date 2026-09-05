@@ -83,6 +83,42 @@ export interface ResolveContext {
   readonly log: (msg: string) => void;
 }
 
+/**
+ * Whether any of these windows covers `nowMs`.
+ *
+ * TfL's own `isNow` is the FALLBACK here, not the source of truth. On Saturday
+ * 2026-09-05 the Waterloo & City "no service at weekends" notice arrived with a
+ * window of 03:15Z to 22:59Z — plainly covering the morning it was read — and
+ * an `isNow` of false, so the map badged a closure that was in force as
+ * upcoming. The window is data we already hold and can check against the
+ * moment we are actually serving; the flag is TfL's opinion about some other
+ * moment, and a recurring timetable notice is exactly where it goes stale.
+ *
+ * A period with a start and no end is a RealTime one: the recorder drops those
+ * end times because TfL rolls them forward on every poll. TfL publishes such a
+ * status only while it is happening, so having started is the whole test.
+ */
+export function isInForce(
+  periods: readonly { f?: string; t?: string; n?: boolean }[] | undefined,
+  nowMs: number,
+): boolean {
+  if (periods === undefined || periods.length === 0) return false;
+  let sawUsableWindow = false;
+  for (const period of periods) {
+    const from = period.f === undefined ? Number.NaN : Date.parse(period.f);
+    if (!Number.isFinite(from)) continue;
+    sawUsableWindow = true;
+    if (from > nowMs) continue;
+    if (period.t === undefined) return true;
+    const to = Date.parse(period.t);
+    // An unreadable end date makes the window untestable, not open-ended.
+    if (!Number.isFinite(to)) continue;
+    if (nowMs <= to) return true;
+  }
+  // Only when no window could be read do we defer to what TfL asserted.
+  return sawUsableWindow ? false : periods.some((period) => period.n === true);
+}
+
 /** Severities that are not a disruption at all (Good Service, No Issues). */
 const GOOD_SEVERITIES: ReadonlySet<number> = new Set([10, 18]);
 /** Severities that are line-wide by definition: Closed, Suspended, Service Closed. */
@@ -408,7 +444,7 @@ function itemReason(worst: StatusResolution, parts: readonly StatusResolution[])
   return capText(reason, MAX_REASON_CHARS);
 }
 
-function buildItem(group: Group, ctx: ResolveContext): DisruptionItem {
+function buildItem(group: Group, ctx: ResolveContext, nowMs: number): DisruptionItem {
   const worst = worstEntry(group.parts);
   const sec = dedupeSections(group.parts.flatMap((part) => part.sections));
   const pts = mergePoints(group.parts);
@@ -428,7 +464,7 @@ function buildItem(group: Group, ctx: ResolveContext): DisruptionItem {
     d: capText(worst.entry.d, MAX_DESCRIPTION_CHARS),
     k: worst.k,
     ...(category === undefined || category === '' ? {} : { c: category.slice(0, 1).toUpperCase() }),
-    n: group.parts.some((part) => (part.entry.v ?? []).some((period) => period.n === true)) ? 1 : 0,
+    n: isInForce(v, nowMs) ? 1 : 0,
     ...(v.length === 0 ? {} : { v }),
     sc: scopeOf(sec, pts, wl),
     src: localised ? 's' : 'f',
@@ -447,6 +483,7 @@ function buildItem(group: Group, ctx: ResolveContext): DisruptionItem {
 export function resolveSnapshot(
   lines: readonly LineSnapshot[],
   ctx: ResolveContext,
+  nowMs: number = Date.now(),
 ): { items: DisruptionItem[]; stats: ResolveStats } {
   const groups = new Map<string, Group>();
   let statuses = 0;
@@ -470,7 +507,7 @@ export function resolveSnapshot(
       );
     }
   }
-  const items = [...groups.values()].map((group) => buildItem(group, ctx));
+  const items = [...groups.values()].map((group) => buildItem(group, ctx, nowMs));
   return {
     items,
     stats: {
