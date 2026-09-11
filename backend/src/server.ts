@@ -1,6 +1,6 @@
 import { buildApp } from './app';
 import { loadConfig } from './config';
-import { installCrashGuard } from './crash-guard';
+import { installCrashGuard, installUpstreamTracker } from './crash-guard';
 import {
   ARRIVALS_CACHE_TTL_MS,
   TFL_BUDGET_LIMIT,
@@ -15,6 +15,9 @@ async function main(): Promise<void> {
   // any moment, and that arrives as an uncaughtException no await can catch.
   // See crash-guard.ts — this is what took the service down on 2026-09-11.
   installCrashGuard((payload, msg) => app.log.error(payload, msg));
+  // And know which upstream it was: the survival log lists what was in
+  // flight and what had just finished, with each response's Connection header.
+  installUpstreamTracker();
 
   await app.listen({ port: config.port, host: '0.0.0.0' });
 

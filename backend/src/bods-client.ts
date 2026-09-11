@@ -3,6 +3,7 @@
 // XML, ~8-9k vehicles), parses it with a fast string scan (no DOM), and keeps an
 // in-memory vehicle table the /api/buses route serves as a compact array.
 
+import { discardBody } from './crash-guard';
 import { bboxToString, type Bbox } from './region';
 
 const BODS_BASE_URL = 'https://data.bus-data.dft.gov.uk/api/v1/datafeed/';
@@ -178,6 +179,7 @@ export class BodsClient {
       const response = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!response.ok) {
         this.log(`BODS poll failed: HTTP ${response.status}`);
+        await discardBody(response);
         return;
       }
       const xml = await response.text();

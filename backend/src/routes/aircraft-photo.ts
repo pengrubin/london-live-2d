@@ -8,6 +8,7 @@
 // attribution; the frontend renders the attribution line. Results (including
 // "no photo") are cached for 24 h behind a small dedicated budget.
 
+import { discardBody } from '../crash-guard';
 import type { FastifyInstance } from 'fastify';
 import { TtlCache } from '../cache';
 import { RateBudget } from '../rate-budget';
@@ -42,7 +43,10 @@ async function fetchFromPlanespotters(pathSegment: string): Promise<PhotoEntry> 
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     headers: { accept: 'application/json', 'user-agent': API_USER_AGENT },
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    await discardBody(res);
+    return null;
+  }
   const body = (await res.json()) as PlanespottersResponse;
   const photo = body.photos?.[0];
   const src = photo?.thumbnail_large?.src;

@@ -10,6 +10,7 @@
 // live part. Polling them together would re-download the catalogue every
 // minute for nothing.
 
+import { discardBody } from './crash-guard';
 import { contains, type Bbox } from './region';
 
 const STATUS_POLL_MS = 60_000;
@@ -68,7 +69,10 @@ async function fetchJson(url: string): Promise<unknown> {
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     headers: { accept: 'application/json' },
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  if (!response.ok) {
+    await discardBody(response);
+    throw new Error(`HTTP ${response.status}`);
+  }
   return response.json();
 }
 
