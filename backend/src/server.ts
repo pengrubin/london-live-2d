@@ -1,5 +1,6 @@
 import { buildApp } from './app';
 import { loadConfig } from './config';
+import { installCrashGuard } from './crash-guard';
 import {
   ARRIVALS_CACHE_TTL_MS,
   TFL_BUDGET_LIMIT,
@@ -9,6 +10,11 @@ import {
 async function main(): Promise<void> {
   const config = loadConfig();
   const app = await buildApp(config);
+
+  // Before listening: an upstream socket can fail undici's parser assertion at
+  // any moment, and that arrives as an uncaughtException no await can catch.
+  // See crash-guard.ts — this is what took the service down on 2026-09-11.
+  installCrashGuard((payload, msg) => app.log.error(payload, msg));
 
   await app.listen({ port: config.port, host: '0.0.0.0' });
 
