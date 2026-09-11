@@ -1,6 +1,7 @@
 // National Rail live boards via the Rail Data Marketplace REST gateway
 // (LDBWS GetDepBoardWithDetails as JSON; auth = x-apikey header).
 
+import { discardBody } from './crash-guard';
 import { UPSTREAM_TIMEOUT_MS } from './constants';
 
 const RDM_BASE =
@@ -78,6 +79,7 @@ export async function fetchNrBoard(
     headers: { 'x-apikey': apiKey, accept: 'application/json' },
   });
   if (!response.ok) {
+    await discardBody(response);
     return { status: response.status, body: { error: `Darwin gateway ${response.status}` } };
   }
   const raw = (await response.json()) as RdmBoard;

@@ -4,6 +4,7 @@
 // current levels, and one short readings history per surviving station for the
 // rising/falling trend. The EA publishes new readings every 15 minutes.
 
+import { discardBody } from './crash-guard';
 import { UPSTREAM_TIMEOUT_MS } from './constants';
 import { contains, type Bbox } from './region';
 
@@ -64,7 +65,10 @@ async function eaFetchItems<T>(url: string): Promise<readonly T[]> {
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     headers: { accept: 'application/json' },
   });
-  if (!response.ok) throw new Error(`EA upstream returned ${response.status}`);
+  if (!response.ok) {
+    await discardBody(response);
+    throw new Error(`EA upstream returned ${response.status}`);
+  }
   const body = (await response.json()) as { items?: T[] };
   return Array.isArray(body.items) ? body.items : [];
 }

@@ -3,8 +3,14 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, test } from 'vitest';
-import { handleUncaught, isUndiciParserAssertion } from './crash-guard';
+import { afterEach, describe, expect, test } from 'vitest';
+import {
+  discardBody,
+  handleUncaught,
+  installUpstreamTracker,
+  isUndiciParserAssertion,
+  upstreamSnapshot,
+} from './crash-guard';
 
 const GUARD_PATH = fileURLToPath(new URL('./crash-guard.ts', import.meta.url));
 
@@ -14,8 +20,8 @@ function undiciAssertion(): Error {
   (err as NodeJS.ErrnoException).code = 'ERR_ASSERTION';
   err.stack = [
     'AssertionError [ERR_ASSERTION]: false == true',
-    '    at Parser.finish (node:internal/deps/undici/undici:5540:16)',
-    '    at TLSSocket.<anonymous> (node:internal/deps/undici/undici:5:1)',
+    '    at Parser.finish (node:internal/deps/undici/undici:6165:9)',
+    '    at TLSSocket.<anonymous> (node:internal/deps/undici/undici:6499:36)',
     '    at TLSSocket.emit (node:events:531:35)',
     '    at endReadableNT (node:internal/streams/readable:1698:12)',
   ].join('\n');
@@ -57,11 +63,13 @@ describe('handleUncaught', () => {
     // Act
     handleUncaught(undiciAssertion(), (payload, msg) => logged.push({ payload, msg }), (c) => exits.push(c));
 
-    // Assert — no exit, and the survival is on the record.
+    // Assert — no exit, the survival is on the record, and the record names
+    // what the tracker knew (empty here, but the shape is what the log reads).
     expect(exits).toEqual([]);
     expect(logged).toHaveLength(1);
     expect(logged[0]?.msg).toContain('survived');
     expect(logged[0]?.payload.survived).toBeGreaterThan(0);
+    expect(logged[0]?.payload.upstreams).toMatchObject({ inflight: expect.any(Array), recent: expect.any(Array) });
   });
 
   test('still exits non-zero for anything else', () => {
@@ -70,6 +78,94 @@ describe('handleUncaught', () => {
     handleUncaught(new Error('genuinely broken'), () => {}, (c) => exits.push(c));
 
     expect(exits).toEqual([1]);
+  });
+});
+
+describe('installUpstreamTracker', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test('records host, path, status and the Connection header, never the query string', async () => {
+    // Arrange — a fake upstream answering the shape that makes the bug
+    // reachable: an error page that closes the connection. Clock is manual so
+    // durations are exact.
+    let clock = 1_000;
+    globalThis.fetch = (async () =>
+      new Response('<html>502</html>', { status: 502, headers: { connection: 'close' } })) as typeof fetch;
+    installUpstreamTracker(() => clock);
+
+    // Act
+    const pending = fetch('https://data.bus-data.dft.gov.uk/api/v1/datafeed/?boundingBox=1,2,3,4&api_key=SECRET');
+    const during = upstreamSnapshot(() => clock);
+    clock += 250;
+    const response = await pending;
+    const after = upstreamSnapshot(() => clock);
+
+    // Assert — the response is untouched, the call was visible while in
+    // flight, and the settled record carries what the log needs and nothing
+    // that must not be logged.
+    expect(response.status).toBe(502);
+    expect(during.inflight).toContainEqual({ host: 'data.bus-data.dft.gov.uk', path: '/api/v1/datafeed/', ageMs: 0 });
+    const settled = after.recent.at(-1);
+    expect(settled).toMatchObject({
+      host: 'data.bus-data.dft.gov.uk',
+      path: '/api/v1/datafeed/',
+      status: 502,
+      connection: 'close',
+      ms: 250,
+    });
+    expect(JSON.stringify(after)).not.toContain('SECRET');
+    expect(JSON.stringify(after)).not.toContain('boundingBox');
+  });
+
+  test('records a fetch that threw, and rethrows it unchanged', async () => {
+    const boom = new TypeError('fetch failed');
+    globalThis.fetch = (async () => {
+      throw boom;
+    }) as typeof fetch;
+    installUpstreamTracker(() => 0);
+
+    await expect(fetch('https://api.tfl.gov.uk/Line/victoria/Arrivals')).rejects.toBe(boom);
+
+    expect(upstreamSnapshot(() => 0).recent.at(-1)).toMatchObject({
+      host: 'api.tfl.gov.uk',
+      path: '/Line/victoria/Arrivals',
+      status: 'threw',
+      connection: null,
+    });
+    expect(upstreamSnapshot(() => 0).inflight).toEqual([]);
+  });
+});
+
+describe('discardBody', () => {
+  test('cancels an unread body so the socket is torn down rather than left paused', async () => {
+    // Arrange
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(16));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    // Act
+    await discardBody(new Response(body, { status: 503 }));
+
+    // Assert
+    expect(cancelled).toBe(true);
+  });
+
+  test('is harmless on a response with no body or an already-consumed one', async () => {
+    const empty = new Response(null, { status: 204 });
+    const consumed = new Response('done', { status: 200 });
+    await consumed.text();
+
+    await expect(discardBody(empty)).resolves.toBeUndefined();
+    await expect(discardBody(consumed)).resolves.toBeUndefined();
   });
 });
 
@@ -107,7 +203,7 @@ describe('installCrashGuard in a real process', () => {
 
   test('with the guard installed, the same assertion is survived', () => {
     const out = run(`
-      const { installCrashGuard, survivedUpstreamAssertions } = await import(${JSON.stringify(GUARD_PATH)});
+      const { installCrashGuard } = await import(${JSON.stringify(GUARD_PATH)});
       installCrashGuard(() => {});
       ${THROW}
     `);
