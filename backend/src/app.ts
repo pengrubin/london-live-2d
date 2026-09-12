@@ -11,7 +11,7 @@ import { BodsClient } from './bods-client';
 import { GbfsClient } from './gbfs-client';
 import { TtlCache } from './cache';
 import { type AppConfig, resolveBusDataDir } from './config';
-import { survivedUpstreamAssertions } from './crash-guard';
+import { httpParserFixed, survivedUpstreamAssertions } from './crash-guard';
 import { startCoverageWriter } from './coverage-writer';
 import { startDiversionDetector, type DiversionDetector } from './diversion-detector';
 import { ARRIVALS_CACHE_TTL_MS, TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS } from './constants';
@@ -387,6 +387,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   registerHealthRoute(app, () => ({
     ...(diversions?.sizes() ?? {}),
     upstreamAssertionsSurvived: survivedUpstreamAssertions(),
+    httpParserFixed: httpParserFixed(),
     ...leaderboard.sizes(),
     cacheArrivals: arrivalsCache.size,
     cacheStopArrivals: stopArrivalsCache.size,

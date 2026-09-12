@@ -1,16 +1,56 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Agent, type Dispatcher } from 'undici';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
   discardBody,
   handleUncaught,
+  httpParserFixed,
+  installFixedHttpParser,
   installUpstreamTracker,
   isUndiciParserAssertion,
   upstreamSnapshot,
 } from './crash-guard';
+
+describe('installFixedHttpParser', () => {
+  test('routes the built-in fetch through the userland undici agent', async () => {
+    // Arrange — a userland (fixed) agent with an interceptor that records
+    // every request it dispatches, and a throwaway local server to hit.
+    const seen: string[] = [];
+    const interceptor = (dispatch: Dispatcher['dispatch']): Dispatcher['dispatch'] =>
+      (opts, handler) => {
+        seen.push(`${opts.method} ${opts.path}`);
+        return dispatch(opts, handler);
+      };
+    const agent = new Agent().compose(interceptor);
+    const server = createServer((_req, res) => res.end('ok'));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      // Act — install, then call the BUILT-IN fetch, not undici's export.
+      expect(httpParserFixed()).toBe(0);
+      installFixedHttpParser(agent);
+      const response = await globalThis.fetch(`http://127.0.0.1:${port}/probe`);
+
+      // Assert — the request went through our agent, so every call site's
+      // fetch now parses with the fixed engine. The legacy symbol is what
+      // Node 22's bundled undici reads to find it.
+      expect(await response.text()).toBe('ok');
+      expect(seen).toContain('GET /probe');
+      expect(httpParserFixed()).toBe(1);
+      const legacy = (globalThis as unknown as Record<symbol, unknown>)[Symbol.for('undici.globalDispatcher.1')];
+      expect(legacy).toBeDefined();
+    } finally {
+      server.close();
+    }
+  });
+});
 
 const GUARD_PATH = fileURLToPath(new URL('./crash-guard.ts', import.meta.url));
 
