@@ -1,6 +1,6 @@
 import { buildApp } from './app';
 import { loadConfig } from './config';
-import { installCrashGuard, installUpstreamTracker } from './crash-guard';
+import { installCrashGuard, installFixedHttpParser, installUpstreamTracker } from './crash-guard';
 import {
   ARRIVALS_CACHE_TTL_MS,
   TFL_BUDGET_LIMIT,
@@ -8,6 +8,11 @@ import {
 } from './constants';
 
 async function main(): Promise<void> {
+  // First, before any poller can open a socket: the fixed HTTP parser. The
+  // bundled one asserts when TfL closes a connection mid-read; see
+  // crash-guard.ts. Everything below that calls fetch now goes through it.
+  installFixedHttpParser();
+
   const config = loadConfig();
   const app = await buildApp(config);
 

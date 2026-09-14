@@ -37,6 +37,34 @@
 //      decides whether undici could have reached the assertion at all.
 //   3. `discardBody`, for call sites that give up on a non-2xx response:
 //      cancelling the body removes the "unread" half of the precondition.
+//   4. `installFixedHttpParser`: the tracking named the upstream — TfL behind
+//      Cloudflare answers the 25-line Arrivals call with `Connection: close`
+//      most of the time from Railway's edge, and its FIN lands while the
+//      parser is paused under the concurrent 7.6 MB BODS download. Nothing to
+//      cancel there; the body is read in full. The only cure is the fixed
+//      parser: userland undici 8 installed as the global dispatcher. Its
+//      setGlobalDispatcher also writes the legacy symbol Node 22's bundled
+//      undici 6.28 reads, so the built-in `fetch` at every call site routes
+//      through the fixed engine without touching a single call site.
+
+import { Agent, type Dispatcher, setGlobalDispatcher } from 'undici';
+
+let parserFixed = false;
+
+/** 1 once the userland undici agent is the global dispatcher; on /health. */
+export function httpParserFixed(): number {
+  return parserFixed ? 1 : 0;
+}
+
+/**
+ * Makes userland undici (8.x, parser bug fixed) the engine behind the global
+ * fetch. Accepts a dispatcher so a test can hand in an instrumented one and
+ * prove the built-in fetch really goes through it.
+ */
+export function installFixedHttpParser(dispatcher: Dispatcher = new Agent()): void {
+  setGlobalDispatcher(dispatcher);
+  parserFixed = true;
+}
 
 /** Counts assertions survived, so /health shows whether this is firing. */
 let survived = 0;
