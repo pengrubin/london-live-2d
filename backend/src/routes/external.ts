@@ -20,10 +20,21 @@ function adsbUrls(point: CirclePoint): { primary: string; fallback: string } {
   };
 }
 
+/**
+ * Both ADS-B networks and adsbdb now refuse anonymous clients: since late
+ * August 2026 airplanes.live answers 403 "contact us" and adsb.lol answers
+ * 403 "User-Agent too generic; include valid contact info". A descriptive
+ * User-Agent with the project URL and a contact address is what they ask
+ * for. Without it the aircraft route served one stale body for 39 days
+ * (the browser dead-reckons from whatever it gets), which is why the route
+ * now bounds stale serving with AIRCRAFT_MAX_STALE_MS as well.
+ */
+const UPSTREAM_USER_AGENT = 'london-live/1.0 (+https://london.pengrubin.com; pengrubin@foxmail.com)';
+
 async function fetchJson(url: string): Promise<TflResponse> {
   const response = await fetch(url, {
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    headers: { accept: 'application/json' },
+    headers: { accept: 'application/json', 'user-agent': UPSTREAM_USER_AGENT },
   });
   const body: unknown = await response.json();
   return { status: response.status, body };
@@ -40,12 +51,22 @@ async function fetchAircraft(point: CirclePoint): Promise<TflResponse> {
   return fetchJson(fallback);
 }
 
+/**
+ * Oldest aircraft body worth serving as stale. Positions are dead-reckoned in
+ * the browser from speed and track, so a body older than a few minutes puts
+ * every aircraft somewhere it is not; better to answer 502 and let the layer
+ * go quiet than to animate a 39-day-old snapshot (observed 2026-08-21 to
+ * 2026-09-30 when both upstreams started refusing anonymous clients).
+ */
+const AIRCRAFT_MAX_STALE_MS = 10 * 60_000;
+
 /** Live aircraft over the region's centre point: GET /api/aircraft (no params). */
 export function registerAircraftRoute(app: FastifyInstance, deps: ProxyDeps): void {
   const { adsb } = deps.config.region;
   registerProxyRoute(app, deps, {
     path: '/api/aircraft',
     fetchUpstream: () => fetchAircraft(adsb),
+    maxStaleMs: AIRCRAFT_MAX_STALE_MS,
   });
 }
 
