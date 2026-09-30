@@ -16,6 +16,15 @@ import { M_PER_DEG_LAT, metersPerDegLon } from '../region';
 export const AIRCRAFT_LAYER_ID = 'aircraft-icons';
 const SOURCE_ID = 'aircraft';
 const POLL_INTERVAL_MS = 5_000;
+/** Longest silence dead-reckoned before positions are held (an unrefreshed
+ * fleet should not be flown across the map on a 5-minute-old heading). */
+const MAX_DEAD_RECKON_S = 120;
+/** Ignore a reported `seen_pos` older than this: a position last heard a
+ * minute ago is not worth extrapolating further. */
+const MAX_SEEN_POS_S = 60;
+/** Trust the feed's timestamp as the dead-reckoning origin only when the
+ * viewer's clock is within this of it; otherwise use the receipt time. */
+const CLOCK_SKEW_TOLERANCE_MS = 60_000;
 const KN_TO_MS = 0.514444;
 
 interface Aircraft {
@@ -30,6 +39,8 @@ interface Aircraft {
   lat?: number;
   lon?: number;
   category?: string;
+  /** seconds before the snapshot that this position was last received */
+  seen_pos?: number;
 }
 
 const esc = (s: string): string =>
@@ -373,19 +384,37 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
 
   let fleet: Aircraft[] = [];
   let fetchedAt = 0;
+  // The upstream's own snapshot time (`now`, epoch ms) of the fleet on screen.
+  // The backend serves the previous body as `x-cache: stale` while its upstream
+  // is backing off, so consecutive polls can return the SAME snapshot. Dead
+  // reckoning must then keep running from the original fetch, not restart:
+  // resetting fetchedAt on an unchanged body snapped every aircraft back to its
+  // snapshot position every 5 s and re-flew the same few hundred metres.
+  let snapshotNow = 0;
 
   async function poll(): Promise<void> {
     try {
       const res = await fetch('/api/aircraft');
       if (!res.ok) return;
-      const json = (await res.json()) as { ac?: Aircraft[] };
+      const json = (await res.json()) as { ac?: Aircraft[]; now?: number };
+      const now = typeof json.now === 'number' ? json.now : 0;
+      if (now !== 0 && now === snapshotNow) return; // same snapshot as last poll
+      snapshotNow = now;
       fleet = (json.ac ?? []).filter(
         (a) =>
           typeof a.lat === 'number' &&
           typeof a.lon === 'number' &&
           !(a.category ?? '').startsWith('C'), // ground vehicles/obstacles
       );
-      fetchedAt = Date.now();
+      // Dead-reckon from the snapshot's OWN time, not from the moment the
+      // browser received it. A snapshot is the truth as of `now`; by the time
+      // it arrives it is already 1-3 s old, and an aircraft at 250 m/s has
+      // moved several hundred metres. Restarting the clock at receipt made
+      // every fresh poll pull the icon BACK by that distance before it flew
+      // forward again. Fall back to the receipt time if the viewer's clock
+      // disagrees with the server by more than a minute.
+      const received = Date.now();
+      fetchedAt = now !== 0 && Math.abs(received - now) < CLOCK_SKEW_TOLERANCE_MS ? now : received;
     } catch {
       // keep dead-reckoning the previous fleet
     }
@@ -405,12 +434,18 @@ export async function startAircraft(map: MaplibreMap): Promise<void> {
       requestAnimationFrame(render);
       return;
     }
-    const dtS = (Date.now() - fetchedAt) / 1000;
+    // Cap the extrapolation: a fleet the backend could not refresh for minutes
+    // should hold rather than fly off the map on a stale heading.
+    const sinceSnapshotS = Math.max(0, (Date.now() - fetchedAt) / 1000);
     const mPerDegLon = metersPerDegLon();
     posByHex.clear();
     const features = fleet.map((a) => {
       const speedMs = a.alt_baro === 'ground' ? 0 : (a.gs ?? 0) * KN_TO_MS;
       const rad = (((a.track ?? 0) - 0) * Math.PI) / 180;
+      // `seen_pos` is how many seconds before the snapshot this aircraft's
+      // position was last heard, so the reported point is that much older
+      // than `now`; add it so every aircraft is advanced to the same instant.
+      const dtS = Math.min(MAX_DEAD_RECKON_S, sinceSnapshotS + Math.min(a.seen_pos ?? 0, MAX_SEEN_POS_S));
       const lon = (a.lon as number) + (speedMs * dtS * Math.sin(rad)) / mPerDegLon;
       const lat = (a.lat as number) + (speedMs * dtS * Math.cos(rad)) / M_PER_DEG_LAT;
       posByHex.set(a.hex, [lon, lat]);

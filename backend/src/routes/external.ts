@@ -36,6 +36,14 @@ async function fetchJson(url: string): Promise<TflResponse> {
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     headers: { accept: 'application/json', 'user-agent': UPSTREAM_USER_AGENT },
   });
+  // A 429 from adsb.lol is an HTML page; parsing it as JSON would turn a
+  // rate-limit answer into a thrown error. Surface it as a status instead so
+  // the proxy can serve stale for one TTL rather than arm the 30 s back-off.
+  const type = response.headers.get('content-type') ?? '';
+  if (!type.includes('json')) {
+    await response.body?.cancel();
+    return { status: response.status, body: null };
+  }
   const body: unknown = await response.json();
   return { status: response.status, body };
 }

@@ -419,7 +419,12 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   app.get('/api/leaderboard-status', () => leaderboard.persistenceStatus());
 
   // Non-TfL upstreams get their own budgets — they must never starve TfL calls.
-  const AIRCRAFT_TTL_MS = 4_000; // planes are fast; keep the picture fresh
+  // adsb.lol (the reachable ADS-B network since 2026-08) answers 429 to a
+  // client that calls more often than about every 8 s per IP; at the old 4 s
+  // TTL every other refresh failed, each failure armed the 30 s back-off and
+  // the route served the previous snapshot as stale while browsers re-flew it.
+  // 10 s keeps under the limit; the browser dead-reckons the gap.
+  const AIRCRAFT_TTL_MS = 10_000;
   const CALLSIGN_TTL_MS = 3_600_000; // routes/airlines are static per callsign
   const JAMCAMS_TTL_MS = 600_000; // camera list changes rarely
   const adsbBudget = new RateBudget(60, 60_000);
