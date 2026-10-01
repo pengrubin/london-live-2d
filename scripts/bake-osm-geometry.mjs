@@ -9,6 +9,16 @@
 // - Raw Overpass responses are cached in data/osm-cache/<id>.json and reused.
 // - When no OSM polyline fits a stop pair, the EXISTING TfL segment is kept
 //   (never a synthetic straight line).
+// - Segments are DIRECTION-AWARE. Most of the network is two parallel tracks
+//   (or two tube bores) 8–30 m apart, and OSM maps each as its own way. The
+//   inbound and outbound branches therefore get different segments: the track
+//   whose OSM direction tags (oneway, railway:preferred_direction) agree with
+//   the direction of travel wins; where no tag exists, the track on the LEFT
+//   of the direction of travel (UK running) is preferred; and consecutive
+//   segments prefer to stay on the same track so a train never hops bores at
+//   a station. Before this rule the nearest track won per stop pair, so trains
+//   in both directions shared one bore and switched bores from one segment to
+//   the next.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -160,10 +170,45 @@ function subPolyline(poly, projA, projB) {
   return pts;
 }
 
-// Best sub-polyline connecting stops a→b across all polylines; null if none.
-function trackSegment(polylines, a, b, maxSnap) {
-  let best = null;
-  for (const poly of polylines) {
+// Choosing between parallel tracks. Two tracks (or two tube bores) sit 8–30 m
+// apart and both snap a stop pair within a few metres of each other, so the
+// nearest-track rule is a coin toss. The rules, in order:
+//   1. a track whose OSM direction tag says trains run the other way is never
+//      used while any other candidate exists (a→b order of the branch's stops
+//      is the direction of travel);
+//   2. among tagged candidates the nearest wins;
+//   3. among untagged candidates on the same alignment (within
+//      PARALLEL_BAND_M of the nearest one), the LEFT-most in the direction of
+//      travel wins — UK trains keep left;
+//   4. a candidate that continues the previous segment's track gets
+//      TRACK_CHANGE_BONUS_M so a train never hops bores at a station for a
+//      metre or two of snap distance.
+const PARALLEL_BAND_M = 60; // lateral width within which candidates count as parallel tracks of one alignment
+const TRACK_CHANGE_BONUS_M = 10; // snap-distance credit for staying on the previous segment's track
+
+// Point on a polyline at a given arc length.
+function pointAtArc(poly, arc) {
+  let before = 0;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const len = dist(poly[i], poly[i + 1]);
+    if (before + len >= arc) {
+      const t = len === 0 ? 0 : (arc - before) / len;
+      return [poly[i][0] + (poly[i + 1][0] - poly[i][0]) * t, poly[i][1] + (poly[i + 1][1] - poly[i][1]) * t];
+    }
+    before += len;
+  }
+  return poly[poly.length - 1];
+}
+
+// Best sub-polyline connecting stops a→b across all chains; null if none.
+// `prevChain` is the chain the previous segment of the same branch used.
+// Returns { pts, chain, againstTag }; againstTag is true only when every
+// candidate runs against its direction tag (the caller then tries the
+// direction-aware graph instead).
+function trackSegment(chains, a, b, maxSnap, prevChain = null) {
+  const cands = [];
+  for (const chain of chains) {
+    const poly = chain.pts;
     const pa = projectOnto(poly, a);
     const pb = projectOnto(poly, b);
     if (!pa || !pb) continue;
@@ -172,10 +217,36 @@ function trackSegment(polylines, a, b, maxSnap) {
     const pathLen = Math.abs(pb.arc - pa.arc);
     if (pathLen < 1) continue; // both snapped to same spot — wrong polyline
     if (pathLen > 4 * Math.max(200, dist(a, b))) continue; // absurd detour
-    if (!best || worst < best.worst) best = { worst, poly, pa, pb };
+    const travelForward = pb.arc > pa.arc;
+    const againstTag = chain.dir !== 0 && (chain.dir > 0) !== travelForward;
+    const midArc = (pa.arc + pb.arc) / 2;
+    const mid = pointAtArc(poly, midArc);
+    // unit tangent at the midpoint, oriented in the direction of travel
+    const ahead = pointAtArc(poly, midArc + (travelForward ? 5 : -5));
+    const [mx, my] = toXY(mid);
+    const [hx, hy] = toXY(ahead);
+    const tl = Math.hypot(hx - mx, hy - my) || 1;
+    cands.push({ chain, pa, pb, worst, againstTag, tagged: chain.dir !== 0, mid, tangent: [(hx - mx) / tl, (hy - my) / tl],
+      cost: worst - (prevChain && chain === prevChain ? TRACK_CHANGE_BONUS_M : 0) });
   }
-  if (!best) return null;
-  return subPolyline(best.poly, best.pa, best.pb);
+  if (!cands.length) return null;
+  const pick = (c) => ({ pts: subPolyline(c.chain.pts, c.pa, c.pb), chain: c.chain, againstTag: c.againstTag });
+  const allowed = cands.filter((c) => !c.againstTag);
+  if (!allowed.length) return pick(cands.sort((x, y) => x.cost - y.cost)[0]); // rule 1 cannot be met: flagged
+  const tagged = allowed.filter((c) => c.tagged);
+  if (tagged.length) return pick(tagged.sort((x, y) => x.cost - y.cost)[0]); // rule 2
+  // rule 3: left-most of the parallel band around the nearest candidate
+  const ref = allowed.slice().sort((x, y) => x.cost - y.cost)[0];
+  const [rx, ry] = toXY(ref.mid);
+  const left = [-ref.tangent[1], ref.tangent[0]]; // left normal of the direction of travel
+  const band = allowed
+    .map((c) => {
+      const [cx, cy] = toXY(c.mid);
+      return { c, lateral: (cx - rx) * left[0] + (cy - ry) * left[1] };
+    })
+    .filter((x) => Math.abs(x.lateral) <= PARALLEL_BAND_M);
+  band.sort((x, y) => (Math.abs(x.lateral - y.lateral) > 2 ? y.lateral - x.lateral : x.c.cost - y.c.cost));
+  return pick(band[0].c);
 }
 
 // ── way stitching ────────────────────────────────────────────────────────────
@@ -183,6 +254,22 @@ const nodeKey = (p) => `${Math.round(p[0] * 1e6)}|${Math.round(p[1] * 1e6)}`;
 
 // Join ways sharing endpoints into maximal continuous polylines. A chain ends
 // at junctions (3+ way endpoints meeting) and at dead ends.
+// Direction preference of one OSM way along its own point order:
+// +1 trains run forward, -1 backward, 0 both ways or untagged.
+function wayDirection(tags) {
+  if (!tags) return 0;
+  if (tags.oneway === 'yes' || tags.oneway === 'true' || tags.oneway === '1') return 1;
+  if (tags.oneway === '-1') return -1;
+  const pref = tags['railway:preferred_direction'];
+  if (pref === 'forward') return 1;
+  if (pref === 'backward') return -1;
+  return 0;
+}
+
+// Ways are { pts, dir }. Chains come out as { pts, dir } where dir is the
+// sign of the length-weighted vote of the member ways, oriented along the
+// chain's final point order (a way appended reversed votes with its sign
+// flipped; reversing the chain flips the running total).
 function stitchWays(ways) {
   const endpoints = new Map(); // key -> [{ i, atStart }]
   const add = (k, entry) => {
@@ -190,8 +277,8 @@ function stitchWays(ways) {
     endpoints.get(k).push(entry);
   };
   ways.forEach((w, i) => {
-    add(nodeKey(w[0]), { i, atStart: true });
-    add(nodeKey(w[w.length - 1]), { i, atStart: false });
+    add(nodeKey(w.pts[0]), { i, atStart: true });
+    add(nodeKey(w.pts[w.pts.length - 1]), { i, atStart: false });
   });
 
   const used = new Array(ways.length).fill(false);
@@ -200,31 +287,37 @@ function stitchWays(ways) {
   // Extend chain from its tail (last point) while the endpoint is degree-2.
   const extend = (chain) => {
     for (;;) {
-      const k = nodeKey(chain[chain.length - 1]);
+      const k = nodeKey(chain.pts[chain.pts.length - 1]);
       const here = endpoints.get(k) ?? [];
       if (here.length !== 2) return; // junction (3+) or dead end (1)
       const next = here.find((e) => !used[e.i]);
       if (!next) return;
       used[next.i] = true;
       const w = ways[next.i];
-      const pts = next.atStart ? w : [...w].reverse();
-      for (let j = 1; j < pts.length; j++) chain.push(pts[j]);
+      const pts = next.atStart ? w.pts : [...w.pts].reverse();
+      chain.vote += (next.atStart ? 1 : -1) * w.dir * polyLength(w.pts);
+      for (let j = 1; j < pts.length; j++) chain.pts.push(pts[j]);
     }
   };
 
   for (let i = 0; i < ways.length; i++) {
     if (used[i]) continue;
     used[i] = true;
-    let chain = [...ways[i]];
+    const chain = { pts: [...ways[i].pts], vote: ways[i].dir * polyLength(ways[i].pts) };
     extend(chain); // forward from tail
-    chain = chain.reverse();
+    chain.pts.reverse();
+    chain.vote = -chain.vote;
     extend(chain); // forward from what was the head
-    chains.push(chain);
+    chains.push({ pts: chain.pts, dir: Math.sign(chain.vote) });
   }
   return chains;
 }
 
 // ── graph shortest-path fallback (spans junctions parallel to trackSegment) ──
+// Ways are { pts, dir }. An edge against a way's direction tag costs
+// WRONG_WAY_FACTOR times its length, so the shortest path keeps to the
+// correct track wherever one exists and only crosses over when it must.
+const WRONG_WAY_FACTOR = 5;
 function buildGraph(ways) {
   const coords = new Map(); // key -> [lon, lat]
   const adj = new Map(); // key -> [{ to, w }]
@@ -232,15 +325,15 @@ function buildGraph(ways) {
     if (!adj.has(ka)) adj.set(ka, []);
     adj.get(ka).push({ to: kb, w });
   };
-  for (const way of ways) {
+  for (const { pts: way, dir } of ways) {
     for (let i = 0; i < way.length; i++) {
       const k = nodeKey(way[i]);
       if (!coords.has(k)) coords.set(k, way[i]);
       if (i > 0) {
         const kp = nodeKey(way[i - 1]);
         const w = dist(way[i - 1], way[i]);
-        edge(kp, k, w);
-        edge(k, kp, w);
+        edge(kp, k, dir < 0 ? w * WRONG_WAY_FACTOR : w);
+        edge(k, kp, dir > 0 ? w * WRONG_WAY_FACTOR : w);
       }
     }
   }
@@ -331,6 +424,7 @@ function graphSegment(graph, a, b, maxSnap) {
   if (path.length < 2) return null;
   if (polyLength(path) > 4 * Math.max(200, dist(a, b))) return null;
   return path;
+  // (path cost may include wrong-way factors; the length check above is on real length)
 }
 
 // ── output helpers ───────────────────────────────────────────────────────────
@@ -350,6 +444,7 @@ mkdirSync(CACHE, { recursive: true });
 const MAX_SNAP_M = 250;
 const MAX_SNAP_RELAXED_M = 400; // some tube stop coords are street-level entrances
 const report = [];
+const decisions = [];
 
 for (const line of TARGET_LINES) {
   const row = { id: line.id, ways: 0, stitched: 0, osm: 0, graph: 0, tfl: 0, note: '' };
@@ -369,7 +464,7 @@ for (const line of TARGET_LINES) {
   const wayById = new Map();
   for (const el of fetched.data.elements ?? []) {
     if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) continue;
-    wayById.set(el.id, el.geometry.map((g) => [g.lon, g.lat]));
+    wayById.set(el.id, { pts: el.geometry.map((g) => [g.lon, g.lat]), dir: wayDirection(el.tags) });
   }
   const ways = [...wayById.values()];
   row.ways = ways.length;
@@ -381,20 +476,45 @@ for (const line of TARGET_LINES) {
 
   const chains = stitchWays(ways);
   row.stitched = chains.length;
+  row.directed = chains.filter((c) => c.dir !== 0).length;
   const graph = buildGraph(ways);
 
   const branchesFile = JSON.parse(readFileSync(join(DATA, 'branches', `${line.id}.json`), 'utf8'));
   const newBranches = branchesFile.branches.map((br) => {
     const segments = [];
+    let prevChain = null;
     for (let i = 0; i < br.stops.length - 1; i++) {
       const a = [br.stops[i].lon, br.stops[i].lat];
       const b = [br.stops[i + 1].lon, br.stops[i + 1].lat];
-      let seg = trackSegment(chains, a, b, MAX_SNAP_M) ?? trackSegment(chains, a, b, MAX_SNAP_RELAXED_M);
-      if (seg) {
-        row.osm++;
+      let hit = trackSegment(chains, a, b, MAX_SNAP_M, prevChain) ?? trackSegment(chains, a, b, MAX_SNAP_RELAXED_M, prevChain);
+      let seg = null;
+      let via = 'osm';
+      if (hit && !hit.againstTag) {
+        seg = hit.pts;
       } else {
-        seg = graphSegment(graph, a, b, MAX_SNAP_RELAXED_M);
-        if (seg) row.graph++;
+        // no whole-chain candidate in the right direction (chains end at every
+        // junction, so a crossover between two stops breaks them): path the
+        // direction-aware graph, and only if that fails accept a wrong-way chain
+        const path = graphSegment(graph, a, b, MAX_SNAP_RELAXED_M);
+        if (path) {
+          seg = path;
+          via = 'graph';
+          hit = null;
+        } else if (hit) {
+          seg = hit.pts;
+          via = 'osm-against-tag';
+        }
+      }
+      if (process.env.BAKE_DEBUG && seg) {
+        // one line per segment decision, for checking the direction rule offline
+        decisions.push({ line: line.id, direction: br.direction, from: br.stops[i].name, to: br.stops[i + 1].name, via,
+          chain: hit ? chains.indexOf(hit.chain) : -1, chainDir: hit ? hit.chain.dir : null, againstTag: via === 'osm-against-tag',
+          changedTrack: prevChain !== null && (!hit || hit.chain !== prevChain) });
+      }
+      prevChain = hit?.chain ?? null;
+      if (seg) {
+        if (via === 'graph') row.graph++;
+        else row.osm++;
       }
       if (seg) {
         segments.push(roundCoords(seg));
@@ -417,7 +537,7 @@ for (const line of TARGET_LINES) {
     join(DATA, 'lines', `${line.id}.json`),
     JSON.stringify({
       type: 'FeatureCollection',
-      features: chains.map((coords) => ({
+      features: chains.map(({ pts: coords }) => ({
         type: 'Feature',
         properties: { lineId: line.id, color },
         geometry: { type: 'LineString', coordinates: roundCoords(coords) },
@@ -443,3 +563,4 @@ for (const r of report) {
       (r.note ? `  ${r.note}` : ''),
   );
 }
+if (process.env.BAKE_DEBUG) writeFileSync(process.env.BAKE_DEBUG, JSON.stringify(decisions));
