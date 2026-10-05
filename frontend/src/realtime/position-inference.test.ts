@@ -99,6 +99,41 @@ describe('departed trains are never pinned at the previous stop', () => {
     expect(t.runTimeS).toBeGreaterThan(200); // stretched bound feeds dead reckoning
   });
 
+  // Northern writes "Departed X", Jubilee "Leaving X", Victoria "Departing X";
+  // each proves the departure just as "Between"/"Left" do.
+  test.each(['Departed Alpha', 'Leaving Alpha', 'Departing Alpha', 'departed Alpha'])(
+    '"%s" with countdown above the schedule still places past the stop',
+    (currentLocation) => {
+      const [t] = inferTrains(
+        [pred({ vehicleId: '7', naptanId: 'B', timeToStation: 200, direction: 'outbound', currentLocation })],
+        branchesFor('victoria'),
+      );
+      expect(t.lngLat[0]).toBeGreaterThan(STOP_A.lon); // strictly departed
+      expect(t.lngLat[0]).toBeLessThan(STOP_B.lon);
+      expect(t.runTimeS).toBeGreaterThan(200); // stretched bound
+    },
+  );
+
+  test.each(['Between Alpha and Beta', 'Left Alpha'])(
+    '"%s" keeps stretching the run time as before',
+    (currentLocation) => {
+      const [t] = inferTrains(
+        [pred({ vehicleId: '7', naptanId: 'B', timeToStation: 200, direction: 'outbound', currentLocation })],
+        branchesFor('victoria'),
+      );
+      expect(t.lngLat[0]).toBeGreaterThan(STOP_A.lon);
+      expect(t.runTimeS).toBe(220); // tts + DEPARTED_MARGIN_S
+    },
+  );
+
+  test('a departure word mid-string ("Train departed") does not count as proof', () => {
+    const [t] = inferTrains(
+      [pred({ vehicleId: '7', naptanId: 'B', timeToStation: 200, direction: 'outbound', currentLocation: 'Train departed Alpha' })],
+      branchesFor('victoria'),
+    );
+    expect(t.lngLat[0]).toBeCloseTo(STOP_A.lon, 5);
+  });
+
   test('a dwelling train ("At Platform") is still allowed to sit at the stop', () => {
     const [t] = inferTrains(
       [pred({ vehicleId: '7', naptanId: 'B', timeToStation: 200, direction: 'outbound', currentLocation: 'At Platform' })],
@@ -330,6 +365,19 @@ describe('timetable horizon filter', () => {
     );
     expect(trains).toHaveLength(0);
   });
+
+  // A depot or sidings is where a train is parked, not a running position, so
+  // it must not exempt the listing from the horizon.
+  test.each(['Neasden Depot', 'Lillie Bridge Depot', 'Stonebridge Park Sidings'])(
+    '"%s" is not a live location: beyond-horizon listing is dropped',
+    (currentLocation) => {
+      const trains = inferTrains(
+        [pred({ vehicleId: '9', currentLocation, direction: 'outbound', timeToStation: RUN_HORIZON_S + 60, naptanId: 'B' })],
+        branchesFor('victoria'),
+      );
+      expect(trains).toHaveLength(0);
+    },
+  );
 
   test('live-positioned trains are exempt from the horizon', () => {
     const trains = inferTrains(
