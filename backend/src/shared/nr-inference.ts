@@ -25,9 +25,26 @@ export interface NrStation {
 export interface NrSegment {
   a: string;
   b: string;
+  /** undirected reference length — station-graph Dijkstra weight */
   lenM: number;
+  /** track for travel a→b */
   poly: LngLat[];
+  /**
+   * track for travel b→a, already oriented b→a; absent where both directions
+   * share one track (single line, or no second track in OSM) and in files
+   * baked before per-direction tracks — then b→a is `poly` reversed.
+   */
+  polyRev?: LngLat[];
 }
+
+/** The segment's polyline for travel starting at `from` (one of its ends). */
+export function segmentPolyFrom(seg: NrSegment, from: string): LngLat[] {
+  if (seg.a === from) return seg.poly;
+  return seg.polyRev ?? [...seg.poly].reverse();
+}
+
+const samePoint = (p: LngLat | undefined, q: LngLat | undefined): boolean =>
+  p !== undefined && q !== undefined && p[0] === q[0] && p[1] === q[1];
 
 /** Precedence of a stop time's source: actual > estimate > scheduled. */
 export type NrTimeRank = 0 | 1 | 2;
@@ -184,7 +201,11 @@ export class NrRailGraph {
   readonly stations: Map<string, NrStation>;
   private readonly neighbours = new Map<string, { crs: string; lenM: number }[]>();
   private readonly segByPair = new Map<string, NrSegment>();
-  /** shortest station-graph path A→B as one concatenated polyline (cached) */
+  /**
+   * shortest station-graph path A→B as one concatenated polyline (cached).
+   * Keyed `A>B`, so the two directions are cached apart: each segment is
+   * drawn on its own track for the direction travelled.
+   */
   private readonly pathCache = new Map<string, LngLat[] | null>();
 
   constructor(stations: NrStation[], segments: NrSegment[]) {
@@ -255,8 +276,10 @@ export class NrRailGraph {
         this.cachePath(key, null);
         return null;
       }
-      const pts = seg.a === chain[i] ? seg.poly : [...seg.poly].reverse();
-      poly.push(...(i === 0 ? pts : pts.slice(1)));
+      const pts = segmentPolyFrom(seg, chain[i]!);
+      // consecutive segments meet at the station; on per-direction tracks the
+      // two ends may differ by a metre or two, so only an exact repeat is dropped
+      poly.push(...(samePoint(poly[poly.length - 1], pts[0]) ? pts.slice(1) : pts));
     }
     this.cachePath(key, poly);
     return poly;
