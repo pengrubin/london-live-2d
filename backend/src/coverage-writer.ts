@@ -26,6 +26,15 @@
 
 import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import {
+  addContributor,
+  encodeContributors,
+  growContributorSlots,
+  makeContributorSlots,
+  routeLabel,
+  unionContributors,
+  type ContributorSlots,
+} from './coverage-contributors';
 
 /** Simplification tolerance chosen by the prototype: run weights are fixed
  * before simplification, so 5 m only shaves bytes, never changes j/b. */
@@ -65,8 +74,10 @@ export type LonLat = readonly [number, number];
 interface CoverageFeature {
   type: 'Feature';
   /** j: rounded total journeys/day on the corridor; b: bucket index 0..5.
-   * The frontend interpolates on `b`, so it MUST stay numeric. */
-  properties: { j: number; b: number };
+   * The frontend interpolates on `b`, so it MUST stay numeric. r: the top
+   * contributing routes, "88 o:31;N88 i:12" (format and parser in
+   * coverage-contributors.ts); omitted when empty to save bytes. */
+  properties: { j: number; b: number; r?: string };
   geometry: { type: 'LineString'; coordinates: Array<[number, number]> };
 }
 
@@ -210,6 +221,10 @@ export function computeRollingMeans(
 // can add to a second distinct piece there — which matches the product
 // semantics anyway, because those buses really do pass that road twice per
 // journey. Peak RSS stays well under 200 MB.
+//
+// Contributing routes (for tap-to-inspect) ride along in fixed per-piece
+// slots, NOT Sets — see coverage-contributors.ts: 8 slots × 8 bytes per piece
+// is ~34 MB transient at the ~440k-piece scale.
 
 interface PieceStore {
   count: number;
@@ -223,6 +238,7 @@ interface PieceStore {
   p1lat: Float64Array;
   seq: Int32Array; // walk position within the owner route (run-gap detection)
   lastRoute: Int32Array; // last contributing route index (double-add guard)
+  contributors: ContributorSlots; // top-8 routes per piece, for `r`
 }
 
 function makePieceStore(): PieceStore {
@@ -239,6 +255,7 @@ function makePieceStore(): PieceStore {
     p1lat: new Float64Array(capacity),
     seq: new Int32Array(capacity),
     lastRoute: new Int32Array(capacity),
+    contributors: makeContributorSlots(capacity),
   };
 }
 
@@ -267,6 +284,7 @@ function growPieceStore(store: PieceStore): void {
   store.p1lat = growF(store.p1lat);
   store.seq = growI(store.seq);
   store.lastRoute = growI(store.lastRoute);
+  store.contributors = growContributorSlots(store.contributors, capacity);
 }
 
 /** Same road iff bearings agree within tolerance in EITHER direction —
@@ -373,6 +391,7 @@ function walkRoute(
     if (best >= 0) {
       store.total[best] = (store.total[best] ?? 0) + mean;
       store.lastRoute[best] = routeIdx;
+      addContributor(store.contributors, best, routeIdx, mean);
     } else if (!alreadyCounted) {
       // emit a new corridor piece owned by this route
       if (store.count === store.mx.length) growPieceStore(store);
@@ -388,6 +407,8 @@ function walkRoute(
       store.p1lat[pi] = y1 / M_PER_DEG;
       store.seq[pi] = seq;
       store.lastRoute[pi] = routeIdx;
+      // the owner is the piece's first contributor
+      addContributor(store.contributors, pi, routeIdx, mean);
       const ck = cellKey(cx, cy);
       const cell = grid.get(ck);
       if (cell === undefined) grid.set(ck, [pi]);
@@ -403,7 +424,12 @@ function walkRoute(
 /** Emit one run of same-owner consecutive same-bucket pieces as a feature.
  * j/b are fixed BEFORE geometry post-processing, so simplify + quantize can
  * only shave bytes, never change what the feature claims. */
-function emitRun(store: PieceStore, run: readonly number[], out: CoverageFeature[]): void {
+function emitRun(
+  store: PieceStore,
+  run: readonly number[],
+  labels: readonly string[],
+  out: CoverageFeature[],
+): void {
   const first = run[0];
   if (first === undefined) return;
   let totalSum = 0;
@@ -419,22 +445,33 @@ function emitRun(store: PieceStore, run: readonly number[], out: CoverageFeature
     (p, i) => i === 0 || p[0] !== quantized[i - 1]?.[0] || p[1] !== quantized[i - 1]?.[1],
   );
   if (line.length < 2) return;
+  // Same per-point-mean footing as j, so the listed routes add up to (at
+  // most, past the top 8) the headline total.
+  const r = encodeContributors(
+    unionContributors(store.contributors, run).map(
+      ([routeIdx, journeys]) => [labels[routeIdx] ?? '', journeys] as const,
+    ),
+  );
+  // j is the run MEAN — pieces in one run share a bucket, so the true
+  // per-point total varies at most within that bucket's bounds; the
+  // tap-to-inspect popup presents it as "~j/day", not exact.
+  const j = Math.round(totalSum / run.length);
+  const b = assignBucket(store.total[first] ?? 0);
   out.push({
     type: 'Feature',
-    properties: {
-      // j is the run MEAN — pieces in one run share a bucket, so the true
-      // per-point total varies at most within that bucket's bounds. Any
-      // future tap-to-inspect UI should present it as "~j/day", not exact.
-      j: Math.round(totalSum / run.length),
-      b: assignBucket(store.total[first] ?? 0),
-    },
+    properties: r === '' ? { j, b } : { j, b, r },
     geometry: { type: 'LineString', coordinates: line },
   });
 }
 
 /** Split one owner route's emitted pieces into runs: break on a walk gap
  * (matched pieces in between) or a bucket change, then emit each run. */
-function emitOwnerRuns(store: PieceStore, owned: readonly number[], out: CoverageFeature[]): void {
+function emitOwnerRuns(
+  store: PieceStore,
+  owned: readonly number[],
+  labels: readonly string[],
+  out: CoverageFeature[],
+): void {
   let runStart = 0;
   for (let i = 1; i <= owned.length; i += 1) {
     const prev = owned[i - 1];
@@ -445,7 +482,7 @@ function emitOwnerRuns(store: PieceStore, owned: readonly number[], out: Coverag
       (store.seq[cur] ?? 0) !== (store.seq[prev] ?? 0) + 1 ||
       assignBucket(store.total[cur] ?? 0) !== assignBucket(store.total[prev] ?? 0);
     if (breaks) {
-      emitRun(store, owned.slice(runStart, i), out);
+      emitRun(store, owned.slice(runStart, i), labels, out);
       runStart = i;
     }
   }
@@ -496,9 +533,11 @@ export async function buildCoverageArtifact(
     }
   }
 
+  // Display label per route index, computed once instead of per run token.
+  const labels = routes.map((r) => routeLabel(r.key));
   const features: CoverageFeature[] = [];
   for (let ri = 0; ri < ownedByRoute.length; ri += 1) {
-    emitOwnerRuns(store, ownedByRoute[ri] ?? [], features);
+    emitOwnerRuns(store, ownedByRoute[ri] ?? [], labels, features);
     if (ri % YIELD_EVERY_ROUTES === YIELD_EVERY_ROUTES - 1) {
       await new Promise<void>((resolve) => setImmediate(resolve));
     }
