@@ -1,0 +1,36 @@
+# Weekly, grouped dependency updates for the two independent npm packages.
+# Minor + patch bumps land as one PR per directory; major bumps stay separate
+# PRs so a breaking upgrade (e.g. vitest 3 -> 5) can't hide inside a group.
+# Groups apply to version updates only, so security updates still open their
+# own PRs.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      backend-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      frontend-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
