@@ -31,11 +31,107 @@ export interface Station {
   lon: number;
 }
 
-interface Segment {
+export interface NrSegment {
   a: string;
   b: string;
+  /** undirected reference length — station-graph Dijkstra weight */
   lenM: number;
+  /** track for travel a→b */
   poly: LngLat[];
+  /**
+   * track for travel b→a, already oriented b→a; absent where both directions
+   * share one track (single line, or no second track in OSM) and in files
+   * baked before per-direction tracks — then b→a is `poly` reversed.
+   * KEEP IN SYNC with backend/src/shared/nr-inference.ts.
+   */
+  polyRev?: LngLat[];
+}
+
+/** The segment's polyline for travel starting at `from` (one of its ends). */
+export function segmentPolyFrom(seg: NrSegment, from: string): LngLat[] {
+  if (seg.a === from) return seg.poly;
+  return seg.polyRev ?? [...seg.poly].reverse();
+}
+
+const samePoint = (p: LngLat | undefined, q: LngLat | undefined): boolean =>
+  p !== undefined && q !== undefined && p[0] === q[0] && p[1] === q[1];
+
+/** Dijkstra gives up beyond this path length (matches the backend). */
+const MAX_PATH_M = 60_000;
+const PATH_CACHE_MAX = 300; // caps polyline memory; oldest entries evicted (FIFO)
+
+/**
+ * Pathing between calling points over the station graph: the shortest
+ * station chain A→B as one concatenated polyline, each segment on its own
+ * track for the direction travelled. Cached per `A>B`, so the two directions
+ * never share an entry.
+ */
+export function createRailPather(segments: NrSegment[]): (a: string, b: string) => LngLat[] | null {
+  const neighbours = new Map<string, { crs: string; lenM: number }[]>();
+  const segByPair = new Map<string, NrSegment>();
+  for (const seg of segments) {
+    segByPair.set(`${seg.a}>${seg.b}`, seg);
+    segByPair.set(`${seg.b}>${seg.a}`, seg);
+    (neighbours.get(seg.a) ?? neighbours.set(seg.a, []).get(seg.a))!.push({ crs: seg.b, lenM: seg.lenM });
+    (neighbours.get(seg.b) ?? neighbours.set(seg.b, []).get(seg.b))!.push({ crs: seg.a, lenM: seg.lenM });
+  }
+
+  const pathCache = new Map<string, LngLat[] | null>();
+  function cachePath(key: string, value: LngLat[] | null): void {
+    if (pathCache.size >= PATH_CACHE_MAX) {
+      const oldest = pathCache.keys().next().value;
+      if (oldest !== undefined) pathCache.delete(oldest);
+    }
+    pathCache.set(key, value);
+  }
+  return function railPath(a: string, b: string): LngLat[] | null {
+    const key = `${a}>${b}`;
+    const cached = pathCache.get(key);
+    if (cached !== undefined) return cached;
+    // Dijkstra over the 431-node station graph
+    const dist = new Map<string, number>([[a, 0]]);
+    const prev = new Map<string, string>();
+    const visited = new Set<string>();
+    while (true) {
+      let cur: string | null = null;
+      let curD = Infinity;
+      for (const [crs, d] of dist) {
+        if (!visited.has(crs) && d < curD) {
+          cur = crs;
+          curD = d;
+        }
+      }
+      if (cur === null || curD > MAX_PATH_M) {
+        cachePath(key, null);
+        return null;
+      }
+      if (cur === b) break;
+      visited.add(cur);
+      for (const n of neighbours.get(cur) ?? []) {
+        const nd = curD + n.lenM;
+        if (nd < (dist.get(n.crs) ?? Infinity)) {
+          dist.set(n.crs, nd);
+          prev.set(n.crs, cur);
+        }
+      }
+    }
+    const chain: string[] = [b];
+    while (chain[0] !== a) chain.unshift(prev.get(chain[0])!);
+    const poly: LngLat[] = [];
+    for (let i = 0; i < chain.length - 1; i++) {
+      const seg = segByPair.get(`${chain[i]}>${chain[i + 1]}`);
+      if (!seg) {
+        cachePath(key, null);
+        return null;
+      }
+      const pts = segmentPolyFrom(seg, chain[i]);
+      // consecutive segments meet at the station; on per-direction tracks the
+      // two ends may differ by a metre or two, so only an exact repeat is dropped
+      poly.push(...(samePoint(poly[poly.length - 1], pts[0]) ? pts.slice(1) : pts));
+    }
+    cachePath(key, poly);
+    return poly;
+  };
 }
 
 export interface NrCallingPoint {
@@ -404,75 +500,9 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
   const stations = new Map(
     ((await stationsRes.json()) as Station[]).map((s) => [s.crs, s]),
   );
-  const segments = (await segmentsRes.json()) as Segment[];
-
-  // adjacency + segment lookup for pathing between calling points
-  const neighbours = new Map<string, { crs: string; lenM: number }[]>();
-  const segByPair = new Map<string, Segment>();
-  for (const seg of segments) {
-    segByPair.set(`${seg.a}>${seg.b}`, seg);
-    segByPair.set(`${seg.b}>${seg.a}`, seg);
-    (neighbours.get(seg.a) ?? neighbours.set(seg.a, []).get(seg.a))!.push({ crs: seg.b, lenM: seg.lenM });
-    (neighbours.get(seg.b) ?? neighbours.set(seg.b, []).get(seg.b))!.push({ crs: seg.a, lenM: seg.lenM });
-  }
-
-  /** shortest station-graph path A→B as one concatenated polyline (cached) */
-  const PATH_CACHE_MAX = 300; // caps polyline memory; oldest entries evicted (FIFO)
-  const pathCache = new Map<string, LngLat[] | null>();
-  function cachePath(key: string, value: LngLat[] | null): void {
-    if (pathCache.size >= PATH_CACHE_MAX) {
-      const oldest = pathCache.keys().next().value;
-      if (oldest !== undefined) pathCache.delete(oldest);
-    }
-    pathCache.set(key, value);
-  }
-  function railPath(a: string, b: string): LngLat[] | null {
-    const key = `${a}>${b}`;
-    const cached = pathCache.get(key);
-    if (cached !== undefined) return cached;
-    // Dijkstra over the 431-node station graph
-    const dist = new Map<string, number>([[a, 0]]);
-    const prev = new Map<string, string>();
-    const visited = new Set<string>();
-    while (true) {
-      let cur: string | null = null;
-      let curD = Infinity;
-      for (const [crs, d] of dist) {
-        if (!visited.has(crs) && d < curD) {
-          cur = crs;
-          curD = d;
-        }
-      }
-      if (cur === null || curD > 60_000) {
-        cachePath(key, null);
-        return null;
-      }
-      if (cur === b) break;
-      visited.add(cur);
-      for (const n of neighbours.get(cur) ?? []) {
-        const nd = curD + n.lenM;
-        if (nd < (dist.get(n.crs) ?? Infinity)) {
-          dist.set(n.crs, nd);
-          prev.set(n.crs, cur);
-        }
-      }
-    }
-    const chain: string[] = [b];
-    while (chain[0] !== a) chain.unshift(prev.get(chain[0])!);
-    const poly: LngLat[] = [];
-    for (let i = 0; i < chain.length - 1; i++) {
-      const seg = segByPair.get(`${chain[i]}>${chain[i + 1]}`);
-      if (!seg) {
-        cachePath(key, null);
-        return null;
-      }
-      const pts = seg.a === chain[i] ? seg.poly : [...seg.poly].reverse();
-      poly.push(...(i === 0 ? pts : pts.slice(1)));
-    }
-    cachePath(key, poly);
-    return poly;
-  }
-  activeRailPath = railPath;
+  const segments = (await segmentsRes.json()) as NrSegment[];
+  // pathing between calling points, per direction of travel
+  activeRailPath = createRailPather(segments);
 
   // ── vehicle icon + layer ──
   if (!map.hasImage('train-national-rail')) {

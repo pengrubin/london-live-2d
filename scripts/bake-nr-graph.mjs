@@ -9,7 +9,9 @@
 //
 // Outputs:
 //   - data/nr/stations.json  [{ crs, name, lat, lon }]           (5 dp)
-//   - data/nr/segments.json  [{ a, b, lenM, poly: [[lon,lat]] }] (5 dp)
+//   - data/nr/segments.json  [{ a, b, lenM, poly, polyRev? }]   (5 dp)
+//       poly = track for travel a→b, polyRev = track for b→a, omitted where
+//       both directions share one track (see nr-direction-tracks.mjs)
 //
 // Algorithm: build a node graph from all rail ways (nodes keyed by 1e-6
 // rounded coords), snap each station to its nearest graph node (<= 500 m),
@@ -20,11 +22,15 @@
 // and Dijkstra branches entering a foreign zone may travel within it but
 // never leave it, so corridors of parallel tracks terminate at each station
 // they pass. The cheapest settled node per foreign zone becomes the neighbour
-// hit and its Dijkstra path the segment polyline. Undirected deduped output.
+// hit and its Dijkstra path the segment's undirected REFERENCE polyline
+// (deduped per pair). Each pair is then re-pathed once per direction over the
+// directed way graph (OSM direction tags, keep-left) near that reference.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildDirectionIndex, directedPolys, sameTrack, wayDirection } from './nr-direction-tracks.mjs';
+import { dumpDebugPair, reportDirections } from './nr-direction-report.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = join(ROOT, 'data');
@@ -50,6 +56,14 @@ const PATH_CAP_M = 25000; // give up Dijkstra branches beyond this
 const MAX_PATH_RATIO = 3; // path/straight beyond this = wrong routing, drop
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DP_EPSILON_M = 10; // Douglas-Peucker tolerance if output too large
+// Always-on Douglas-Peucker for both directions' polylines. Parallel tracks
+// are mapped ~3.5 m apart in OSM, so the tolerance must stay well under that
+// or simplification would blur which track a polyline is on; 1 m also sits at
+// the 5-dp output rounding (~0.7 m lon, ~1.1 m lat).
+const DIRECTION_DP_EPSILON_M = 1;
+// poly and reversed polyRev closer than this everywhere = one shared track
+// (single line, or no second track in OSM): polyRev is omitted.
+const SINGLE_TRACK_TOL_M = 2;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -203,7 +217,7 @@ async function loadRailWays() {
     for (const el of data.elements) {
       if (el.type !== 'way' || !el.geometry || el.geometry.length < 2) continue;
       if (!wayById.has(el.id)) {
-        wayById.set(el.id, el.geometry.map((g) => [g.lon, g.lat]));
+        wayById.set(el.id, { pts: el.geometry.map((g) => [g.lon, g.lat]), dir: wayDirection(el.tags) });
       }
     }
   }
@@ -218,6 +232,9 @@ function buildGraph(ways) {
   const keyToIdx = new Map();
   const coords = []; // idx -> [lon, lat]
   const adjLists = []; // idx -> flat [to0, w0, to1, w1, ...]
+  // idx -> [tag0, tag1, ...] parallel to adjLists' (to, w) pairs: +1 the edge
+  // runs WITH its way's direction tag, -1 AGAINST it, 0 untagged.
+  const adjTags = [];
   const idxOf = (p) => {
     const k = nodeKey(p);
     let i = keyToIdx.get(k);
@@ -226,24 +243,27 @@ function buildGraph(ways) {
       keyToIdx.set(k, i);
       coords.push(p);
       adjLists.push([]);
+      adjTags.push([]);
     }
     return i;
   };
   let edges = 0;
-  for (const way of ways) {
+  for (const { pts: way, dir } of ways) {
     let prevIdx = idxOf(way[0]);
     for (let i = 1; i < way.length; i++) {
       const curIdx = idxOf(way[i]);
       if (curIdx !== prevIdx) {
         const w = dist(coords[prevIdx], coords[curIdx]);
         adjLists[prevIdx].push(curIdx, w);
+        adjTags[prevIdx].push(dir);
         adjLists[curIdx].push(prevIdx, w);
+        adjTags[curIdx].push(-dir);
         edges++;
       }
       prevIdx = curIdx;
     }
   }
-  return { coords, adjLists, edges };
+  return { coords, adjLists, adjTags, edges };
 }
 
 // ── station snapping via spatial grid ───────────────────────────────────────
@@ -387,7 +407,7 @@ mkdirSync(OUT_DIR, { recursive: true });
 const stationsInBox = await loadStations();
 const ways = await loadRailWays();
 
-const { coords, adjLists, edges } = buildGraph(ways);
+const { coords, adjLists, adjTags, edges } = buildGraph(ways);
 console.log(`graph: ${coords.length} nodes, ${edges} edges`);
 
 // Snap stations (no two stations share a snap node; take next-nearest if taken).
@@ -499,7 +519,7 @@ function dijkstraNeighbours(si) {
 
 function pathTo(node) {
   const path = [];
-  for (let i = node; i !== -1; i = prevArr[i]) path.push(coords[i]);
+  for (let i = node; i !== -1; i = prevArr[i]) path.push(i);
   path.reverse();
   return path;
 }
@@ -520,7 +540,7 @@ for (let si = 0; si < snapped.length; si++) {
     const me = snapped[si];
     // Full polyline: my snap point -> zone path -> other snap point.
     const inner = pathTo(h.node);
-    const path = [coords[me.node], ...inner, coords[other.node]];
+    const path = [coords[me.node], ...inner.map((i) => coords[i]), coords[other.node]];
     const lenM = polyLength(path);
     if (lenM > PATH_CAP_M) continue;
     const [a, b] = me.crs < other.crs ? [me, other] : [other, me];
@@ -528,7 +548,8 @@ for (let si = 0; si < snapped.length; si++) {
     const existing = segByKey.get(key);
     if (existing && existing.lenM <= lenM) continue;
     const oriented = me.crs === a.crs ? path : [...path].reverse();
-    segByKey.set(key, { a: a.crs, b: b.crs, lenM, path: oriented });
+    const innerOriented = me.crs === a.crs ? inner : [...inner].reverse();
+    segByKey.set(key, { a: a.crs, b: b.crs, lenM, path: oriented, inner: innerOriented });
   }
   if ((si + 1) % 100 === 0 || si === snapped.length - 1) {
     console.log(`  ${si + 1}/${snapped.length} stations (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
@@ -569,27 +590,43 @@ const stationsOut = snapped.map((s) => ({
 }));
 writeFileSync(join(OUT_DIR, 'stations.json'), JSON.stringify(stationsOut));
 
-let segmentsOut = segments.map((s) => ({
-  a: s.a,
-  b: s.b,
-  lenM: Math.round(s.lenM),
-  poly: roundPoly(s.path),
+// Per-direction tracks: `poly` is the a→b track, `polyRev` the b→a track
+// (omitted where both directions share one track). `lenM` stays the
+// undirected reference length so the consumers' station-graph Dijkstra — and
+// therefore which stations a train is routed through — is unchanged.
+console.log('\ndirections: one directed corridor Dijkstra per segment and direction…');
+const dirIndex = buildDirectionIndex(coords);
+const directed = segments.map((s) => ({
+  seg: s,
+  ...directedPolys({ coords, adjLists, adjTags }, dirIndex, s.path, s.inner),
 }));
+
+if (process.env.BAKE_DEBUG_PAIR) dumpDebugPair(process.env.BAKE_DEBUG_PAIR, directed, { coords, adjLists, adjTags }, CACHE);
+const shapePoly = (pts, eps) => roundPoly(eps > 0 ? simplifyDP(pts, eps) : pts);
+function buildSegmentsOut(eps) {
+  return directed.map(({ seg, fwd, rev }) => {
+    const poly = shapePoly(fwd.pts, eps);
+    const polyRev = shapePoly(rev.pts, eps);
+    const out = { a: seg.a, b: seg.b, lenM: Math.round(seg.lenM), poly };
+    if (!sameTrack(poly, [...polyRev].reverse(), SINGLE_TRACK_TOL_M)) out.polyRev = polyRev;
+    return out;
+  });
+}
+const prevSegBytes = existsSync(join(OUT_DIR, 'segments.json'))
+  ? readFileSync(join(OUT_DIR, 'segments.json')).length
+  : 0;
+let segmentsOut = buildSegmentsOut(DIRECTION_DP_EPSILON_M);
 let segJson = JSON.stringify(segmentsOut);
 if (segJson.length > MAX_OUTPUT_BYTES) {
   console.log(
     `segments.json would be ${(segJson.length / 1e6).toFixed(1)} MB; ` +
       `applying ${DP_EPSILON_M} m Douglas-Peucker`,
   );
-  segmentsOut = segments.map((s) => ({
-    a: s.a,
-    b: s.b,
-    lenM: Math.round(s.lenM),
-    poly: roundPoly(simplifyDP(s.path, DP_EPSILON_M)),
-  }));
+  segmentsOut = buildSegmentsOut(DP_EPSILON_M);
   segJson = JSON.stringify(segmentsOut);
 }
 writeFileSync(join(OUT_DIR, 'segments.json'), segJson);
+reportDirections(directed, segmentsOut, prevSegBytes, segJson.length);
 
 // ── verification ────────────────────────────────────────────────────────────
 console.log('\n── verification ──');
