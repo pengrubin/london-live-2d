@@ -24,7 +24,7 @@ const HUBS = ['WAT', 'VIC', 'LBG', 'LST', 'KGX', 'STP', 'EUS', 'PAD', 'MYB', 'CH
 const BOARD_STAGGER_MS = 4_000;
 const NR_COLOR = '#e8e8e8';
 
-interface Station {
+export interface Station {
   crs: string;
   name: string;
   lat: number;
@@ -38,7 +38,7 @@ interface Segment {
   poly: LngLat[];
 }
 
-interface NrCallingPoint {
+export interface NrCallingPoint {
   crs: string;
   name: string;
   st: string;
@@ -46,7 +46,7 @@ interface NrCallingPoint {
   at?: string;
 }
 
-interface NrService {
+export interface NrService {
   rid: string;
   std: string;
   etd?: string;
@@ -58,19 +58,31 @@ interface NrService {
   callingPoints: NrCallingPoint[];
 }
 
-interface NrBoard {
+export interface NrBoard {
   crs: string;
+  /** Darwin board generation time (ISO); orders sightings across cached boards */
+  generatedAt?: string;
   services: NrService[];
 }
 
-interface TimedStop {
+/** Precedence of a stop time's source: actual > estimate > scheduled. */
+type TimeRank = 0 | 1 | 2;
+const RANK_SCHEDULED: TimeRank = 0;
+const RANK_ESTIMATE: TimeRank = 1;
+const RANK_ACTUAL: TimeRank = 2;
+
+export interface TimedStop {
   crs: string;
   name: string;
   /** epoch ms */
   time: number;
+  /** what `time` came from — a later sighting only overrides at >= precedence */
+  rank: TimeRank;
+  /** epoch ms of the sighting `time` came from (board generatedAt, else arrival) */
+  seenAt: number;
 }
 
-interface NrTrain {
+export interface NrTrain {
   rid: string;
   operator: string;
   destination: string;
@@ -144,7 +156,7 @@ const NR_GATEWAYS: NrGateway[] = [
 const NR_GATEWAY_SNAP = new Map<string, string>(NR_GATEWAYS.map((g) => [g.crs, g.snap]));
 
 /** collapse consecutive stops sharing a CRS so no zero-length leg is produced */
-function dedupeStops(list: TimedStop[]): TimedStop[] {
+function dedupeStops(list: readonly TimedStop[]): TimedStop[] {
   return list.filter((p, i) => i === 0 || p.crs !== list[i - 1].crs);
 }
 
@@ -164,7 +176,18 @@ interface TrainFix {
   legIndex: number;
 }
 
-/** Clock-driven position of a tracked train, or null when off-coverage. */
+/**
+ * Clock-driven position of a tracked train, or null when off-coverage.
+ *
+ * Because mergeBoard updates a tracked timeline in place, the drawn position
+ * CAN step backwards along the path on an ordinary update — this is not
+ * smoothed (out of scope): with frac = (now - from.time) / (to.time -
+ * from.time), a later estimate for the NEXT stop (the train falling later)
+ * shrinks frac, and a later estimate for a stop the clock had already passed
+ * puts the train back on the previous leg. The opposite move — the next
+ * stop's estimate becoming earlier — steps it forwards, and mergeStops caps
+ * that at the stop itself (never earlier than `now` without an actual).
+ */
 function currentFix(t: NrTrain, now: number): TrainFix | null {
   if (!activeRailPath) return null;
   const { stops } = t;
@@ -200,13 +223,176 @@ function parseTime(hhmm: string, now: number): number | null {
   return t;
 }
 
-/** best known time for a stop: actual > parseable estimate > scheduled */
-function stopTime(p: { st: string; et?: string; at?: string }, now: number): number | null {
-  return (
-    (p.at ? parseTime(p.at, now) : null) ??
-    (p.et ? parseTime(p.et, now) : null) ??
-    parseTime(p.st, now)
-  );
+/** best known time for a stop (actual > parseable estimate > scheduled) + its precedence */
+function rankedStopTime(
+  p: { st: string; et?: string; at?: string },
+  now: number,
+): { time: number; rank: TimeRank } | null {
+  const actual = p.at ? parseTime(p.at, now) : null;
+  if (actual !== null) return { time: actual, rank: RANK_ACTUAL };
+  const estimate = p.et ? parseTime(p.et, now) : null;
+  if (estimate !== null) return { time: estimate, rank: RANK_ESTIMATE };
+  const scheduled = parseTime(p.st, now);
+  if (scheduled === null) return null;
+  // "On time" is Darwin's estimate that the schedule holds: rank it as an
+  // estimate so it can supersede an older delay estimate the train recovered
+  // from. "Delayed" (no figure) stays scheduled-rank and cannot erase one.
+  return { time: scheduled, rank: p.et?.trim() === 'On time' ? RANK_ESTIMATE : RANK_SCHEDULED };
+}
+
+// ── board → rid-keyed train timelines ──
+// KEEP IN SYNC with mergeBoard/mergeStops in backend/src/shared/nr-inference.ts.
+
+/**
+ * When the board was generated (Darwin `generatedAt`), so a board served late
+ * from cache cannot override a fresher sighting. Falls back to `now`, i.e.
+ * sightings without a parseable generatedAt are applied in arrival order.
+ */
+function sightingTime(board: { generatedAt?: string }, now: number): number {
+  const t = Date.parse(board.generatedAt ?? '');
+  return Number.isFinite(t) ? t : now;
+}
+
+/** One service's timeline as seen on one board (before merging). */
+function sightingStops(
+  svc: NrService,
+  board: NrBoard,
+  stations: ReadonlyMap<string, Station>,
+  now: number,
+): TimedStop[] {
+  const seenAt = sightingTime(board, now);
+  const boardStation = stations.get(board.crs);
+  const boardTime = rankedStopTime({ st: svc.std, et: svc.etd }, now);
+  const first: TimedStop[] =
+    boardStation && boardTime
+      ? [{ crs: board.crs, name: boardStation.name, ...boardTime, seenAt }]
+      : [];
+  const rest = svc.callingPoints
+    .map((p): TimedStop | null => {
+      // in-box station: use directly. out-of-box gateway: snap to the
+      // outermost in-box node on its line so origin→snap forms a segment pair
+      // along the real corridor. otherwise drop (invisible > wrong).
+      const crs = stations.has(p.crs) ? p.crs : (NR_GATEWAY_SNAP.get(p.crs) ?? null);
+      if (crs === null || !stations.has(crs)) return null;
+      const t = rankedStopTime(p, now);
+      return t ? { crs, name: p.name, ...t, seenAt } : null;
+    })
+    .filter((p): p is TimedStop => p !== null);
+  return dedupeStops([...first, ...rest].filter((p) => p.time > 0));
+}
+
+/** per-stop winner: higher precedence, else the newer sighting (ties → incoming) */
+function pickStop(existing: TimedStop, incoming: TimedStop): TimedStop {
+  if (incoming.rank !== existing.rank) return incoming.rank > existing.rank ? incoming : existing;
+  return incoming.seenAt >= existing.seenAt ? incoming : existing;
+}
+
+interface StopPair {
+  existing: TimedStop | null;
+  incoming: TimedStop | null;
+}
+
+/**
+ * Aligns two sightings of one service by CRS into a single ordered list.
+ * ORDER: the longer list is the base and keeps its order (ties → the existing
+ * timeline, already on screen). Stops only the other list carries are slotted
+ * in after the last stop both share (before the first, if none yet). If the
+ * two orders conflict, a shared stop stays where the base has it — the longer
+ * sighting is the more complete calling pattern, so its order is trusted.
+ */
+function alignStops(existing: readonly TimedStop[], incoming: readonly TimedStop[]): StopPair[] {
+  const incomingIsBase = incoming.length > existing.length;
+  const base = incomingIsBase ? incoming : existing;
+  const other = incomingIsBase ? existing : incoming;
+  const baseOf = (p: StopPair): TimedStop | null => (incomingIsBase ? p.incoming : p.existing);
+  const otherOf = (p: StopPair): TimedStop | null => (incomingIsBase ? p.existing : p.incoming);
+  const pairOf = (b: TimedStop | null, o: TimedStop | null): StopPair =>
+    incomingIsBase ? { existing: o, incoming: b } : { existing: b, incoming: o };
+
+  let pairs: StopPair[] = base.map((s) => pairOf(s, null));
+  let anchor = -1; // index of the last pair the walk through `other` landed on
+  for (const s of other) {
+    const free = (p: StopPair): boolean => baseOf(p)?.crs === s.crs && otherOf(p) === null;
+    const ahead = pairs.findIndex((p, i) => i > anchor && free(p));
+    const idx = ahead >= 0 ? ahead : pairs.findIndex(free); // behind anchor = order conflict
+    if (idx >= 0) {
+      pairs = pairs.map((p, i) => (i === idx ? pairOf(baseOf(p), s) : p));
+      anchor = Math.max(anchor, idx);
+    } else {
+      pairs = [...pairs.slice(0, anchor + 1), pairOf(null, s), ...pairs.slice(anchor + 1)];
+      anchor += 1;
+    }
+  }
+  return pairs;
+}
+
+/**
+ * Folds a new sighting into a tracked timeline. Per calling point present in
+ * both: actual beats estimate beats scheduled, and between two of the same
+ * precedence the newer sighting (board generatedAt) wins. Stops the new
+ * sighting lacks are kept; stops it adds are inserted (see alignStops).
+ *
+ * Guard: an estimate/scheduled update may not pull a stop the train has not
+ * yet reached (its old time was still ahead of `now`) into the past while
+ * the train has left the previous stop (that stop has an actual, or its time
+ * is <= now) — with no actual arrival the train is not confirmed there, and
+ * the earlier time would teleport it past the stop. Such a time is clamped
+ * to `now` (the train is drawn arriving). Actual times are never clamped.
+ */
+export function mergeStops(
+  existing: readonly TimedStop[],
+  incoming: readonly TimedStop[],
+  now: number,
+): TimedStop[] {
+  const merged = alignStops(existing, incoming).reduce<TimedStop[]>((out, pair) => {
+    const prev = out[out.length - 1];
+    let stop = pair.existing && pair.incoming ? pickStop(pair.existing, pair.incoming) : (pair.existing ?? pair.incoming)!;
+    const departedPrev = prev !== undefined && (prev.rank === RANK_ACTUAL || prev.time <= now);
+    if (
+      pair.existing &&
+      stop !== pair.existing &&
+      stop.rank !== RANK_ACTUAL &&
+      departedPrev &&
+      pair.existing.time >= now &&
+      stop.time < now
+    ) {
+      stop = { ...stop, time: now };
+    }
+    return [...out, stop];
+  }, []);
+  return dedupeStops(merged.filter((p) => p.time > 0));
+}
+
+/**
+ * Merges one departure board's services into the rid-keyed train table. A
+ * service seen for the first time takes this sighting's timeline; one already
+ * tracked has it folded in by mergeStops (times updated, never truncated).
+ * Frontend-only fields: `delayed` follows the freshest sighting, `platform`
+ * is kept from the first sighting that reported one.
+ */
+export function mergeBoard(
+  trains: Map<string, NrTrain>,
+  board: NrBoard,
+  stations: ReadonlyMap<string, Station>,
+  now: number,
+): void {
+  for (const svc of board.services ?? []) {
+    if (!svc.rid || svc.cancelled) continue;
+    const stops = sightingStops(svc, board, stations, now);
+    if (stops.length < 2) continue;
+    const existing = trains.get(svc.rid);
+    const delayed = svc.etd !== undefined && svc.etd !== 'On time' && !/^\d/.test(svc.etd);
+    const isFreshest =
+      !existing || sightingTime(board, now) >= Math.max(...existing.stops.map((s) => s.seenAt));
+    trains.set(svc.rid, {
+      rid: svc.rid,
+      operator: svc.operator || existing?.operator || '',
+      destination: svc.destination || existing?.destination || '',
+      platform: existing?.platform || svc.platform || '',
+      delayed: isFreshest ? delayed : (existing?.delayed ?? delayed),
+      stops: existing ? mergeStops(existing.stops, stops, now) : stops,
+    });
+  }
 }
 
 export async function startNrTrains(map: MaplibreMap): Promise<void> {
@@ -346,42 +532,7 @@ export async function startNrTrains(map: MaplibreMap): Promise<void> {
       if (!res.ok) return;
       const board = (await res.json()) as NrBoard;
       const now = Date.now();
-      for (const svc of board.services ?? []) {
-        if (!svc.rid || svc.cancelled) continue;
-        const boardStation = stations.get(board.crs);
-        const first: TimedStop[] = boardStation
-          ? [
-              {
-                crs: board.crs,
-                name: boardStation.name,
-                time: stopTime({ st: svc.std, et: svc.etd }, now) ?? 0,
-              },
-            ]
-          : [];
-        const rest: TimedStop[] = svc.callingPoints
-          .map((p) => {
-            // in-box station: use directly. out-of-box gateway: snap to the
-            // outermost in-box node on its line so origin→snap forms a segment
-            // pair along the real corridor. otherwise drop (invisible > wrong).
-            const crs = stations.has(p.crs) ? p.crs : (NR_GATEWAY_SNAP.get(p.crs) ?? null);
-            if (crs === null || !stations.has(crs)) return null;
-            return { crs, name: p.name, time: stopTime(p, now) ?? 0 };
-          })
-          .filter((p): p is TimedStop => p !== null && p.time > 0);
-        const stops = dedupeStops([...first, ...rest].filter((p) => p.time > 0));
-        if (stops.length < 2) continue;
-        const existing = trains.get(svc.rid);
-        // keep the sighting with the longest calling pattern (earliest board)
-        if (existing && existing.stops.length >= stops.length) continue;
-        trains.set(svc.rid, {
-          rid: svc.rid,
-          operator: svc.operator ?? '',
-          destination: svc.destination,
-          platform: svc.platform ?? '',
-          delayed: svc.etd !== undefined && svc.etd !== 'On time' && !/^\d/.test(svc.etd),
-          stops,
-        });
-      }
+      mergeBoard(trains, board, stations, now);
       // prune finished journeys
       for (const [rid, t] of trains) {
         if (t.stops[t.stops.length - 1].time < now - 120_000) trains.delete(rid);
