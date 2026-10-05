@@ -11,12 +11,9 @@ import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Vessel } from './ais-client';
 import type { BusWire } from './bods-client';
+import type { ArrivalsSource } from './arrivals-source';
 import type { NrSampleRow } from './nr-sampler';
-import type { TtlCache } from './cache';
-import type { AppConfig } from './config';
 import { persistPath } from './config';
-import type { RateBudget } from './rate-budget';
-import { fetchArrivals } from './tfl-client';
 import { londonDay, MS_PER_DAY } from './shared/london-date';
 import { inferTrains } from './shared/position-inference';
 import type { LineBranches, Prediction } from './shared/types';
@@ -219,46 +216,38 @@ export function loadBranchData(dataDir: string, log: (msg: string) => void): {
 }
 
 export interface ArrivalsFetcherDeps {
-  config: AppConfig;
-  cache: TtlCache<unknown>;
-  budget: RateBudget;
+  /** The SAME ArrivalsSource /api/arrivals uses; undefined without a TfL key. */
+  source: ArrivalsSource | undefined;
   lineIds: readonly string[];
   log: (msg: string) => void;
 }
 
 /**
- * Arrivals for all manifest lines through the SAME cache + budget the
- * /api/arrivals route uses (identical cache key: sorted, deduped, comma-joined)
- * — the sampler therefore piggybacks on frontend polling instead of
- * double-spending the TfL budget, and only fetches upstream itself when the
- * cache has gone stale and budget remains.
+ * Arrivals for all manifest lines through the SAME ArrivalsSource the
+ * /api/arrivals route uses — one cache, one budget, one in-flight map, and an
+ * identical cache key (the source sorts and dedupes the ids, as the route
+ * does). The sampler therefore piggybacks on frontend polling, joins a fetch a
+ * frontend poll already started instead of racing it, and only fetches
+ * upstream itself when the cache has gone stale and budget remains.
  */
 export function makeCachedArrivalsFetcher(deps: ArrivalsFetcherDeps): () => Promise<Prediction[] | null> {
-  const { config, cache, budget, lineIds, log } = deps;
-  const cacheKey = lineIds.join(',');
-  const appKey = config.tflAppKey;
+  const { source, lineIds, log } = deps;
   return async (): Promise<Prediction[] | null> => {
     // No TfL key → no tube predictions; the leaderboard still ranks the modes
     // whose feeds this deployment does have (buses, vessels, National Rail).
-    if (appKey === undefined || lineIds.length === 0) return null;
-    const fresh = cache.getFresh(cacheKey);
-    if (Array.isArray(fresh)) return fresh as Prediction[];
-    if (!budget.tryConsume()) {
-      const stale = cache.getStale(cacheKey);
-      return Array.isArray(stale) ? (stale as Prediction[]) : null;
-    }
-    try {
-      const upstream = await fetchArrivals(lineIds, appKey);
-      if (Array.isArray(upstream.body)) {
-        cache.set(cacheKey, upstream.body);
-        return upstream.body as Prediction[];
-      }
-      log(`leaderboard: TfL arrivals returned HTTP ${upstream.status}`);
-      return null;
-    } catch (err) {
-      log(`leaderboard: TfL arrivals fetch failed: ${String(err)}`);
-      const stale = cache.getStale(cacheKey);
-      return Array.isArray(stale) ? (stale as Prediction[]) : null;
+    if (source === undefined || lineIds.length === 0) return null;
+    const result = await source.lookup(lineIds);
+    switch (result.kind) {
+      case 'body':
+        return Array.isArray(result.body) ? (result.body as Prediction[]) : null;
+      case 'upstream-error':
+        log(`leaderboard: TfL arrivals returned HTTP ${result.status}`);
+        return null;
+      case 'exhausted':
+        return null;
+      case 'failed':
+        log(`leaderboard: TfL arrivals fetch failed: ${String(result.error)}`);
+        return null;
     }
   };
 }

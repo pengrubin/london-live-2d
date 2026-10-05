@@ -198,3 +198,27 @@ describe('TtlCache eviction', () => {
     expect(cache.evictions).toBe(50);
   });
 });
+
+describe('TtlCache.peekEntry', () => {
+  test('returns the value with its storedAt, past the TTL too', () => {
+    const cache = new TtlCache<string>(TTL_MS);
+    const t0 = 1_000_000;
+
+    cache.set('k', 'v', t0);
+
+    expect(cache.peekEntry('k')).toEqual({ value: 'v', storedAt: t0 });
+    expect(cache.peekEntry('absent')).toBeUndefined();
+  });
+
+  test('is not a use: a peeked key is still the first one evicted', () => {
+    const cache = new TtlCache<string>(TTL_MS, 2);
+    cache.set('a', '1');
+    cache.set('b', '2');
+
+    cache.peekEntry('a');
+    cache.set('c', '3');
+
+    expect(cache.peekEntry('a')).toBeUndefined();
+    expect(cache.peekEntry('b')?.value).toBe('2');
+  });
+});

@@ -1,18 +1,14 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import type { TtlCache } from '../cache';
-import type { AppConfig } from '../config';
+import { feedTimestamp, type ArrivalsCacheState, type ArrivalsSource } from '../arrivals-source';
 import { LINE_ID_PATTERN, MAX_LINE_IDS, MIN_LINE_IDS } from '../constants';
-import type { RateBudget } from '../rate-budget';
-import { fetchArrivals } from '../tfl-client';
 
 interface ArrivalsQuery {
   readonly lines?: string;
 }
 
 interface ArrivalsDeps {
-  readonly config: AppConfig;
-  readonly cache: TtlCache<unknown>;
-  readonly budget: RateBudget;
+  /** Undefined when TFL_APP_KEY is unset: the route then answers 503. */
+  readonly source: ArrivalsSource | undefined;
 }
 
 type LinesParseResult =
@@ -41,18 +37,37 @@ function parseLinesParam(raw: string | undefined): LinesParseResult {
   return { ok: true, ids: deduped };
 }
 
-function sendCached(reply: FastifyReply, cacheState: 'hit' | 'stale', body: unknown): FastifyReply {
-  return reply.header('x-cache', cacheState).send(body);
+const MS_PER_SECOND = 1_000;
+
+/**
+ * Provenance headers on every body this route serves. `x-cache` says how the
+ * origin answered (hit | miss | join | stale — see ArrivalsCacheState);
+ * `x-feed-timestamp` is TfL's own timestamp for the body (absent for an empty
+ * one) and `x-cache-age` the whole seconds since the origin cached it. A
+ * browser that sees a body older than one it already had can then tell the
+ * origin (an x-feed-timestamp that went backwards here) from the Cloudflare
+ * edge (the same origin headers replayed with an age that no longer adds up).
+ */
+function sendBody(
+  reply: FastifyReply,
+  served: { readonly cacheState: ArrivalsCacheState; readonly body: unknown; readonly storedAt: number },
+  now: number,
+): FastifyReply {
+  const ts = feedTimestamp(served.body);
+  const ageSeconds = Math.max(0, Math.floor((now - served.storedAt) / MS_PER_SECOND));
+  reply.header('x-cache', served.cacheState).header('x-cache-age', String(ageSeconds));
+  if (ts !== undefined) reply.header('x-feed-timestamp', ts);
+  return reply.send(served.body);
 }
 
 export function registerArrivalsRoute(app: FastifyInstance, deps: ArrivalsDeps): void {
-  const { config, cache, budget } = deps;
+  const { source } = deps;
 
-  // No TfL key → no tube network to report on. Answering 503 with the reason
-  // beats a silent empty array: a frontend that reads /api/capabilities never
-  // calls this, so anyone who does reach it is debugging and wants the cause.
-  const appKey = config.tflAppKey;
-  if (appKey === undefined) {
+  // No TfL key → no source and no tube network to report on. Answering 503
+  // with the reason beats a silent empty array: a frontend that reads
+  // /api/capabilities never calls this, so anyone who does reach it is
+  // debugging and wants the cause.
+  if (source === undefined) {
     app.get('/api/arrivals', async (_request, reply) =>
       reply.code(503).send({ error: 'TFL_APP_KEY not configured' }),
     );
@@ -65,45 +80,28 @@ export function registerArrivalsRoute(app: FastifyInstance, deps: ArrivalsDeps):
       return reply.code(400).send({ error: parsed.message });
     }
 
-    const cacheKey = parsed.ids.join(',');
-
-    const fresh = cache.getFresh(cacheKey);
-    if (fresh !== undefined) {
-      return sendCached(reply, 'hit', fresh);
-    }
-
-    if (!budget.tryConsume()) {
-      const stale = cache.getStale(cacheKey);
-      if (stale !== undefined) {
-        return sendCached(reply, 'stale', stale);
+    const result = await source.lookup(parsed.ids);
+    switch (result.kind) {
+      case 'body':
+        return sendBody(reply, result, source.clock());
+      case 'upstream-error': {
+        // TfL error object (e.g. unknown line id): pass through, not cached.
+        // TfL echoes the request URI (including app_key) in error bodies, so
+        // redact the secret before it can reach the browser.
+        const sanitized = JSON.stringify(result.body).replaceAll(source.appKey, '<redacted>');
+        return reply
+          .code(result.status)
+          .header('x-cache', result.cacheState)
+          .header('content-type', 'application/json; charset=utf-8')
+          .send(sanitized);
       }
-      return reply
-        .code(429)
-        .send({ error: 'Upstream TfL request budget exhausted; try again shortly.' });
-    }
-
-    try {
-      const upstream = await fetchArrivals(parsed.ids, appKey);
-      if (Array.isArray(upstream.body)) {
-        cache.set(cacheKey, upstream.body);
-        return reply.header('x-cache', 'miss').send(upstream.body);
-      }
-      // TfL error object (e.g. unknown line id): pass through, do not cache.
-      // TfL echoes the request URI (including app_key) in error bodies, so
-      // redact the secret before it can reach the browser.
-      const sanitized = JSON.stringify(upstream.body).replaceAll(appKey, '<redacted>');
-      return reply
-        .code(upstream.status)
-        .header('x-cache', 'miss')
-        .header('content-type', 'application/json; charset=utf-8')
-        .send(sanitized);
-    } catch (err) {
-      request.log.warn({ err, lines: cacheKey }, 'upstream TfL fetch failed');
-      const stale = cache.getStale(cacheKey);
-      if (stale !== undefined) {
-        return sendCached(reply, 'stale', stale);
-      }
-      return reply.code(502).send({ error: 'Upstream TfL request failed.' });
+      case 'exhausted':
+        return reply
+          .code(429)
+          .send({ error: 'Upstream TfL request budget exhausted; try again shortly.' });
+      case 'failed':
+        request.log.warn({ err: result.error, lines: parsed.ids.join(',') }, 'upstream TfL fetch failed');
+        return reply.code(502).send({ error: 'Upstream TfL request failed.' });
     }
   });
 }
