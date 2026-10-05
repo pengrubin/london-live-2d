@@ -728,7 +728,7 @@ describe('startDiversionDetector wiring', () => {
       expect(isDiversionDetectorRunning()).toBe(true);
       // The index build is async; record() drops fixes until it completes.
       await vi.waitFor(() => {
-        expect(logs.some((m) => m.includes('route indexes built'))).toBe(true);
+        expect(logs.some((m) => m.startsWith('detector: indexed '))).toBe(true);
       });
 
       // Two vehicles, same on-route → 500 m parallel → rejoin sequence, 60 s

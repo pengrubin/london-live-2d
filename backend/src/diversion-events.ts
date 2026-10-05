@@ -675,3 +675,46 @@ export function matchTfl(
   }
   return best;
 }
+
+/**
+ * Retire what the store holds on route keys that left the detector's index
+ * (learned file removed, or re-learned below the coverage bar). Buses on such
+ * keys are no longer evaluated, so these events would otherwise linger with
+ * no evidence, no recovery and no geometry until the stale timeout.
+ *
+ * An event with no member left on an indexed key is dropped (logged like any
+ * other drop, with the routes it had). A multi-route event keeps its indexed
+ * routes and loses the departed key's members, bracket, recovery and
+ * passages; its display bar is re-derived from what remains.
+ */
+export function retireEventsOffIndex(
+  store: EventStore,
+  isIndexed: (key: string) => boolean,
+  nowSec: number,
+): TransitionRecord[] {
+  const transitions: TransitionRecord[] = [];
+  const kept: DiversionEvent[] = [];
+  for (const ev of store.events) {
+    if (ev.members.every((m) => isIndexed(m.key)) && [...ev.brackets.keys()].every(isIndexed)) {
+      kept.push(ev);
+      continue;
+    }
+    const members = ev.members.filter((m) => isIndexed(m.key));
+    if (members.length === 0) {
+      transitions.push(transitionOf(ev, nowSec, 'dropped'));
+      continue;
+    }
+    ev.members = members;
+    ev.vehicles = new Set(members.map((m) => m.veh));
+    for (const key of [...ev.brackets.keys()]) if (!isIndexed(key)) ev.brackets.delete(key);
+    for (const key of [...ev.recovery.keys()]) if (!isIndexed(key)) ev.recovery.delete(key);
+    for (const passKey of [...ev.passages.keys()]) {
+      if (!isIndexed(passKey.slice(0, passKey.lastIndexOf('|')))) ev.passages.delete(passKey);
+    }
+    recomputeCentroid(ev);
+    ev.displayWorthy = isDisplayWorthy(ev);
+    kept.push(ev);
+  }
+  store.events = kept;
+  return transitions;
+}
