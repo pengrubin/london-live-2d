@@ -24,9 +24,20 @@ const MAX_SEGMENT_RUN_S = 300;
 const AT_PLATFORM_S = 15;
 
 const NO_VEHICLE_ID = '000';
-const SIDINGS = /sidings?\b/i;
-/** currentLocation prefixes proving the train has left its previous stop. */
-const DEPARTED = /^(between|left) /i;
+/**
+ * Parked, not running: a train stabled in sidings or a depot ("Neasden Depot",
+ * "Lillie Bridge Depot" — ~4.6k rows/4 weekdays of samples) has no position on
+ * the running line, so the text must not count as a live location.
+ */
+const SIDINGS = /sidings?\b|\bdepot\b/i;
+/**
+ * currentLocation prefixes proving the train has left its previous stop. Lines
+ * word it differently — Northern "Departed X", Jubilee "Leaving X", Victoria
+ * "Departing X" — and matching only "Between"/"Left" missed 6.2% of measured
+ * tube departures. "North of"/"South of" are deliberately absent: they prove a
+ * departure only given the direction of travel, which this test does not know.
+ */
+const DEPARTED = /^(between|left|departed|leaving|departing) /i;
 const DEPARTED_MARGIN_S = 20;
 /**
  * Near-platform clamp for the ARRIVING arm. When currentLocation says the train
@@ -273,7 +284,8 @@ function positionOnBranch(cand: Candidate, p: Prediction): Train | undefined {
   }
   const segment = branch.segments[stopIndex - 1];
   let runTime = segmentRunTime(branch, stopIndex);
-  // TfL says the train has physically departed ("Between X and Y" / "Left X").
+  // TfL says the train has physically departed ("Between X and Y" / "Left X" /
+  // "Departed X" / "Leaving X" / "Departing X").
   // If the countdown still exceeds our scheduled run time, the schedule is the
   // wrong bound — stretch it so the ratio stays past the platform and keeps
   // advancing instead of pinning a moving train at the stop it already left.
