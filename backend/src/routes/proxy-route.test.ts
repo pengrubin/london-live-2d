@@ -1,5 +1,5 @@
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
-import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { afterEach, describe, expect, it, vi, type Mock, type MockInstance } from 'vitest';
 import { FAILURE_BACKOFF_MS, registerProxyRoute, singleParamKey } from './proxy-route';
 import { TtlCache } from '../cache';
 import { RateBudget } from '../rate-budget';
@@ -45,7 +45,7 @@ interface Deferred<T> {
 const ok = (body: unknown = OK_BODY): TflResponse => ({ status: HTTP_OK, body });
 
 /** A fetcher that succeeds until `fail()` is called, then throws on every call. */
-function flakyFetcher(): { readonly fetchTfl: ReturnType<typeof vi.fn>; readonly fail: () => void } {
+function flakyFetcher(): { readonly fetchTfl: Mock<() => Promise<TflResponse>>; readonly fail: () => void } {
   let failing = false;
   const fetchTfl = vi.fn(async (): Promise<TflResponse> => {
     if (failing) throw new Error('upstream down');

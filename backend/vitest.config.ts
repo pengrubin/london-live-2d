@@ -14,10 +14,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        execArgv: ['--expose-gc'],
-      },
-    },
+    // Vitest 4 removed `poolOptions`; worker node flags are a top-level option.
+    // An unknown key is ignored silently, so the GC test's own expect() on
+    // `global.gc` is what proves this still reaches the worker.
+    execArgv: ['--expose-gc'],
   },
 });
