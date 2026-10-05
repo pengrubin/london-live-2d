@@ -8,6 +8,14 @@ import type { Bbox } from './region';
 const RECONNECT_DELAY_MS = 15_000;
 const STALE_AFTER_MS = 10 * 60_000;
 const PRUNE_INTERVAL_MS = 60_000;
+// A half-open socket (peer gone without a FIN, NAT entry dropped) stays OPEN
+// forever and never fires 'close', so silence is the only symptom. Equal to
+// STALE_AFTER_MS on purpose: the Thames genuinely goes quiet at night, and a
+// shorter threshold would reconnect-loop a healthy key; by the time the prune
+// has emptied the table, reconnecting costs nothing.
+const IDLE_RECONNECT_MS = STALE_AFTER_MS;
+// Detection granularity only; a minute of slack on a 10-minute threshold.
+const WATCHDOG_INTERVAL_MS = 60_000;
 const AIS_URL = 'wss://stream.aisstream.io/v0/stream';
 
 export interface Vessel {
@@ -70,6 +78,11 @@ export class AisClient {
   private readonly vessels = new Map<number, Vessel>();
   private socket: WebSocket | null = null;
   private stopped = false;
+  /** Bumped by every start()/retire/stop; handlers and timers from an older
+   *  generation are no-ops, so a stale socket can't reconnect over a live one. */
+  private generation = 0;
+  private lastMessageAt = 0;
+  private watchdog: ReturnType<typeof setInterval> | null = null;
   private readonly apiKey: string;
   private readonly log: (msg: string) => void;
   /** aisstream wants [[minLat, minLon], [maxLat, maxLon]] — lat before lon. */
@@ -89,16 +102,24 @@ export class AisClient {
 
   start(): void {
     if (this.stopped) return;
+    const gen = ++this.generation;
+    const current = (): boolean => gen === this.generation;
+    this.lastMessageAt = Date.now();
+    this.watchdog ??= setInterval(() => this.checkIdle(), WATCHDOG_INTERVAL_MS).unref();
+    let socket: WebSocket;
     try {
-      this.socket = new WebSocket(AIS_URL);
+      socket = new WebSocket(AIS_URL);
     } catch (err) {
       this.log(`AIS connect failed: ${String(err)}`);
       this.scheduleReconnect();
       return;
     }
-    this.socket.addEventListener('open', () => {
+    this.socket = socket;
+    socket.addEventListener('open', () => {
+      if (!current()) return;
+      this.lastMessageAt = Date.now();
       this.log('AIS stream connected');
-      this.socket?.send(
+      socket.send(
         JSON.stringify({
           APIKey: this.apiKey,
           BoundingBoxes: this.boundingBoxes,
@@ -106,25 +127,32 @@ export class AisClient {
         }),
       );
     });
-    this.socket.addEventListener('message', (event) => {
+    socket.addEventListener('message', (event) => {
+      if (!current()) return;
+      this.lastMessageAt = Date.now();
       void this.handleMessage(event.data);
     });
-    this.socket.addEventListener('close', () => {
+    socket.addEventListener('close', () => {
+      if (!current()) return;
       this.log('AIS stream closed; reconnecting');
       this.scheduleReconnect();
     });
-    this.socket.addEventListener('error', () => {
+    socket.addEventListener('error', () => {
+      if (!current()) return;
       // Never close() a socket that hasn't finished connecting: undici treats
       // close-during-CONNECTING as "fail the connection", which fires 'error'
       // again — a synchronous mutual recursion that overflows the stack and
       // kills the process. A failed connect fires 'close' by itself, so the
       // reconnect in the close handler still runs.
-      if (this.socket?.readyState === WebSocket.OPEN) this.socket.close();
+      if (socket.readyState === WebSocket.OPEN) socket.close();
     });
   }
 
   stop(): void {
     this.stopped = true;
+    this.generation++;
+    if (this.watchdog) clearInterval(this.watchdog);
+    this.watchdog = null;
     this.socket?.close();
   }
 
@@ -178,8 +206,25 @@ export class AisClient {
     }
   }
 
+  private checkIdle(): void {
+    const socket = this.socket;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const idleMs = Date.now() - this.lastMessageAt;
+    if (idleMs < IDLE_RECONNECT_MS) return;
+    this.log(`AIS stream idle for ${Math.round(idleMs / 1000)}s; reconnecting`);
+    // Retire this socket first so its own 'close' (if it ever arrives) is
+    // ignored, then reconnect ourselves: a dead peer's close handshake may
+    // never complete in undici. Only close() when OPEN — never CONNECTING.
+    this.generation++;
+    socket.close();
+    this.scheduleReconnect();
+  }
+
   private scheduleReconnect(): void {
     if (this.stopped) return;
-    setTimeout(() => this.start(), RECONNECT_DELAY_MS).unref();
+    const gen = this.generation;
+    setTimeout(() => {
+      if (gen === this.generation) this.start();
+    }, RECONNECT_DELAY_MS).unref();
   }
 }
