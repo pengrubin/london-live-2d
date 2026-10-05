@@ -48,6 +48,40 @@ import {
   DISRUPTIONS_PLANNED_IDS,
 } from './layers/disruptions';
 import { hasLayer, isInsideRegion, loadCapabilities } from './region';
+import { hasWebGL } from './util/webgl-support';
+
+const README_URL = 'https://github.com/pengrubin/london-live-2d#readme';
+
+/**
+ * Replaces the map container with a plain-DOM explanation. Used when WebGL is
+ * unavailable: without it the page is a silent black canvas (a real report:
+ * "just a black screen" in Chrome while Safari worked). Styled in index.html
+ * (.webgl-fallback). Built with textContent/createElement, never innerHTML.
+ */
+function showWebGLUnavailable(): void {
+  const host = document.getElementById('app') ?? document.body;
+  const box = document.createElement('div');
+  box.className = 'webgl-fallback';
+  box.setAttribute('role', 'alert');
+
+  const heading = document.createElement('h1');
+  heading.textContent = 'This map needs WebGL';
+
+  const body = document.createElement('p');
+  body.textContent =
+    'Your browser could not start WebGL. Enable hardware acceleration ' +
+    '(chrome://settings/system), or try another browser.';
+
+  const link = document.createElement('a');
+  link.href = README_URL;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.textContent = 'About this project';
+
+  box.append(heading, body, link);
+  // replaceChildren also clears anything a failed `new Map` left behind.
+  host.replaceChildren(box);
+}
 
 const TOAST_DISMISS_MS = 4000;
 let activeToast: HTMLDivElement | null = null;
@@ -191,6 +225,14 @@ function setupHeadingBeam(map: maplibregl.Map, geolocate: maplibregl.GeolocateCo
  * when the API is unreachable.
  */
 async function bootstrap(): Promise<void> {
+  // Probe before anything else: no capabilities fetch, no map, no pollers or
+  // control panel (those all hang off the map's 'load' event) when the map
+  // could never render.
+  if (!hasWebGL()) {
+    showWebGLUnavailable();
+    return;
+  }
+
   const caps = await loadCapabilities();
   const { region } = caps;
   document.title = `${region.name} Live — 2D Real-Time Transport Map`;
@@ -233,7 +275,7 @@ async function bootstrap(): Promise<void> {
     .filter((credit): credit is string => credit !== null)
     .join(' | ');
 
-  const map = new maplibregl.Map({
+  const mapOptions: maplibregl.MapOptions = {
     container: 'app',
     style: {
       version: 8,
@@ -261,7 +303,19 @@ async function bootstrap(): Promise<void> {
     attributionControl: {
       customAttribution: dataCredits,
     },
-  });
+  };
+
+  // The probe above can pass while MapLibre's own context creation still
+  // fails (different context attributes, a GPU reset in between); MapLibre
+  // throws then. Same message, same early exit — nothing below runs.
+  let map: maplibregl.Map;
+  try {
+    map = new maplibregl.Map(mapOptions);
+  } catch (error) {
+    console.error('[map] could not initialise WebGL', error);
+    showWebGLUnavailable();
+    return;
+  }
   toastHost = map.getContainer();
 
   // On phone widths MapLibre's compact attribution starts EXPANDED — a fat
