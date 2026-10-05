@@ -14,6 +14,7 @@ import { type AppConfig, resolveBusDataDir } from './config';
 import { httpParserFixed, survivedUpstreamAssertions } from './crash-guard';
 import { startCoverageWriter } from './coverage-writer';
 import { startDiversionDetector, type DiversionDetector } from './diversion-detector';
+import { ArrivalsSource } from './arrivals-source';
 import { ARRIVALS_CACHE_TTL_MS, TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS } from './constants';
 import {
   LeaderboardTracker,
@@ -302,7 +303,18 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const tflBudget = new RateBudget(TFL_BUDGET_LIMIT, TFL_BUDGET_WINDOW_MS);
 
   registerCapabilitiesRoute(app, config, DATA_DIR, busDataDir, railLineIds);
-  registerArrivalsRoute(app, { config, cache: arrivalsCache, budget: tflBudget });
+  // One source for the route AND the leaderboard sampler: a single in-flight
+  // map over the shared cache, so the two can never race each other upstream.
+  const arrivalsSource =
+    config.tflAppKey === undefined
+      ? undefined
+      : new ArrivalsSource({
+          appKey: config.tflAppKey,
+          cache: arrivalsCache,
+          budget: tflBudget,
+          log: { debug: (obj, msg) => app.log.debug(obj, msg) },
+        });
+  registerArrivalsRoute(app, { source: arrivalsSource });
   registerStopArrivalsRoute(app, { config, cache: stopArrivalsCache, budget: tflBudget });
   registerVehicleArrivalsRoute(app, { config, cache: vehicleArrivalsCache, budget: tflBudget });
   registerLineStatusRoute(app, { config, cache: lineStatusCache, budget: tflBudget });
@@ -370,9 +382,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     getBuses: () => bodsClient?.list() ?? [],
     getVessels: () => aisClient?.list() ?? [],
     fetchTubePredictions: makeCachedArrivalsFetcher({
-      config,
-      cache: arrivalsCache,
-      budget: tflBudget,
+      source: arrivalsSource,
       lineIds: branchData.lineIds,
       log,
     }),

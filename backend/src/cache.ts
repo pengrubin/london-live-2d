@@ -83,6 +83,16 @@ export class TtlCache<T> {
     return entry.value;
   }
 
+  /**
+   * The entry with the time it was stored, without counting as a use: no LRU
+   * touch and no TTL check. For callers that need the age of what they serve
+   * (`x-cache-age`) or must compare against it before replacing it
+   * (`ArrivalsSource`'s monotonic store), which `getFresh`/`getStale` cannot say.
+   */
+  peekEntry(key: string): { readonly value: T; readonly storedAt: number } | undefined {
+    return this.entries.get(key);
+  }
+
   set(key: string, value: T, now: number = Date.now()): void {
     if (!this.entries.has(key) && this.entries.size >= this.maxEntries) {
       const oldest = this.entries.keys().next().value;
