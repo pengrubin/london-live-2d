@@ -12,6 +12,7 @@ import {
   olderThanOneCycle,
   type LonLat,
 } from './coverage-writer';
+import { parseContributors } from './coverage-contributors';
 
 // ~11.13 m per 0.0001° of latitude — offsets with a known metric size.
 const LAT_51_5 = 51.5;
@@ -229,7 +230,8 @@ describe('buildCoverageArtifact (corridor merge)', () => {
     expect(artifact.features).toHaveLength(1);
     const feature = artifact.features[0];
     expect(feature?.geometry.type).toBe('LineString');
-    expect(feature?.properties).toEqual({ j: 50, b: 2 }); // 50 >= 30 → bucket 2
+    // 50 >= 30 → bucket 2; r lists both contributors, busiest first
+    expect(feature?.properties).toEqual({ j: 50, b: 2, r: 'A:30;B:20' });
     // a straight 200 m corridor simplifies down to its two endpoints
     expect(feature?.geometry.coordinates).toHaveLength(2);
   });
@@ -249,7 +251,11 @@ describe('buildCoverageArtifact (corridor merge)', () => {
     );
 
     expect(artifact.features).toHaveLength(1);
-    expect(artifact.features[0]?.properties).toEqual({ j: 50, b: 2 });
+    expect(artifact.features[0]?.properties).toEqual({
+      j: 50,
+      b: 2,
+      r: 'A_outbound:30;A_inbound:20',
+    });
   });
 
   test('a route cannot add twice to one piece (out-and-back polyline)', async () => {
@@ -270,7 +276,7 @@ describe('buildCoverageArtifact (corridor merge)', () => {
     );
 
     expect(artifact.features).toHaveLength(1);
-    expect(artifact.features[0]?.properties).toEqual({ j: 20, b: 1 }); // not 40
+    expect(artifact.features[0]?.properties).toEqual({ j: 20, b: 1, r: 'loop:20' }); // not 40
   });
 
   test('drops routes whose rolling mean is 0 or missing', async () => {
@@ -289,7 +295,7 @@ describe('buildCoverageArtifact (corridor merge)', () => {
     );
 
     expect(artifact.features).toHaveLength(1);
-    expect(artifact.features[0]?.properties).toEqual({ j: 5, b: 0 });
+    expect(artifact.features[0]?.properties).toEqual({ j: 5, b: 0, r: 'alive:5' });
   });
 
   test('splits an owner run where the corridor total changes bucket', async () => {
@@ -310,8 +316,8 @@ describe('buildCoverageArtifact (corridor merge)', () => {
 
     expect(artifact.features).toHaveLength(2);
     expect(artifact.features.map((f) => f.properties)).toEqual([
-      { j: 20, b: 1 }, // 0..200 m: trunk alone
-      { j: 35, b: 2 }, // 200..400 m: trunk + branch
+      { j: 20, b: 1, r: 'trunk:20' }, // 0..200 m: trunk alone
+      { j: 35, b: 2, r: 'trunk:20;branch:15' }, // 200..400 m: trunk + branch
     ]);
     // the split point sits at the 200 m mark on both features
     const splitLat = Number(latAt(200).toFixed(4));
@@ -336,9 +342,10 @@ describe('buildCoverageArtifact (corridor merge)', () => {
     );
 
     expect(artifact.features).toHaveLength(2);
-    for (const feature of artifact.features) {
-      expect(feature.properties).toEqual({ j: 20, b: 1 });
-    }
+    expect(artifact.features.map((f) => f.properties)).toEqual([
+      { j: 20, b: 1, r: 'east:20' },
+      { j: 20, b: 1, r: 'west:20' },
+    ]);
   });
 
   test('parallel lines 17 m apart merge into one corridor', async () => {
@@ -358,7 +365,7 @@ describe('buildCoverageArtifact (corridor merge)', () => {
     );
 
     expect(artifact.features).toHaveLength(1);
-    expect(artifact.features[0]?.properties).toEqual({ j: 50, b: 2 });
+    expect(artifact.features[0]?.properties).toEqual({ j: 50, b: 2, r: 'east:30;west:20' });
   });
 
   test('a phase-shifted quieter route still adds to EVERY corridor piece', async () => {
@@ -382,7 +389,7 @@ describe('buildCoverageArtifact (corridor merge)', () => {
     );
 
     expect(artifact.features).toHaveLength(1);
-    expect(artifact.features[0]?.properties).toEqual({ j: 60, b: 2 });
+    expect(artifact.features[0]?.properties).toMatchObject({ j: 60, b: 2 });
   });
 
   test('drops a corridor whose geometry collapses under 4-decimal rounding', async () => {
@@ -416,6 +423,73 @@ describe('buildCoverageArtifact (corridor merge)', () => {
     for (const value of coords) {
       expect(value).toBe(Number(value.toFixed(4)));
     }
+  });
+});
+
+describe('buildCoverageArtifact (contributors `r`)', () => {
+  test('names learner routes in Filter-tab line space with a direction code', async () => {
+    const artifact = await buildCoverageArtifact(
+      new Map([
+        ['TFLO_88_outbound', nsLine(0, 200)],
+        ['TFLO_88_inbound', nsLine(200, 0)],
+        ['TFLO_N88_outbound', nsLine(0, 200)],
+      ]),
+      new Map([
+        ['TFLO_88_outbound', 31],
+        ['TFLO_88_inbound', 29],
+        ['TFLO_N88_outbound', 12],
+      ]),
+      '2026-08-27',
+      7,
+    );
+
+    expect(artifact.features).toHaveLength(1);
+    const r = artifact.features[0]?.properties.r ?? '';
+    expect(r).toBe('88 o:31;88 i:29;N88 o:12');
+    expect(parseContributors(r)).toEqual([
+      { line: '88', dir: 'o', journeysPerDay: 31 },
+      { line: '88', dir: 'i', journeysPerDay: 29 },
+      { line: 'N88', dir: 'o', journeysPerDay: 12 },
+    ]);
+  });
+
+  test('a route on part of a run counts as a per-point mean, like j', async () => {
+    // trunk 0..400 m at 40 (bucket 3 throughout); spur joins for 200..400 m
+    // at 5 — 45 stays in bucket 3, so the owner run is NOT split and the
+    // spur covers half of it: 5 × ½ = 2.5 → "3" after rounding.
+    const artifact = await buildCoverageArtifact(
+      new Map([
+        ['T_1_outbound', nsLine(0, 400)],
+        ['S_2_outbound', nsLine(200, 400)],
+      ]),
+      new Map([
+        ['T_1_outbound', 40],
+        ['S_2_outbound', 5],
+      ]),
+      '2026-08-27',
+      7,
+    );
+
+    expect(artifact.features).toHaveLength(1);
+    const contributors = parseContributors(artifact.features[0]?.properties.r ?? '');
+    expect(contributors.map((c) => c.line)).toEqual(['1', '2']);
+    expect(contributors[0]?.journeysPerDay).toBe(40);
+    expect(contributors[1]?.journeysPerDay).toBeGreaterThanOrEqual(2);
+    expect(contributors[1]?.journeysPerDay).toBeLessThanOrEqual(3);
+  });
+
+  test('lists at most 8 routes, the busiest ones', async () => {
+    const polylines = new Map<string, LonLat[]>();
+    const means = new Map<string, number>();
+    for (let i = 0; i < 11; i += 1) {
+      polylines.set(`OP_${i}_outbound`, nsLine(0, 200));
+      means.set(`OP_${i}_outbound`, 50 - i);
+    }
+
+    const artifact = await buildCoverageArtifact(polylines, means, '2026-08-27', 7);
+
+    const lines = parseContributors(artifact.features[0]?.properties.r ?? '').map((c) => c.line);
+    expect(lines).toEqual(['0', '1', '2', '3', '4', '5', '6', '7']);
   });
 });
 
