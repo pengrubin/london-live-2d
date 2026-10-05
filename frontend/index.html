@@ -64,6 +64,19 @@
       .tip-chips .sp-chip { display: inline-block; margin-left: 3px; vertical-align: baseline; }
       .hover-tip .maplibregl-popup-content { pointer-events: none; padding: 7px 10px; }
 
+      /* ── WebGL unavailable: replaces the map, so nothing else is on screen ── */
+      .webgl-fallback {
+        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        box-sizing: border-box; width: min(420px, calc(100vw - 32px));
+        background: rgba(16, 18, 22, 0.95); border: 1px solid #333; border-radius: 6px;
+        padding: 18px 20px; color: #ddd; font: 13px/1.55 system-ui, sans-serif;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6); text-align: center;
+      }
+      .webgl-fallback h1 { margin: 0 0 8px; font-size: 16px; font-weight: 600; color: #fff; }
+      .webgl-fallback p { margin: 0 0 12px; color: #ccc; }
+      .webgl-fallback a { color: #6ea8fe; text-decoration: none; }
+      .webgl-fallback a:hover { text-decoration: underline; }
+
       /* ── one-off toast (geolocate notices) ── */
       .map-toast {
         position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%);
