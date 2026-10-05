@@ -30,7 +30,9 @@ import { makeTubeStatusFeed, ROAD_DISRUPTIONS_FEED, SnapshotRecorder, statusLine
 import { TraceWriter } from './trace-writer';
 import { registerArrivalsRoute } from './routes/arrivals';
 import { registerCapabilitiesRoute } from './routes/capabilities';
-import { registerHealthRoute } from './routes/health';
+import { buildHealthBody, type HealthComponents, registerHealthRoute } from './routes/health';
+import { registerHealthHistoryRoute } from './routes/health-history';
+import { HEALTH_HISTORY_SUBDIR, HealthRecorder } from './health-recorder';
 import {
   registerBikePointsRoute,
   registerCrowdingRoute,
@@ -394,7 +396,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   // Registered here rather than at boot so the closure can see the leaderboard
   // and the caches: /health reports what each structure is holding, and the
   // caches are the ones keyed by stop and vehicle id.
-  registerHealthRoute(app, () => ({
+  const healthComponents: HealthComponents = () => ({
     ...(diversions?.sizes() ?? {}),
     upstreamAssertionsSurvived: survivedUpstreamAssertions(),
     httpParserFixed: httpParserFixed(),
@@ -422,7 +424,14 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     evictVehicleArrivals: vehicleArrivalsCache.evictions,
     evictStopDetail: stopDetailCache.evictions,
     evictCrowding: crowdingCache.evictions,
-  }));
+  });
+  registerHealthRoute(app, healthComponents);
+  // The same body, sampled by the server itself every 5 min, so the memory
+  // series has no gaps when the laptop that used to poll /health is off.
+  const healthRecorder = new HealthRecorder(busDataDir, () => buildHealthBody(healthComponents), log);
+  healthRecorder.start();
+  app.addHook('onClose', () => healthRecorder.stop());
+  registerHealthHistoryRoute(app, join(busDataDir, HEALTH_HISTORY_SUBDIR));
   app.addHook('onClose', () => leaderboard.stop());
   registerLeaderboardRoute(app, leaderboard);
   // Persistence diagnostic (no secrets — path + booleans only).
