@@ -34,6 +34,7 @@ import {
   noteOffRouteFix,
   noteOnRouteFix,
   parseDisruptionSnapshotLine,
+  retireEventsOffIndex,
   tickLifecycle,
   utcDay,
   type CompletedExcursion,
@@ -42,7 +43,8 @@ import {
   type TflDisruptionPoint,
   type TransitionRecord,
 } from './diversion-events';
-import { buildRouteIndex, type LonLat, type RouteIndex } from './route-projection';
+import { DETECTOR_MIN_COVERAGE, loadLearnedRoutes, type LearnedRoute } from './learned-routes';
+import type { RouteIndex } from './route-projection';
 
 // --- tuning constants (task spec + prototype calibration; do not retune
 // without re-running the audit gate) ---
@@ -88,7 +90,6 @@ const VEHICLE_STATE_TTL_S = 30 * 60;
 
 const LIFECYCLE_TICK_MS = 60_000;
 const TFL_SNAPSHOT_TTL_MS = 10 * 60_000;
-const INDEX_BUILD_YIELD_EVERY = 100;
 /** The learner re-learns polylines daily — re-index on the same cadence so
  * the detector never projects against boot-frozen geometry forever. */
 const INDEX_REBUILD_INTERVAL_MS = 24 * 3600_000;
@@ -537,11 +538,6 @@ export function updateShapeGate(gate: ShapeGate, absD: number, thrM: number): bo
 // detector wiring (closure, like startCoverageWriter)
 // ---------------------------------------------------------------------------
 
-interface RouteEntry {
-  poly: LonLat[];
-  index: RouteIndex;
-}
-
 export interface DiversionDetector {
   /** Ride-along on the BODS poll callback — synchronous CPU only, no IO. */
   record(buses: readonly Bus[], nowMs: number): void;
@@ -559,9 +555,15 @@ export interface DiversionDetector {
 let detectorRunning = false;
 export const isDiversionDetectorRunning = (): boolean => detectorRunning;
 
+export interface DiversionDetectorOptions {
+  /** Override the 24 h re-index cadence (tests). */
+  indexRebuildIntervalMs?: number;
+}
+
 export function startDiversionDetector(
   busDataDir: string,
   log: (msg: string) => void,
+  opts: DiversionDetectorOptions = {},
 ): DiversionDetector {
   const learnedDir = join(busDataDir, 'bus-routes', 'learned');
   const rollupsDir = join(busDataDir, 'bus-rollups');
@@ -569,7 +571,8 @@ export function startDiversionDetector(
   const diversionsDir = join(busDataDir, 'diversions');
 
   detectorRunning = true;
-  let routes = new Map<string, RouteEntry>();
+  let routes = new Map<string, LearnedRoute>();
+  let skippedLowCoverage = 0;
   let ready = false;
   let building = false;
   const states = new Map<string, VehicleState>(); // `${key}|${veh}`
@@ -601,48 +604,38 @@ export function startDiversionDetector(
     if (building) return; // re-entrancy: a slow build must not overlap the next
     building = true;
     try {
-      let names: string[] = [];
-      try {
-        names = (await readdir(learnedDir)).filter((n) => !n.startsWith('.') && n.endsWith('.json'));
-      } catch {
-        // dir vanished after the boot check — detector idles with zero routes
-      }
-      const next = new Map<string, RouteEntry>();
-      let built = 0;
-      for (const name of names) {
-        try {
-          const doc = JSON.parse(await readFile(join(learnedDir, name), 'utf8')) as {
-            key?: unknown;
-            poly?: unknown;
-          };
-          const { key, poly } = doc;
-          const isValid =
-            typeof key === 'string' &&
-            Array.isArray(poly) &&
-            poly.length >= 2 &&
-            poly.every(
-              (p) => Array.isArray(p) && typeof p[0] === 'number' && typeof p[1] === 'number',
-            );
-          if (isValid) {
-            next.set(key, { poly: poly as LonLat[], index: buildRouteIndex(poly as LonLat[]) });
-            built += 1;
-          }
-        } catch {
-          // one unreadable learned file must not sink the detector
-        }
-        if (built % INDEX_BUILD_YIELD_EVERY === 0) {
-          await new Promise<void>((resolve) => setImmediate(resolve));
-        }
-      }
-      routes = next;
+      const loaded = await loadLearnedRoutes(learnedDir);
+      routes = loaded.routes;
+      skippedLowCoverage = loaded.skippedLowCoverage.length;
+      forgetUnindexedKeys();
       ready = true;
-      log(`diversions: ${routes.size} route indexes built`);
+      log(
+        `detector: indexed ${routes.size} keys, skipped ${skippedLowCoverage} below coverage ${DETECTOR_MIN_COVERAGE}`,
+      );
     } finally {
       building = false;
     }
   }
+  // A key can leave the index at a rebuild (file removed, or re-learned below
+  // DETECTOR_MIN_COVERAGE). Its buses are no longer evaluated, so nothing
+  // would ever feed or retire its events: they would sit on the map for the
+  // full 7.5 h stale+drop window with no geometry to draw. Retire them now,
+  // and drop the key's gate and vehicle states so a later re-index starts
+  // from a clean slate instead of a gate suspended against the old shape.
+  function forgetUnindexedKeys(): void {
+    const isIndexed = (key: string): boolean => routes.has(key);
+    appendTransitions(retireEventsOffIndex(store, isIndexed, Math.floor(Date.now() / 1000)));
+    for (const key of gates.keys()) if (!isIndexed(key)) gates.delete(key);
+    for (const stateKey of states.keys()) {
+      if (!isIndexed(stateKey.slice(0, stateKey.lastIndexOf('|')))) states.delete(stateKey);
+    }
+  }
+
   void buildIndexes();
-  const rebuildTimer = setInterval(() => void buildIndexes(), INDEX_REBUILD_INTERVAL_MS);
+  const rebuildTimer = setInterval(
+    () => void buildIndexes(),
+    opts.indexRebuildIntervalMs ?? INDEX_REBUILD_INTERVAL_MS,
+  );
   rebuildTimer.unref();
 
   function refreshThresholds(nowMs: number): void {
@@ -816,6 +809,7 @@ export function startDiversionDetector(
       return {
         vehicleStates: states.size,
         routeIndexes: routes.size,
+        routeIndexesSkippedLowCoverage: skippedLowCoverage,
         shapeGates: gates.size,
         events: store.events.length,
         eventMembers,
