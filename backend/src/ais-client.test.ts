@@ -191,3 +191,100 @@ describe('AisClient idle watchdog and generations', () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });
+
+// HANDSHAKE_TIMEOUT_MS (2 min) plus one watchdog tick (60 s) of detection slack.
+const STALL_DETECTED_MS = 3 * MINUTE;
+
+describe('AisClient stalled handshake (2026-10-07 outage)', () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('abandons a socket that never leaves CONNECTING and reconnects, without close()', () => {
+    const logs: string[] = [];
+    const client = new AisClient('key', BBOX, (m) => logs.push(m));
+    client.start();
+    const ws = instance(0);
+
+    // Production: 'close' fired, the reconnect's handshake never completed,
+    // and no event ever followed. Before the fix this waited forever.
+    vi.advanceTimersByTime(STALL_DETECTED_MS + RECONNECT_DELAY_MS);
+
+    expect(ws.closeCalls).toBe(0); // close() on CONNECTING is the stack-overflow path
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(logs.some((m) => m.includes('stuck in readyState 0'))).toBe(true);
+
+    // A late 'open' or 'close' from the abandoned socket is a stale generation.
+    ws.dispatchEvent(new Event('close'));
+    vi.advanceTimersByTime(RECONNECT_DELAY_MS * 2);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    client.stop();
+  });
+
+  it('closes an abandoned socket if its handshake completes late', () => {
+    const client = new AisClient('key', BBOX, () => {});
+    client.start();
+    const ws = instance(0);
+    vi.advanceTimersByTime(STALL_DETECTED_MS + RECONNECT_DELAY_MS);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    openSocket(ws); // the stale one finally opens
+    expect(ws.closeCalls).toBe(1);
+    expect(instance(1).closeCalls).toBe(0);
+    client.stop();
+  });
+
+  it('leaves a handshake alone while it is still within the timeout', () => {
+    const client = new AisClient('key', BBOX, () => {});
+    client.start();
+
+    vi.advanceTimersByTime(MINUTE);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    client.stop();
+  });
+
+  it('a close event schedules exactly one reconnect even once the stalled check runs', () => {
+    const client = new AisClient('key', BBOX, () => {});
+    client.start();
+    const ws = instance(0);
+    openSocket(ws);
+    vi.advanceTimersByTime(5 * MINUTE);
+
+    ws.readyState = FakeWebSocket.CLOSED;
+    ws.dispatchEvent(new Event('close'));
+    vi.advanceTimersByTime(STALL_DETECTED_MS);
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    client.stop();
+  });
+
+  it('reports socket state, table size and message age for /health', () => {
+    const client = new AisClient('key', BBOX, () => {});
+    expect(client.sizes()).toEqual({
+      aisSocketState: -1,
+      aisVessels: 0,
+      aisLastMessageAgeS: -1,
+      aisConnects: 0,
+      aisReconnects: 0,
+    });
+
+    client.start();
+    const ws = instance(0);
+    openSocket(ws);
+    ws.dispatchEvent(aisFrame());
+    vi.advanceTimersByTime(30_000);
+
+    const sizes = client.sizes();
+    expect(sizes.aisSocketState).toBe(FakeWebSocket.OPEN);
+    expect(sizes.aisConnects).toBe(1);
+    expect(sizes.aisLastMessageAgeS).toBe(30);
+    client.stop();
+  });
+});

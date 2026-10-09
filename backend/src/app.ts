@@ -401,6 +401,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     upstreamAssertionsSurvived: survivedUpstreamAssertions(),
     httpParserFixed: httpParserFixed(),
     ...leaderboard.sizes(),
+    ...(aisClient?.sizes() ?? {}),
     cacheArrivals: arrivalsCache.size,
     cacheStopArrivals: stopArrivalsCache.size,
     cacheVehicleArrivals: vehicleArrivalsCache.size,
