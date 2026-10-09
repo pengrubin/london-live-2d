@@ -16,6 +16,13 @@ const PRUNE_INTERVAL_MS = 60_000;
 const IDLE_RECONNECT_MS = STALE_AFTER_MS;
 // Detection granularity only; a minute of slack on a 10-minute threshold.
 const WATCHDOG_INTERVAL_MS = 60_000;
+// A WebSocket handshake completes or fails within seconds. A socket still
+// CONNECTING after this long is a TCP connection the peer accepted but never
+// answered: undici never times it out and never fires 'close', so nothing
+// else will ever reconnect. This is the 2026-10-07 outage — 'close' fired,
+// the reconnect's handshake never completed, and the Thames stayed empty for
+// 44 h with the process healthy. Generous because waiting costs nothing.
+const HANDSHAKE_TIMEOUT_MS = 2 * 60_000;
 const AIS_URL = 'wss://stream.aisstream.io/v0/stream';
 
 export interface Vessel {
@@ -82,6 +89,10 @@ export class AisClient {
    *  generation are no-ops, so a stale socket can't reconnect over a live one. */
   private generation = 0;
   private lastMessageAt = 0;
+  /** When the current socket was created; the handshake clock for checkIdle. */
+  private socketStartedAt = 0;
+  private connects = 0;
+  private reconnects = 0;
   private watchdog: ReturnType<typeof setInterval> | null = null;
   private readonly apiKey: string;
   private readonly log: (msg: string) => void;
@@ -105,6 +116,8 @@ export class AisClient {
     const gen = ++this.generation;
     const current = (): boolean => gen === this.generation;
     this.lastMessageAt = Date.now();
+    this.socketStartedAt = this.lastMessageAt;
+    this.socket = null;
     this.watchdog ??= setInterval(() => this.checkIdle(), WATCHDOG_INTERVAL_MS).unref();
     let socket: WebSocket;
     try {
@@ -116,8 +129,14 @@ export class AisClient {
     }
     this.socket = socket;
     socket.addEventListener('open', () => {
-      if (!current()) return;
+      // An abandoned handshake that completes late: now that it is OPEN it is
+      // safe to close, and nothing else will, so the slot goes back upstream.
+      if (!current()) {
+        socket.close();
+        return;
+      }
       this.lastMessageAt = Date.now();
+      this.connects++;
       this.log('AIS stream connected');
       socket.send(
         JSON.stringify({
@@ -135,10 +154,16 @@ export class AisClient {
     socket.addEventListener('close', () => {
       if (!current()) return;
       this.log('AIS stream closed; reconnecting');
+      // Forget it so the watchdog's stalled check cannot double-schedule on
+      // top of this reconnect.
+      this.socket = null;
       this.scheduleReconnect();
     });
     socket.addEventListener('error', () => {
       if (!current()) return;
+      // Logged so a failed handshake leaves a trace; the event carries no
+      // body worth printing and the key is never in it.
+      this.log(`AIS socket error (readyState ${socket.readyState})`);
       // Never close() a socket that hasn't finished connecting: undici treats
       // close-during-CONNECTING as "fail the connection", which fires 'error'
       // again — a synchronous mutual recursion that overflows the stack and
@@ -154,10 +179,24 @@ export class AisClient {
     if (this.watchdog) clearInterval(this.watchdog);
     this.watchdog = null;
     this.socket?.close();
+    this.socket = null;
   }
 
   list(): Vessel[] {
     return [...this.vessels.values()];
+  }
+
+  /** Numbers for /health, so a dead stream shows up in the health sampler
+   *  instead of as an empty river on the map. State is the WebSocket
+   *  readyState (0–3) or -1 between sockets. */
+  sizes(): Record<string, number> {
+    return {
+      aisSocketState: this.socket?.readyState ?? -1,
+      aisVessels: this.vessels.size,
+      aisLastMessageAgeS: this.lastMessageAt ? Math.round((Date.now() - this.lastMessageAt) / 1000) : -1,
+      aisConnects: this.connects,
+      aisReconnects: this.reconnects,
+    };
   }
 
   private async handleMessage(data: unknown): Promise<void> {
@@ -208,20 +247,37 @@ export class AisClient {
 
   private checkIdle(): void {
     const socket = this.socket;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    const idleMs = Date.now() - this.lastMessageAt;
-    if (idleMs < IDLE_RECONNECT_MS) return;
-    this.log(`AIS stream idle for ${Math.round(idleMs / 1000)}s; reconnecting`);
-    // Retire this socket first so its own 'close' (if it ever arrives) is
-    // ignored, then reconnect ourselves: a dead peer's close handshake may
-    // never complete in undici. Only close() when OPEN — never CONNECTING.
+    if (!socket) return; // between sockets: a reconnect is already scheduled
+    const now = Date.now();
+    if (socket.readyState === WebSocket.OPEN) {
+      const idleMs = now - this.lastMessageAt;
+      if (idleMs < IDLE_RECONNECT_MS) return;
+      this.log(`AIS stream idle for ${Math.round(idleMs / 1000)}s; reconnecting`);
+      // Retire this socket first so its own 'close' (if it ever arrives) is
+      // ignored, then reconnect ourselves: a dead peer's close handshake may
+      // never complete in undici. Only close() when OPEN — never CONNECTING.
+      this.generation++;
+      this.socket = null;
+      socket.close();
+      this.scheduleReconnect();
+      return;
+    }
+    // Not OPEN and no 'close' has arrived: a handshake that never completed,
+    // or a close handshake that never finished. Abandon it without calling
+    // close() (see the error handler) and start afresh.
+    const stalledMs = now - this.socketStartedAt;
+    if (stalledMs < HANDSHAKE_TIMEOUT_MS) return;
+    this.log(
+      `AIS socket stuck in readyState ${socket.readyState} for ${Math.round(stalledMs / 1000)}s; abandoning it and reconnecting`,
+    );
     this.generation++;
-    socket.close();
+    this.socket = null;
     this.scheduleReconnect();
   }
 
   private scheduleReconnect(): void {
     if (this.stopped) return;
+    this.reconnects++;
     const gen = this.generation;
     setTimeout(() => {
       if (gen === this.generation) this.start();
