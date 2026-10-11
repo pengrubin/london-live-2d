@@ -28,7 +28,7 @@ import { join } from 'node:path';
 import type { Bus } from './bods-client';
 
 // NOTE: traces are runtime-written under <base>/bus-traces/ (self-pruned, capped
-// at 2 GB), where <base> is the persist volume when PERSIST_DIR is set (survives
+// at 3 GB), where <base> is the persist volume when PERSIST_DIR is set (survives
 // redeploys) else data/. The base is resolved by config.resolveBusDataDir and
 // handed in as `dir` — the same base the learner scripts and read route use, so
 // the writer always writes where the learner reads. All writes here are wrapped
@@ -38,7 +38,12 @@ import type { Bus } from './bods-client';
 const FLUSH_INTERVAL_MS = 5_000;
 const MAINTENANCE_INTERVAL_MS = 60 * 60_000;
 const RETENTION_DAYS = 7;
-const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
+// A weekday file is ~0.77 GB without the journey fields and ~1.15 GB with them
+// (8.8 M lines × ~45 B more). The cap, not RETENTION_DAYS, is what bounds how
+// long a day survives on the volume: at 2 GB a completed day would be pruned
+// by mid-afternoon of the next day, leaving the 09:30 archive pull no slack
+// to be re-run after a miss. 3 GB keeps yesterday's file for a full day.
+const MAX_TOTAL_BYTES = 3 * 1024 * 1024 * 1024; // 3 GB
 /** Forget per-vehicle "last written fix time" after this long unseen. */
 const SEEN_TTL_MS = 30 * 60_000;
 /** Hard ceiling on buffered lines if the disk stalls — drop, don't grow. */
