@@ -51,6 +51,10 @@ const toBus = (veh: string, fix: Fix): Bus => ({
   lon: fix.lon,
   bearing: null,
   recordedAt: fix.t * 1000,
+  originRef: '',
+  aimedDeparture: null,
+  destinationRef: '',
+  journeyRef: '',
 });
 
 /** On-route warm-up, a parallel excursion of `offsetM` for 6 fixes, rejoin. */

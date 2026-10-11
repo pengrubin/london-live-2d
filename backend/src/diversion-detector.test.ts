@@ -693,6 +693,10 @@ describe('startDiversionDetector wiring', () => {
     lon: fix.lon,
     bearing: null,
     recordedAt: fix.t * 1000,
+    originRef: '',
+    aimedDeparture: null,
+    destinationRef: '',
+    journeyRef: '',
   });
 
   /** detourFixes() with the parallel offset widened to 500 m, time-shifted. */
