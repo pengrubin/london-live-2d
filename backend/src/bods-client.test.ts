@@ -56,6 +56,40 @@ describe('parseSiriVm', () => {
     expect(parseSiriVm(siri([noPosition, noId, stale]), NOW)).toHaveLength(0);
   });
 
+  test('reads the journey fields TfL publishes (origin, aimed departure, destination, journey ref)', () => {
+    const [bus] = parseSiriVm(
+      siri([
+        vehicleActivity({
+          ...FULL,
+          OriginRef: '490015371W',
+          OriginAimedDepartureTime: '2026-09-04T14:48:00+00:00',
+          DestinationRef: '490008800N',
+          VehicleJourneyRef: '635695',
+        }),
+      ]),
+      NOW,
+    );
+
+    expect(bus).toMatchObject({
+      originRef: '490015371W',
+      aimedDeparture: Date.parse('2026-09-04T14:48:00Z'),
+      destinationRef: '490008800N',
+      journeyRef: '635695',
+    });
+  });
+
+  test('journey fields are empty / null when the publisher omits them', () => {
+    const [bus] = parseSiriVm(siri([vehicleActivity(FULL)]), NOW);
+
+    expect(bus).toMatchObject({ originRef: '', aimedDeparture: null, destinationRef: '', journeyRef: '' });
+  });
+
+  test('an unparseable aimed departure is null, not NaN', () => {
+    const [bus] = parseSiriVm(siri([vehicleActivity({ ...FULL, OriginAimedDepartureTime: 'soon' })]), NOW);
+
+    expect(bus?.aimedDeparture).toBeNull();
+  });
+
   test('a missing bearing is null rather than NaN', () => {
     const [bus] = parseSiriVm(siri([vehicleActivity(FULL)]), NOW);
 

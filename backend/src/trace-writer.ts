@@ -4,9 +4,20 @@
 // changed for that vehicle) are buffered as JSONL lines and flushed to
 // data/bus-traces/YYYY-MM-DD.jsonl by a background timer — the poll loop
 // never touches the filesystem. One line per fix:
-//   {"k":"OPERATOR:line:direction","i":"OPERATOR:vehicleRef","x":lon,"y":lat,"t":epochSeconds}
-// Journey continuity comes from `i` + timestamps: the learner groups by
-// (k, i) and splits journeys on time gaps.
+//   {"k":"OPERATOR:line:direction","i":"OPERATOR:vehicleRef","x":lon,"y":lat,"t":epochSeconds,
+//    "o":originStopId,"a":aimedDepartureEpochSeconds,"e":destinationStopId,"j":journeyRef}
+// `k,i,x,y,t` are always present and always first; every reader (learner,
+// rollups, export) keys on those alone and ignores the rest. Journey continuity
+// comes from `i` + timestamps: the learner groups by (k, i) and splits journeys
+// on time gaps.
+//
+// `o,a,e,j` (added 2026-10-11) are the SIRI scheduled-trip fields — OriginRef,
+// OriginAimedDepartureTime, DestinationRef, VehicleJourneyRef — each omitted
+// when the publisher did not send it. They tie a fix to the timetabled journey
+// it belongs to, so lateness per stop, cancelled journeys and curtailments
+// (DestinationRef changing mid-trip) become observations instead of inferences
+// from direction flips. TfL's BODS feed carries all four for ~99 % of vehicles
+// (measured 2026-10-10). Cost: ~45 bytes per line on top of ~95.
 //
 // Retention: files rotate daily (UTC), files older than RETENTION_DAYS are
 // deleted, and total directory size is capped at MAX_TOTAL_BYTES by dropping
@@ -42,6 +53,19 @@ function utcDateStamp(ms: number): string {
 /** Trace key: OPERATOR:line:direction (direction already normalized). */
 export function traceKey(operator: string, line: string, direction: string): string {
   return `${operator}:${line}:${direction}`;
+}
+
+/**
+ * The optional `o,a,e,j` tail of a trace line, each key present only when the
+ * feed supplied it, so a publisher without journey data costs nothing extra.
+ */
+function journeyFields(bus: Bus): string {
+  let tail = '';
+  if (bus.originRef !== '') tail += `,"o":${JSON.stringify(bus.originRef)}`;
+  if (bus.aimedDeparture !== null) tail += `,"a":${Math.round(bus.aimedDeparture / 1000)}`;
+  if (bus.destinationRef !== '') tail += `,"e":${JSON.stringify(bus.destinationRef)}`;
+  if (bus.journeyRef !== '') tail += `,"j":${JSON.stringify(bus.journeyRef)}`;
+  return tail;
 }
 
 export class TraceWriter {
@@ -92,7 +116,7 @@ export class TraceWriter {
       }
       const key = traceKey(bus.operator, bus.line, bus.direction);
       this.buffer.push(
-        `{"k":${JSON.stringify(key)},"i":${JSON.stringify(bus.id)},"x":${bus.lon},"y":${bus.lat},"t":${Math.round(bus.recordedAt / 1000)}}`,
+        `{"k":${JSON.stringify(key)},"i":${JSON.stringify(bus.id)},"x":${bus.lon},"y":${bus.lat},"t":${Math.round(bus.recordedAt / 1000)}${journeyFields(bus)}}`,
       );
     }
     this.pruneSeen(now);

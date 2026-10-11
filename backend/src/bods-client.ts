@@ -26,6 +26,22 @@ export interface Bus {
   readonly bearing: number | null;
   /** RecordedAtTime as epoch ms */
   readonly recordedAt: number;
+  /**
+   * Scheduled-trip identity, straight from SIRI: which timetabled journey this
+   * vehicle says it is running. TfL's BODS feed carries all four for ~99 % of
+   * vehicles (measured 2026-10-10); other publishers vary. '' / null when
+   * absent. Kept out of `BusWire` — the map does not need them and the payload
+   * is a design constraint — but written to the traces, where they turn
+   * punctuality, cancellations and curtailments from inference into observation.
+   */
+  /** OriginRef: NaPTAN/ATCO id of the journey's first stop */
+  readonly originRef: string;
+  /** OriginAimedDepartureTime as epoch ms, null when absent or unparseable */
+  readonly aimedDeparture: number | null;
+  /** DestinationRef: NaPTAN/ATCO id of the journey's last stop (changes on a curtailment) */
+  readonly destinationRef: string;
+  /** VehicleJourneyRef: the publisher's id for the timetabled journey */
+  readonly journeyRef: string;
 }
 
 /** Wire format for /api/buses — short keys, ~9k rows, keep the payload lean. */
@@ -116,6 +132,7 @@ export function parseSiriVm(xml: string, now: number): Bus[] {
     const vehicleRef = tagText(chunk, 'VehicleRef');
     if (vehicleRef === '') continue;
     const rawBearing = Number.parseFloat(tagText(chunk, 'Bearing'));
+    const rawAimed = Date.parse(tagText(chunk, 'OriginAimedDepartureTime'));
     buses.push({
       id: `${operator}:${vehicleRef}`,
       line: tagText(chunk, 'PublishedLineName') || tagText(chunk, 'LineRef'),
@@ -126,6 +143,10 @@ export function parseSiriVm(xml: string, now: number): Bus[] {
       lon,
       bearing: Number.isFinite(rawBearing) ? rawBearing : null,
       recordedAt,
+      originRef: tagText(chunk, 'OriginRef'),
+      aimedDeparture: Number.isFinite(rawAimed) ? rawAimed : null,
+      destinationRef: tagText(chunk, 'DestinationRef'),
+      journeyRef: tagText(chunk, 'VehicleJourneyRef'),
     });
   }
   return buses;
