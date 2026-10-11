@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# The frontend's date labels format with the runtime's default locale (`toLocaleString([], …)`),
+# and the tests assert the en-GB 24-hour form ("17:30"). Ubuntu runners default to en-US
+# ("05:30 PM"), so pin the locale the tests were written against.
+env:
+  LANG: en_GB.UTF-8
+  LC_ALL: en_GB.UTF-8
+
 # Supersede older runs of the same ref (new push to a PR, or to main).
 concurrency:
   group: ci-${{ github.ref }}
