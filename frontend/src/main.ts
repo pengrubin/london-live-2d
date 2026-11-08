@@ -49,6 +49,7 @@ import {
 } from './layers/disruptions';
 import { hasLayer, isInsideRegion, loadCapabilities } from './region';
 import { hasWebGL } from './util/webgl-support';
+import { LAYER_START_DEADLINE_MS, withStartDeadline } from './util/start-deadline';
 
 const README_URL = 'https://github.com/pengrubin/london-live-2d#readme';
 
@@ -621,7 +622,23 @@ async function addTransitOverlays(target: maplibregl.Map): Promise<void> {
   ];
 
   const available = LAYERS.filter((layer) => hasLayer(layer.name));
-  const started = await Promise.allSettled(available.map((layer) => layer.start()));
+  // Each start is bounded by LAYER_START_DEADLINE_MS: a layer whose first poll
+  // never returns (2026-11-06, two wedged backend routes) must not keep the
+  // control panel below from mounting. The start keeps running; only the
+  // wait ends, and its late outcome still reaches the console.
+  const started = await Promise.allSettled(
+    available.map((layer) =>
+      withStartDeadline(layer.start(), LAYER_START_DEADLINE_MS, (outcome, reason) => {
+        if (outcome === 'pending') {
+          console.warn(
+            `[layer:${layer.name}] start still pending after ${LAYER_START_DEADLINE_MS} ms; mounting the panel without it`,
+          );
+        } else {
+          console.error(`[layer:${layer.name}]`, reason);
+        }
+      }),
+    ),
+  );
   // A start that throws takes its whole layer down — map features AND the
   // Lines-tab row, because the row list is filtered on the layer existing.
   // Swallowing the rejection would leave a capability advertising a feature
