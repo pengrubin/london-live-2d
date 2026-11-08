@@ -1,6 +1,11 @@
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { afterEach, describe, expect, it, vi, type Mock, type MockInstance } from 'vitest';
-import { FAILURE_BACKOFF_MS, registerProxyRoute, singleParamKey } from './proxy-route';
+import {
+  FAILURE_BACKOFF_MS,
+  INFLIGHT_HARD_LIMIT_MS,
+  registerProxyRoute,
+  singleParamKey,
+} from './proxy-route';
 import { TtlCache } from '../cache';
 import { RateBudget } from '../rate-budget';
 import type { AppConfig } from '../config';
@@ -74,14 +79,19 @@ const nextMacrotask = (): Promise<void> => new Promise((resolve) => setTimeout(r
 
 const apps: FastifyInstance[] = [];
 
-function harness(spec: Spec, budgetLimit = BUDGET_LIMIT, config = CONFIG): Harness {
+function harness(
+  spec: Spec,
+  budgetLimit = BUDGET_LIMIT,
+  config = CONFIG,
+  inflightLimitMs = INFLIGHT_HARD_LIMIT_MS,
+): Harness {
   let clock = T0;
   const cache = new TtlCache<unknown>(TTL_MS);
   const budget = new RateBudget(budgetLimit, BUDGET_WINDOW_MS);
   const tryConsume = vi.spyOn(budget, 'tryConsume');
   const app = Fastify();
   apps.push(app);
-  registerProxyRoute(app, { config, cache, budget, now: () => clock }, spec);
+  registerProxyRoute(app, { config, cache, budget, now: () => clock, inflightLimitMs }, spec);
   return {
     app,
     cache,
@@ -290,6 +300,65 @@ describe('single-flight', () => {
     expect(res.headers['x-cache']).toBe('miss');
     expect(fetchTfl).toHaveBeenCalledTimes(2);
     expect(h.tryConsume).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('in-flight hard limit', () => {
+  /** Real-clock limit for the test; the production value is the exported constant. */
+  const LIMIT_MS = 50;
+
+  it('abandons an upstream promise that never settles: waiters get 502, the slot is freed, back-off armed', async () => {
+    // Arrange — the 2026-11-06 wedge: a fetch whose AbortSignal never fired,
+    // so every later request joined it and the route answered nothing for a day.
+    const upstream = deferred<TflResponse>();
+    const fetchTfl = vi.fn(() => upstream.promise);
+    const h = harness({ path: PATH, fetchTfl }, BUDGET_LIMIT, CONFIG, LIMIT_MS);
+    await h.app.ready();
+
+    // Act
+    const responses = await Promise.all(Array.from({ length: CONCURRENT_REQUESTS }, () => h.get()));
+    const inBackoff = await h.get();
+    h.advance(FAILURE_BACKOFF_MS);
+    const retried = await h.get();
+
+    // Assert
+    expect(responses.map((r) => r.statusCode)).toEqual(Array(CONCURRENT_REQUESTS).fill(HTTP_BAD_GATEWAY));
+    expect(responses.map((r) => r.json())).toEqual(Array(CONCURRENT_REQUESTS).fill(UPSTREAM_FAILED));
+    expect(inBackoff.statusCode).toBe(HTTP_BAD_GATEWAY);
+    expect(fetchTfl).toHaveBeenCalledTimes(2);
+    expect(retried.statusCode).toBe(HTTP_BAD_GATEWAY);
+  });
+
+  it('serves stale to the waiters when the abandoned fetch had a cached predecessor', async () => {
+    // Arrange
+    let hang = false;
+    const stuck = deferred<TflResponse>();
+    const fetchTfl = vi.fn(() => (hang ? stuck.promise : Promise.resolve(ok())));
+    const h = harness({ path: PATH, fetchTfl }, BUDGET_LIMIT, CONFIG, LIMIT_MS);
+    await h.get();
+    h.advance(TTL_MS);
+    hang = true;
+
+    // Act
+    const res = await h.get();
+
+    // Assert
+    expect(res.statusCode).toBe(HTTP_OK);
+    expect(res.headers['x-cache']).toBe('stale');
+    expect(res.json()).toEqual(OK_BODY);
+  });
+
+  it('does not fire when the upstream settles inside the limit', async () => {
+    // Arrange
+    const fetchTfl = vi.fn(async () => ok());
+    const h = harness({ path: PATH, fetchTfl }, BUDGET_LIMIT, CONFIG, LIMIT_MS);
+
+    // Act
+    const res = await h.get();
+
+    // Assert
+    expect(res.statusCode).toBe(HTTP_OK);
+    expect(res.headers['x-cache']).toBe('miss');
   });
 });
 
