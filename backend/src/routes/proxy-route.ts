@@ -10,6 +10,8 @@ export interface ProxyDeps {
   readonly budget: RateBudget;
   /** Clock behind cache ages and the failure back-off; `Date.now` unless a test injects one. */
   readonly now?: () => number;
+  /** Hard limit on one in-flight upstream promise; INFLIGHT_HARD_LIMIT_MS unless a test injects one. */
+  readonly inflightLimitMs?: number;
 }
 
 /** Result of validating a request's query string: a cache key, or a 400 message. */
@@ -65,6 +67,7 @@ interface RouteState {
   readonly now: () => number;
   readonly fetchUpstream: Fetcher;
   readonly shape: ((body: unknown) => unknown) | undefined;
+  readonly inflightLimitMs: number;
   /** Single-flight: the one upstream promise per key, cleared once it settles. */
   readonly inflight: Map<string, Promise<TflResponse>>;
   /** When the last upstream fetch for a key threw; drives the back-off. */
@@ -84,6 +87,43 @@ const UPSTREAM_FAILED_ERROR = 'Upstream TfL request failed.';
  * viewer poll.
  */
 export const FAILURE_BACKOFF_MS = 30_000;
+
+/**
+ * Longest one in-flight upstream promise may hold a key's single-flight slot.
+ *
+ * Every fetcher already carries an AbortSignal timeout (8 s, 20 s for the bus
+ * stop closure feed), so this should never fire. On 2026-11-06 it would have:
+ * the /api/disruptions and /api/road-disruptions fetches stopped settling —
+ * the abort did not reach them — and because every later request joins the
+ * pending flight, both routes answered nothing for a day while the rest of the
+ * process stayed healthy; the panel that waits on their first poll never
+ * mounted. Longer than every fetcher's own timeout so it only ever catches a
+ * promise those timeouts have already failed to end.
+ */
+export const INFLIGHT_HARD_LIMIT_MS = 30_000;
+
+/** Thrown into the failure path when a flight outlives INFLIGHT_HARD_LIMIT_MS. */
+export class InflightTimeoutError extends Error {
+  constructor(limitMs: number) {
+    super(`upstream fetch still pending after ${limitMs} ms; in-flight slot released`);
+    this.name = 'InflightTimeoutError';
+  }
+}
+
+/**
+ * Settles with `work`, or rejects once `limitMs` has passed. The abandoned
+ * promise keeps both of race()'s handlers, so its eventual outcome is dropped
+ * rather than surfacing as an unhandled rejection. The timer is unref'd and
+ * cleared on settle so a quick fetch leaves nothing behind.
+ */
+function withHardLimit<T>(work: Promise<T>, limitMs: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new InflightTimeoutError(limitMs)), limitMs);
+    timer.unref();
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
 
 /** Builds a parseKey for the common case: one query param validated by a pattern. */
 export function singleParamKey(name: string, pattern: RegExp): (query: QueryString) => ParsedKey {
@@ -160,7 +200,7 @@ function isBackingOff(state: RouteState, key: string): boolean {
  */
 async function fetchAndStore(state: RouteState, key: string): Promise<TflResponse> {
   try {
-    const upstream = await state.fetchUpstream(key);
+    const upstream = await withHardLimit(state.fetchUpstream(key), state.inflightLimitMs);
     if (upstream.status !== HTTP_OK) return upstream;
     const body = state.shape === undefined ? upstream.body : state.shape(upstream.body);
     state.cache.set(key, body, state.now());
@@ -206,6 +246,7 @@ export function registerProxyRoute(
     now: deps.now ?? Date.now,
     fetchUpstream,
     shape: spec.shape,
+    inflightLimitMs: deps.inflightLimitMs ?? INFLIGHT_HARD_LIMIT_MS,
     inflight: new Map(),
     lastFailureAt: new Map(),
   };
