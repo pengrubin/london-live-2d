@@ -9,6 +9,10 @@
 // never published — so this must never be an open endpoint. When the token is
 // unset the routes are not registered at all. Streaming keeps memory flat even
 // for multi-hundred-MB trace days; egress is a deliberate one-off cost.
+//
+// A `Range: bytes=START-` request (single, open-ended) returns 206 with only
+// the bytes from START, so an intraday puller can follow today's growing file
+// without re-downloading it each cycle; START past the end answers 416.
 
 import { createReadStream } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
@@ -36,6 +40,22 @@ const DATASETS: Readonly<Record<string, DatasetSpec>> = {
   diversions: { dir: 'diversions', ext: '.jsonl', contentType: 'application/x-ndjson' },
   leaderboard: { dir: 'leaderboard', ext: '.json', contentType: 'application/json' },
 };
+
+/**
+ * Start offset of a `bytes=START-` range header, `null` when there is no
+ * usable range (no header, or a form other than the single open-ended suffix,
+ * which callers treat as "send everything"), or 'unsatisfiable' when START is
+ * at or past the file size.
+ */
+export function parseRangeStart(
+  header: string | undefined,
+  size: number,
+): number | null | 'unsatisfiable' {
+  const m = header?.match(/^bytes=(\d{1,15})-$/);
+  if (!m) return null;
+  const start = Number(m[1]);
+  return start >= size ? 'unsatisfiable' : start;
+}
 
 /** Constant-time bearer-token check; hashing first equalises lengths. */
 function isAuthorized(header: string | undefined, token: string): boolean {
@@ -82,13 +102,29 @@ export function registerDataExportRoute(
         return reply.code(400).send({ error: 'day must be YYYY-MM-DD' });
       }
       const filePath = join(baseDir, spec.dir, `${req.params.day}${spec.ext}`);
+      let size: number;
       try {
         const info = await stat(filePath);
         if (!info.isFile()) return await reply.code(404).send({ error: 'no such day' });
+        size = info.size;
       } catch {
         return reply.code(404).send({ error: 'no such day' });
       }
-      return reply.header('content-type', spec.contentType).send(createReadStream(filePath));
+      const start = parseRangeStart(req.headers.range, size);
+      void reply.header('content-type', spec.contentType).header('accept-ranges', 'bytes');
+      if (start === 'unsatisfiable') {
+        return reply.code(416).header('content-range', `bytes */${size}`).send();
+      }
+      if (start === null) {
+        return reply.header('content-length', size).send(createReadStream(filePath));
+      }
+      // The file may grow between stat and read (today's trace file is being appended to):
+      // the stream is capped at `size` so content-length stays true.
+      return reply
+        .code(206)
+        .header('content-range', `bytes ${start}-${size - 1}/${size}`)
+        .header('content-length', size - start)
+        .send(createReadStream(filePath, { start, end: size - 1 }));
     },
   );
 }
