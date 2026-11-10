@@ -99,6 +99,11 @@ node scripts/bake-routes.mjs && node scripts/bake-osm-geometry.mjs \
   && node scripts/bake-runtimes.mjs && node scripts/bake-nr-graph.mjs
 ```
 
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push to `main` and every pull request: backend typecheck + tests (`--expose-gc`) and frontend build + tests, as two parallel jobs.
+Railway waits for these checks before deploying, so a failing run blocks the deploy.
+
 ## Layout
 
 `frontend/` Vite + TypeScript + MapLibre GL · `backend/` Fastify proxies, pollers and the
