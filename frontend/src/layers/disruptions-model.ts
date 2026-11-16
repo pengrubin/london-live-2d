@@ -8,7 +8,13 @@
 // index built here over `branch.stops` consecutive pairs is the same index the
 // backend's LineGraph builds. Divergence fails closed — a section whose hop is
 // missing from this index is dropped and counted, never bridged with a
-// straight line between two stations.
+// straight line between two stations. The backend keys hops only; this side
+// also keeps every distinct track polyline baked for a hop (556 of the 671
+// hops carry two, one per running line), because a band drawn on one track
+// leaves the other in line colour wherever the two run apart — the Battersea
+// branch, 2026-11-15. Only byte-identical bakes are merged: twin tube bores
+// sit 3–10 m apart on 244 hops and are two tracks, not one; at z16 that is a
+// band a few px wider, at z14 invisible (checked on Clapham North–Common).
 
 import type { BranchStop, LineBranches } from '../realtime/types';
 
@@ -131,15 +137,30 @@ interface Hop {
 }
 
 interface LineIndex {
-  readonly hops: ReadonlyMap<string, Hop>;
+  /** Every distinct track polyline baked for the pair, in branch order. */
+  readonly hops: ReadonlyMap<string, readonly Hop[]>;
   readonly stops: ReadonlyMap<string, BranchStop>;
 }
 
 /** Undirected: one key per unordered pair. */
 const hopKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`);
 
+/** The polyline read from `from` onward, so two bakes of one hop compare alike. */
+function orientedCoords(hop: Hop, from: string): readonly Coord[] {
+  return hop.from === from ? hop.coords : [...hop.coords].reverse();
+}
+
+/** Same bake of one track: identical coordinates once both read the same
+ * way. Branches that share an alignment bake the same polyline (reversed for
+ * the opposite direction); two running lines, however close, never do. */
+function sameTrack(a: Hop, b: Hop): boolean {
+  if (a.coords.length !== b.coords.length) return false;
+  const other = orientedCoords(b, a.from);
+  return a.coords.every((pt, i) => pt[0] === other[i]?.[0] && pt[1] === other[i]?.[1]);
+}
+
 function buildLineIndex(branches: LineBranches | null | undefined): LineIndex {
-  const hops = new Map<string, Hop>();
+  const hops = new Map<string, readonly Hop[]>();
   const stops = new Map<string, BranchStop>();
   for (const branch of branches?.branches ?? []) {
     const branchStops = branch.stops ?? [];
@@ -151,7 +172,10 @@ function buildLineIndex(branches: LineBranches | null | undefined): LineIndex {
       if (!from?.id || !to?.id) continue;
       if (!Array.isArray(coords) || coords.length < MIN_SECTION_STOPS) continue;
       const key = hopKey(from.id, to.id);
-      if (!hops.has(key)) hops.set(key, { coords: coords as Coord[], from: from.id });
+      const hop: Hop = { coords: coords as Coord[], from: from.id };
+      const tracks = hops.get(key);
+      if (!tracks) hops.set(key, [hop]);
+      else if (!tracks.some((known) => sameTrack(known, hop))) hops.set(key, [...tracks, hop]);
     }
   }
   return { hops, stops };
@@ -163,11 +187,12 @@ function geometryFromHops(st: readonly string[], hops: LineIndex['hops']): Coord
   for (let i = 0; i + 1 < st.length; i += 1) {
     const a = st[i];
     const b = st[i + 1];
-    const hop = a && b ? hops.get(hopKey(a, b)) : undefined;
+    if (!a || !b) return null;
+    const tracks = hops.get(hopKey(a, b));
     // Fail closed: a gap is a bake/feed mismatch, and a straight line between
     // two stations would assert track that may not exist.
-    if (!hop) return null;
-    parts.push(hop.from === a ? [...hop.coords] : [...hop.coords].reverse());
+    if (!tracks) return null;
+    for (const hop of tracks) parts.push([...orientedCoords(hop, a)]);
   }
   return parts;
 }
@@ -409,7 +434,10 @@ function resolveItems(
       hopKeys.push(...sectionHopKeys(st));
     }
     // A whole-line closure hatches every hop of the line; no geometry is sent.
-    const wholeLine = item.wl === 1 ? [...index.hops.values()].map((hop) => [...hop.coords]) : null;
+    const wholeLine =
+      item.wl === 1
+        ? [...index.hops.values()].flatMap((tracks) => tracks.map((hop) => [...hop.coords]))
+        : null;
     if (wholeLine) hopKeys.push(...index.hops.keys());
     resolved.push({ item, index, sections, wholeLine, hopKeys, planned: !isInForceNow(item) });
   }
@@ -563,7 +591,7 @@ export function disruptionPopupHtml(props: BandProps): string {
     .map((text) => textLine(text))
     .join('');
   const also = props.also
-    ? textLine(`Also on this track: ${props.also} (not reported affected)`, 'vp-dim')
+    ? textLine(`Also between these stations: ${props.also} (not reported affected)`, 'vp-dim')
     : '';
   return `<div class="vp"><div class="sp-title">${esc(props.title)} ${badge}</div>
     <div>${chip}</div>

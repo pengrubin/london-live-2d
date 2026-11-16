@@ -159,7 +159,7 @@ browser: items → MultiLineString per section from branchesByLine; rings; whole
         // its TfL toDate is a rolling now+2–3 h stamp (measured D3) and must never be read as an end time. [] → treat as "now" when c = R.
       "sc": "section",               // scope = what the map may draw: line | section | station
       "src": "s",                    // s structured (TfL ids) | p parsed from the sentence | f fallback (nothing localised)
-      "wl": 0,                       // 1 = whole-line closure: client hatches every hop of line `l` from the transit-lines source (no geometry sent)
+      "wl": 0,                       // 1 = whole-line closure: client hatches every track of every hop of line `l` from its baked branches (no geometry sent)
       "sec": [                       // ordered NaPTAN id paths on line `l`; every consecutive pair is a baked branch edge (server-validated; client re-checks and DROPS a section with a missing hop, never draws a straight guess)
         { "st": ["940GZZLUERC","940GZZLUPAC","…","940GZZLUWIM"],
           "k": "closed",             // per-section class: structured → the carrying status's class; parsed → the clause's severity word capped at the item's `k`
@@ -392,7 +392,7 @@ All line layers are inserted with `below(map, 'stations-circle')` (`layer-order.
 | wash, `k: severe` | `#f7b04a` amber, opacity 0.55, blur 1.5, **solid** |
 | wash, `k: minor` | `#ffd84a`, opacity 0.45, `line-dasharray [0.6, 1.4]` (dotted) |
 | core | `line-color ['get','color']` (the line's manifest colour), width = transit `LINE_WIDTH_RAMP` (`transit-lines.ts:36-48`), same offset — says *which* line on a shared corridor |
-| whole-line (`wl`) | same wash/hatch/core over every hop of line `l`, features built from the `transit-lines` source's merged geometry for that `lineId` (`transit-lines.ts:99-109`), no rings |
+| whole-line (`wl`) | same wash/hatch/core over every hop of line `l`, features built from every distinct track polyline of every hop in the line's baked branches (`disruptions-model.ts` hop index: the backend keys hops, the client also keeps each hop's tracks and merges only byte-identical bakes), no rings |
 | planned (`disruptions-planned`) | `#9aa7ff`, width transit + 2, `line-dasharray [3, 2]`, opacity 0.85, same offset; hidden below z11; **off by default** |
 | ring `role: affected \| mid` | drawn under the dot: `circle-radius` station ramp + 3 (`stations.ts:43-53`: 1.6–6.5 px), `circle-color` by `k`, opacity 0.9, stroke `#0a0a0a` 1 px; `mid` (intermediate stations of a drawn closed section) radius −1.5; `minzoom 10` (`STATION_MIN_ZOOM`, `stations.ts:32`). Section endpoints get an `end` ring **only as endpoints of a drawn `sec`** (structured, or parsed with `pf = 1`) — never from a clause that failed closed |
 | pin `role: cause` | hollow ring: `circle-opacity 0`, `circle-stroke-color #f7b04a`, width 2 — only when the item's `k = closed` or `s ≤ 6` (a Minor-Delays cause is popup text only) |
@@ -419,7 +419,7 @@ Clapham Junction ↔ Surrey Quays · eastbound only   ← per section from Branc
 Highbury & Islington ↔ Dalston Junction
 Reported at Peckham Rye                ← cause
 Severe delays on the rest of the line  ← rest
-Also on this track: District, Metropolitan (not reported affected)   ← client-derived: other lines whose branches share ≥ 1 drawn hop and have no item on it
+Also between these stations: District, Metropolitan (not reported affected)   ← client-derived: other lines whose branches share ≥ 1 drawn hop (station pair, not physical track) and have no item on it
 Since 20:09                            ← from v.f (RealTime: no end shown — TfL's toDate is not an end); planned: "Sat 5 Sep 03:30 – Mon 7 Sep 01:29" from v.f/v.t, Europe/London via toLocaleString
 "Windrush Line: No service between …"  ← .vp-reason, esc(r)
 Section from TfL data · updated 20:31  ← src s → "from TfL data"; p → "read from the notice"; f → "line-wide"; + "status may be stale" on x-cache: stale
@@ -523,7 +523,7 @@ Total P0–P5 ≈ 9–11 working days. P0+P1+P2 are inspectable with `curl` befo
 | 3 | Window path rejects a renamed line id (404 for the whole call) | verified today with all 20 ids; Mode-form fallback once per TTL; the 404 body echoes the key and is never forwarded — **the closure throws** → stale/502 |
 | 4 | Bake drift: a TfL `st` sequence or a baked pattern has a hop that is not a branch edge | fail closed per route/pattern; counted on `/health`; sample-13 edge test fails loudly on a bad re-bake |
 | 5 | Stale close: TfL clears a status but the map still shows it | reachable TfL: 60 s server TTL + 90 s client poll ≈ **2.5 min** (+ edge TTL if a rule ever names the path); **unreachable TfL / 429 storm: bounded at 10 min** server-side (`maxStaleMs`) and client-side (un-draw); RealTime `toDate` never used as an end time |
-| 6 | Shared-corridor confusion (Circle/District/H&C/Met) | line-coloured core stroke + `LINE_OFFSET_RAMP` + "also on this track … not reported affected" |
+| 6 | Shared-corridor confusion (Circle/District/H&C/Met) | line-coloured core stroke + `LINE_OFFSET_RAMP` + "also between these stations … not reported affected" (a station-pair claim: lines sharing a hop key, not a physical track) |
 | 7 | Colour-vision accessibility | shape-coded: hatch = closed, solid = severe, dotted = minor, long-dash blue = planned; popup words carry the class |
 | 8 | Overlapping overlay bands compound and fight for the click | rail wash opacity 0.55 with blur; `raiseDisruptions`; hover guard; **band handler yields to station/vehicle dots** |
 | 9 | Egress creep | `r` ≤ 600, `d` ≤ 300, `m` ≤ 300, bus `r` ≤ 700 per click only; fixed cache key; *measured* ≈ 240 KB/h/client; route test caps the body |
@@ -583,7 +583,7 @@ Total P0–P5 ≈ 9–11 working days. P0+P1+P2 are inspectable with `curl` befo
 | C3 §4 | `k` from the status code, never from text | §4 — combined with per-clause classes capped at `k` |
 | C3 §3.1 risk 5 | fallback consumes a second budget unit; route test asserts exactly one fallback | §3.1, §8.1 — plus once-per-TTL and throw-to-stale |
 | C3 §9 | P0 as a zero-attachment-risk first step | §9 P0/P3 ordering |
-| Judges' concerns | line-coloured core stroke + "also on this track"; shape-coded severities; `from = today−1`; empty-reason severity measured; exact id hash input; recorder moved to the window form; `dir` in the popup; overlay stacking via `raiseDisruptions`; station-notice `ty: I` minzoom; day-1 coverage stated; reverse-merge test; `as`-off-branch guard | §6.2, §3.1, §9, §4, §3.2, §6.3, §6.1, §10 |
+| Judges' concerns | line-coloured core stroke + "also between these stations" (originally worded "on this track"); shape-coded severities; `from = today−1`; empty-reason severity measured; exact id hash input; recorder moved to the window form; `dir` in the popup; overlay stacking via `raiseDisruptions`; station-notice `ty: I` minzoom; day-1 coverage stated; reverse-merge test; `as`-off-branch guard | §6.2, §3.1, §9, §4, §3.2, §6.3, §6.1, §10 |
 | **Skeptics D1/D2/D3** | every change in §12 | §12 |
 
 **Rejected**:

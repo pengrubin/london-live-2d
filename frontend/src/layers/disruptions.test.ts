@@ -66,7 +66,13 @@ const stop = (id: string, name: string, lon: number): { id: string; name: string
   lat: 51.5,
 });
 
-/** ERC —(0→1)— PAC —(1→2)— WIM, plus a disconnected ORPHAN on its own branch. */
+/**
+ * ERC —(0→1)— PAC —(1→2)— WIM, plus a disconnected ORPHAN on its own branch.
+ * The inbound branch runs the same stops back: its PAC–WIM track is the
+ * outbound polyline reversed (one physical track, as a bake produces for a
+ * shared alignment), while its ERC–PAC track sits on its own alignment
+ * (lat 51.51) the way separated running lines do.
+ */
 const DISTRICT: LineBranches = {
   lineId: 'district',
   branches: [
@@ -92,6 +98,23 @@ const DISTRICT: LineBranches = {
       direction: 'outbound',
       stops: [stop(ORPHAN, 'Orphan', 9)],
       segments: [],
+    },
+    {
+      branchId: 3,
+      direction: 'inbound',
+      stops: [stop(WIM, 'Wimbledon', 2), stop(PAC, 'Paddington', 1), stop(ERC, "Earl's Court", 0)],
+      segments: [
+        [
+          [2, 51.5],
+          [1.5, 51.5],
+          [1, 51.5],
+        ],
+        [
+          [1, 51.51],
+          [0.5, 51.51],
+          [0, 51.51],
+        ],
+      ],
     },
   ],
 };
@@ -163,19 +186,27 @@ const CLOSURE: DisruptionItem = {
 };
 
 describe('sectionGeometry', () => {
-  test('concatenates the branch segments in path order', () => {
-    // Arrange — a two-hop section along the baked branch direction.
+  test('concatenates every track of every hop in path order', () => {
+    // Arrange — a two-hop section along the outbound branch direction. The
+    // ERC–PAC hop has two physical tracks; PAC–WIM has one shared by both
+    // branches.
     const section = { st: [ERC, PAC, WIM] };
 
     // Act
     const geometry = sectionGeometry(section, DISTRICT);
 
-    // Assert — one part per hop, each running from the earlier stop onward.
+    // Assert — one part per track per hop, every part running from the
+    // earlier stop onward, the inbound-baked track included and re-oriented.
     expect(geometry).toEqual([
       [
         [0, 51.5],
         [0.5, 51.5],
         [1, 51.5],
+      ],
+      [
+        [0, 51.51],
+        [0.5, 51.51],
+        [1, 51.51],
       ],
       [
         [1, 51.5],
@@ -185,19 +216,43 @@ describe('sectionGeometry', () => {
     ]);
   });
 
-  test('reverses a hop travelled against the baked direction', () => {
-    // Arrange — the same track, named the other way round.
+  test('reverses a hop travelled against the baked direction and draws a shared track once', () => {
+    // Arrange — the same track, named the other way round. Both branches
+    // bake this hop with identical coordinates, so it must not be drawn twice.
     const section = { st: [WIM, PAC] };
 
     // Act
     const geometry = sectionGeometry(section, DISTRICT);
 
-    // Assert
+    // Assert — exactly one part
     expect(geometry).toEqual([
       [
         [2, 51.5],
         [1.5, 51.5],
         [1, 51.5],
+      ],
+    ]);
+  });
+
+  test('re-orients every track of a hop travelled against both bakes', () => {
+    // Arrange — ERC–PAC named PAC-first: the outbound bake must reverse, the
+    // inbound bake (already PAC→ERC) must not.
+    const section = { st: [PAC, ERC] };
+
+    // Act
+    const geometry = sectionGeometry(section, DISTRICT);
+
+    // Assert — both parts read from PAC onward.
+    expect(geometry).toEqual([
+      [
+        [1, 51.5],
+        [0.5, 51.5],
+        [0, 51.5],
+      ],
+      [
+        [1, 51.51],
+        [0.5, 51.51],
+        [0, 51.51],
       ],
     ]);
   });
@@ -392,9 +447,17 @@ describe('toFeatures', () => {
     // Act
     const built = toFeatures(payloadOf([wholeLine]), context());
 
-    // Assert — both district hops, and no rings.
+    // Assert — both district hops with every physical track (ERC–PAC twice,
+    // PAC–WIM once), and no rings.
     expect(built.live).toHaveLength(1);
     expect(built.live[0]?.geometry).toMatchObject({ type: 'MultiLineString' });
+    const parts = (built.live[0]?.geometry as GeoJSON.MultiLineString).coordinates;
+    expect(parts).toHaveLength(3);
+    expect(parts).toContainEqual([
+      [1, 51.51],
+      [0.5, 51.51],
+      [0, 51.51],
+    ]);
     expect(built.liveStations).toHaveLength(0);
   });
 
@@ -491,6 +554,22 @@ describe('disruptionPopupHtml', () => {
     expect(html).toContain("Earl's Court");
     // The only attributes in the markup are ones this module writes itself.
     expect(html).not.toMatch(/=\s*"[^"]*'[^"]*"/);
+  });
+
+  test('names co-corridor lines as sharing stations, not track', () => {
+    // Arrange — Circle shares the ERC–PAC station pair but has its own
+    // polyline, so "track" would overclaim what the hop index knows.
+    const built = toFeatures(payloadOf([CLOSURE]), context());
+    expect(built.live[0]?.properties?.also).toBe('Circle');
+
+    // Act
+    const html = disruptionPopupHtml(
+      built.live[0]?.properties as Parameters<typeof disruptionPopupHtml>[0],
+    );
+
+    // Assert
+    expect(html).toContain('Also between these stations: Circle (not reported affected)');
+    expect(html).not.toContain('this track');
   });
 
   test('a RealTime item shows "since HH:MM" and never an end time', () => {
